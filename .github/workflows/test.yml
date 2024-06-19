@@ -15,8 +15,7 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pytest
-      - name: Run tests
-        # run: pytest  # TODO: add actual tests
-        run: |
-          python CRR.py
-
+      - name: Parse CRR library
+        run: python CRR.py
+      - name: Run tests (currently no-op)
+        run: pytest # once actual tests are added, this will run them

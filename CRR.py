@@ -4,20 +4,20 @@ import time
 '''
 The most basic version of CRR predicts a single target. 
 This conformal predictor is not smoothed, so p-values can not be used to test exchangeability.
-If we want to ad an exchangeability test, we have to use some other conformal transcuder, e.g. 1-NN as in https://www.alrw.net/articles/04.pdf
+If we want to ad an exchangeability test, we have to use some other conformal transducer, e.g. 1-NN as in https://www.alrw.net/articles/04.pdf
 We could also add kernel ridge regression.
 '''
 
 
 class ConfromalRidgeRegressor:
     '''
-        Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Radnom World)
+        Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
     '''
 
     def __init__(self, a=0, epsilon=None):
         '''
             Initialise.
-            Maybe input ridge prarmeter. Maybe input target miss-coverage level.
+            Maybe input ridge parameter. Maybe input target miss-coverage level.
         '''
         self.a = a
         self.epsilon = epsilon

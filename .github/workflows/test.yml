@@ -17,5 +17,6 @@ jobs:
           pip install pytest
       - name: Parse CRR library
         run: python CRR.py
-      - name: Run tests (currently no-op)
-        run: pytest # once actual tests are added, this will run them
+      # TODO: uncomment once tests are added
+      # - name: Run tests
+      #   run: pytest

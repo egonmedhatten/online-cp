@@ -9,7 +9,7 @@ We could also add kernel ridge regression.
 '''
 
 
-class ConfromalRidgeRegressor:
+class ConformalRidgeRegressor:
     '''
         Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
     '''

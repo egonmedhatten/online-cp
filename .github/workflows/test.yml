@@ -13,9 +13,8 @@ jobs:
           cache: 'pip' # caching pip dependencies
       - name: Install dependencies
         run: |
-          sudo apt-get install jupyter-nbconvert python3-ipykernel
           pip install -r requirements.txt
-          pip install pytest scikit-learn scipy matplotlib
+          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib
       - name: Parse CRR library
         run: python CRR.py
       # TODO: uncomment once tests are added

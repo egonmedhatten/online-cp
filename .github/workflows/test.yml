@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt-get install jupyter-nbconvert python3-ipykernel
           pip install -r requirements.txt
-          pip install pytest sklearn
+          pip install pytest scikit-learn
       - name: Parse CRR library
         run: python CRR.py
       # TODO: uncomment once tests are added

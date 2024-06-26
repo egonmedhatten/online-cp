@@ -20,3 +20,5 @@ jobs:
       # TODO: uncomment once tests are added
       # - name: Run tests
       #   run: pytest
+      - name: Run notebook
+        run: jupyter-nbconvert --execute example.ipynb --to html

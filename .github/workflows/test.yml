@@ -14,9 +14,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib
       - name: Parse CRR library
         run: python CRR.py
       # TODO: uncomment once tests are added
       # - name: Run tests
       #   run: pytest
+      - name: Run notebook
+        run: jupyter-nbconvert --execute example.ipynb --to html

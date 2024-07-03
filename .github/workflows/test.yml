@@ -15,7 +15,7 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib
-      - name: Parse CRR library
+      - name: Parse CRR library and runs doctests
         run: python CRR.py
       # TODO: uncomment once tests are added
       # - name: Run tests

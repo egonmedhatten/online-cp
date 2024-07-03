@@ -92,7 +92,7 @@ class ConformalRidgeRegressor:
             # Add row to X matrix
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
             toc_add_row = time.time() - tic
-            n = self.X.shape[0].etc.etc
+            n = self.X.shape[0]
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
             if bounds=='both':
@@ -102,11 +102,11 @@ class ConformalRidgeRegressor:
                 if not (epsilon >= 1/n):
                     return (-np.inf, np.inf)
 
-            tic = time.time().etc
+            tic = time.time()
             # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
                     #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
             self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
-            toc_update_XTXinv = time.time()
+            toc_update_XTXinv = time.time() - tic
 
             tic = time.time()
             # Hat matrix (This block is the time consuming one...)
@@ -116,6 +116,10 @@ class ConformalRidgeRegressor:
             B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
             # Nonconformity scores are A + yB = y - yhat
             toc_nc = time.time() - tic
+
+            tic = time.time()
+            l_dic, u_dic = self._vectorised_l_and_u(A, B)
+            toc_dics = time.time() - tic
 
             if bounds=='both':
                 lower = self._get_lower(l_dic=l_dic, epsilon=epsilon/2, n=n)

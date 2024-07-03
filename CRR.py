@@ -85,6 +85,17 @@ class ConformalRidgeRegressor:
         
 
     def predict(self, x, epsilon=0.1, bounds='both', debug_time=False):
+        """
+        This function makes a prediction.
+
+        If you start with no training,
+        you get a null prediciton between
+        -infinity and +infinity.
+
+        >>> cp = ConformalRidgeRegressor()
+        >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
+        (-inf, inf)
+        """
 
         if self.X is not None:
 
@@ -178,3 +189,11 @@ class ConformalRidgeRegressor:
     Possibly add ACI, both for single, and MIMO CRR?
     (Possibly add C-MFAC as for ACI?)
 '''
+
+
+if __name__ == "__main__":
+    import doctest
+    import sys
+    (failures, _) = doctest.testmod()
+    if failures:
+        sys.exit(1)

@@ -1,7 +1,9 @@
 import numpy as np
 import time
 import warnings
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize_scalar, minimize, Bounds
+
+MACHINE_EPSILON = np.finfo(np.float64).eps
 
 '''
 The most basic version of CRR predicts a single target. 
@@ -16,7 +18,7 @@ class ConformalRidgeRegressor:
         Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
     '''
 
-    def __init__(self, a=0, warnings=True):
+    def __init__(self, a=0, warnings=True, autotune=False):
         '''
             Initialise.
             Maybe input ridge parameter. Maybe input target miss-coverage level.
@@ -30,6 +32,8 @@ class ConformalRidgeRegressor:
 
         # Should we raise warnings
         self.warnings = warnings
+        # Do we autotune ridge prarmeter on warning
+        self.autotune = autotune
 
 
     @staticmethod
@@ -97,6 +101,12 @@ class ConformalRidgeRegressor:
         >>> cp.y
         array([1])
         '''
+        # Learn label y
+        if self.y is None:
+            self.y = np.array([y])
+        else:
+            self.y = np.append(self.y, y)
+
         # Learn object x
         if self.X is None:
             self.X = x.reshape(1,-1)
@@ -105,17 +115,14 @@ class ConformalRidgeRegressor:
         elif self.X.shape[0] == 1:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
-            self.check_matrix_rank(self.XTXinv)
         else:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
             # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
                     #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
             self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
-            self.check_matrix_rank(self.XTXinv)
-        if self.y is None:
-            self.y = np.array([y])
-        else:
-            self.y = np.append(self.y, y)
+            rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+            if rank_deficient and self.autotune:
+                self.tune_ridge_parameter()
 
 
     def predict(self, x, epsilon=0.1, bounds='both', debug_time=False):
@@ -221,7 +228,7 @@ class ConformalRidgeRegressor:
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
 
 
-    def tune_ridge_parameter(self):
+    def tune_ridge_parameter(self, a0=None):
         '''
         Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
         '''
@@ -229,11 +236,20 @@ class ConformalRidgeRegressor:
         n = self.X.shape[0]
         In = np.identity(n)
         def GCV(a):
-            A = self.X @ np.linalg.inv(XTX + a*self.Id) @ self.X.T
-            return (1/n)*np.linalg.norm((In - A) @ self.y)**2 / ((1/n)* np.trace(In- A))**2
+            try:
+                A = self.X @ np.linalg.inv(XTX + a*self.Id) @ self.X.T
+                return (1/n)*np.linalg.norm((In - A) @ self.y)**2 / ((1/n)* np.trace(In- A))**2
+            except np.linalg.LinAlgError:
+                return np.inf
         
-        res = minimize_scalar(GCV) # May be relevant to pass some arguments here, or even use another minimizer.
-        a = res.x
+        # Initial guess
+        if a0 is None:
+            a0 = MACHINE_EPSILON # Just a small pertubation to avoid numerical issues
+
+        # Bounds to ensure a >= 0
+        res = minimize(GCV, x0=a0, bounds=Bounds(lb=0, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
+        a = res.x[0]
+
         print(f'New ridge parameter: {a}')
         self.change_ridge_parameter(a)
 
@@ -248,6 +264,7 @@ class ConformalRidgeRegressor:
     def check_matrix_rank(self, M):
         '''
         Check if a matrix has full rank <==> is invertible
+        Returns False if matrix is rank deficient
         NOTE In numerical linear algebra it is a bit more subtle. The condition number can tell us more.
 
         >>> cp = ConformalRidgeRegressor(warnings=False)
@@ -257,7 +274,9 @@ class ConformalRidgeRegressor:
         True
         '''
         if np.linalg.matrix_rank(M) < M.shape[0]:
-            if self.warnings:
+            if self.autotune:
+                warnings.warn(f'The matrix X is rank deficient. Condition number: {np.linalg.cond(M)}. Autotuning ridge prarmeter.')
+            elif self.warnings:
                 warnings.warn(f'The matrix X is rank deficient. Condition number: {np.linalg.cond(M)}. Consider changing the ridge prarmeter')
             return False
         else:

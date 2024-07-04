@@ -18,10 +18,10 @@ class ConformalRidgeRegressor:
         Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
     '''
 
-    def __init__(self, a=0, warnings=True, autotune=False):
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0):
         '''
             Initialise.
-            Maybe input ridge parameter. Maybe input target miss-coverage level.
+            Maybe input ridge parameter.
         '''
         self.a = a
         self.X = None
@@ -34,6 +34,8 @@ class ConformalRidgeRegressor:
         self.warnings = warnings
         # Do we autotune ridge prarmeter on warning
         self.autotune = autotune
+
+        self.verbose = verbose
 
 
     @staticmethod
@@ -88,7 +90,10 @@ class ConformalRidgeRegressor:
         self.y = y
         self.p = X.shape[1]
         self.Id = np.identity(self.p)
-        self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a*self.Id)
+        if self.autotune:
+            self.tune_ridge_parameter()
+        else:
+            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a*self.Id)
     
 
     def learn_one(self, x, y):
@@ -224,7 +229,7 @@ class ConformalRidgeRegressor:
         1
         '''
         self.a = a
-        if self.XTXinv is not None:
+        if self.X is not None:
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
 
 
@@ -250,7 +255,8 @@ class ConformalRidgeRegressor:
         res = minimize(GCV, x0=a0, bounds=Bounds(lb=0, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
         a = res.x[0]
 
-        print(f'New ridge parameter: {a}')
+        if self.verbose > 0:
+            print(f'New ridge parameter: {a}')
         self.change_ridge_parameter(a)
 
 

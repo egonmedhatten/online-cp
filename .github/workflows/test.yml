@@ -14,7 +14,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib
+          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers
       - name: Parse CRR library and runs doctests
         run: python CRR.py
       - name: Parse the martingale library and run doctests

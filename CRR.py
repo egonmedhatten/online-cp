@@ -18,7 +18,7 @@ class ConformalRidgeRegressor:
         Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
     '''
 
-    def __init__(self, a=0, warnings=True, autotune=False, verbose=0):
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=2024):
         '''
             Initialise.
             Maybe input ridge parameter.
@@ -36,6 +36,8 @@ class ConformalRidgeRegressor:
         self.autotune = autotune
 
         self.verbose = verbose
+
+        self.rnd_gen = np.random.default_rng(rnd_state)
 
 
     @staticmethod
@@ -117,6 +119,7 @@ class ConformalRidgeRegressor:
             self.X = x.reshape(1,-1)
             self.p = self.X.shape[1]
             self.Id = np.identity(self.p)
+            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
         elif self.X.shape[0] == 1:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
@@ -171,7 +174,7 @@ class ConformalRidgeRegressor:
             toc_update_XTXinv = time.time() - tic
 
             tic = time.time()
-            A, B = self.compute_nc_scores(X, XTXinv)
+            A, B = self.compute_A_and_B(X, XTXinv, self.y)
             toc_nc = time.time() - tic
 
             tic = time.time()
@@ -204,17 +207,39 @@ class ConformalRidgeRegressor:
         return lower, upper
     
 
-    def compute_nc_scores(self, X, XTXinv):
+    @staticmethod
+    def compute_A_and_B(X, XTXinv, y):
         n = X.shape[0]
         # Hat matrix (This block is the time consuming one...)
         H = X @ XTXinv @ X.T
         C = np.identity(n) - H
-        A = C @ np.append(self.y, 0) # Elements of this vector are denoted ai
+        A = C @ np.append(y, 0) # Elements of this vector are denoted ai
         B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
         # Nonconformity scores are A + yB = y - yhat
         return A, B
             
     
+    def compute_smoothed_p_value(self, x, y):
+        '''
+        Computes the smoothed p-value of the example (x, y).
+        Smoothed p-values can be used to test the exchangeability assumption.
+        '''
+        if self.X is not None:
+            X = np.append(self.X, x.reshape(1, -1), axis=0)
+            XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+            A, B = self.compute_A_and_B(X, XTXinv, self.y)
+
+            # Nonconformity scores are A + yB = y - yhat
+            Alpha = A + y*B
+            alpha_y = Alpha[-1]
+            lt = np.where(Alpha < alpha_y)[0].shape[0]
+            eq = np.where(Alpha == alpha_y)[0].shape[0]
+            tau = self.rnd_gen.uniform(0, 1)
+            p_y = (lt + tau * eq)/Alpha.shape[0]
+        else:
+            p_y = self.rnd_gen.uniform(0, 1)
+        return p_y
+
 
     @staticmethod
     def err(Gamma, y):

@@ -171,12 +171,7 @@ class ConformalRidgeRegressor:
             toc_update_XTXinv = time.time() - tic
 
             tic = time.time()
-            # Hat matrix (This block is the time consuming one...)
-            H = X @ XTXinv @ X.T
-            C = np.identity(n) - H
-            A = C @ np.append(self.y, 0) # Elements of this vector are denoted ai
-            B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
-            # Nonconformity scores are A + yB = y - yhat
+            A, B = self.compute_nc_scores(X, XTXinv)
             toc_nc = time.time() - tic
 
             tic = time.time()
@@ -207,6 +202,18 @@ class ConformalRidgeRegressor:
             upper = np.inf
 
         return lower, upper
+    
+
+    def compute_nc_scores(self, X, XTXinv):
+        n = X.shape[0]
+        # Hat matrix (This block is the time consuming one...)
+        H = X @ XTXinv @ X.T
+        C = np.identity(n) - H
+        A = C @ np.append(self.y, 0) # Elements of this vector are denoted ai
+        B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
+        # Nonconformity scores are A + yB = y - yhat
+        return A, B
+            
     
 
     @staticmethod

@@ -1,0 +1,24 @@
+[project]
+name = "online-conformal-prediction"
+# TODO: adhere to PEP 0423 - https://peps.python.org/pep-0423/
+# online_conformal_prediction module?  or some other shorter name?
+version = "0.0.0"
+authors = [
+	# TODO: add Johan's email
+	{ name="Johan Hallberg Szabadvary", email="TODO@example.com" },
+]
+description = "An implementation of online conformal prediction"
+readme = "README.md"
+dependencies = [
+	'numpy',
+	'scipy',
+]
+classifiers = [
+	"Development Status :: 2 - Pre-Alpha",
+	"Programming Language :: Python :: 3",
+	# TODO: choose a license
+]
+
+[project.urls]
+"Homepage"    = "https://github.com/egonmedhatten/OnlineConformalPrediction"
+"Bug Tracker" = "https://github.com/egonmedhatten/OnlineConformalPrediction/issues"

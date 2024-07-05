@@ -119,7 +119,6 @@ class ConformalRidgeRegressor:
             self.X = x.reshape(1,-1)
             self.p = self.X.shape[1]
             self.Id = np.identity(self.p)
-            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
         elif self.X.shape[0] == 1:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)

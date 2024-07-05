@@ -24,3 +24,5 @@ jobs:
       #   run: pytest
       - name: Run notebook
         run: jupyter-nbconvert --execute example.ipynb --to html
+      - name: Validate pyproject.toml
+        run: validate-pyproject pyproject.toml

@@ -6,47 +6,40 @@ For now, take a look at [`example.ipynb`](example.ipynb) to see how to use the l
 
 
 ## Quick start
+Let's create a dataset with noisy evaluations of the function $f(x_1, x_2) = x_1 + x_2$.
+
+```py
+import numpy as np
+N = 30
+X = np.random.uniform(0, 1, (N, 2))
+y = X.sum(axis=1) + np.random.normal(0, 0.1, N)
+cp.learn_initial_training_set(X, y)
+```
 
 Import the library and create a regressor:
 
 ```py
 from CRR import ConformalRidgeRegressor
-
 cp = ConformalRidgeRegressor()
 ```
 
-Predict the output for an object:
-
+Alternative 1: Learn the whole dataset online
 ```py
->>> cp.predict(np.array([10,20]), epsilon=0.1, bounds='both')
-(-inf, inf)
+cp.learn_initial_training_set(X, y)
 ```
 
-We know that the result value is between `-inf` and `inf` with `90%` certainty.
-
-We learn the actual output for the above:
-
+Predict an object (your output may not be exactly the same, as the dataset depends on the random seed).
 ```py
->>> cp.learn_label(30)
+cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both')
+(0.8065748777057368, 1.2222461945130274)
 ```
+The prediction set is the closed interval whose boundaries are indicated by the output.
 
-We predict again:
-
+Alternative 2: Learn the dataset sequentially online, and make predictions as we go. In order to output nontrivial prediction at significance level $\epsilon=0.1$, we need to have learned at least 20 examples.
 ```py
->>> cp.predict(np.array([20,10]), epsilon=0.1, bounds='both')
-(-inf, inf)
+cp = ConformalRidgeRegressor()
+for i, (obj, lab) in enumerate(zip(X, y)):
+    print(cp.predict(obj, epsilon=0.1, bounds='both'))
+    cp.learn_one(obj, lab)
 ```
-
-We learn the actual output:
-
-```py
->>> cp.learn_label(30)
-```
-
-...
-After a while, you should start seeing useful predictions:
-
-```py
->>> cp.predict(np.array([6,7]), epsilon=0.1, bounds='both')
-(10, 14)
-```
+The output will be ```(inf, inf)``` for the first 19 predictions, after which we will typically see meaningful prediction sets.

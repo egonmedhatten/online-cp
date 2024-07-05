@@ -15,7 +15,40 @@ We could also add kernel ridge regression.
 
 class ConformalRidgeRegressor:
     '''
-        Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
+    Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
+
+    Let's create a dataset with noisy evaluations of the function f(x1,x2) = x1+x2:
+
+    >>> import numpy as np
+    >>> np.random.seed(31337) # only needed for doctests
+    >>> N = 30
+    >>> X = np.random.uniform(0, 1, (N, 2))
+    >>> y = X.sum(axis=1) + np.random.normal(0, 0.1, N)
+
+    Import the library and create a regressor:
+
+    >>> from CRR import ConformalRidgeRegressor
+    >>> cp = ConformalRidgeRegressor()
+
+    Learn the whole dataset:
+
+    >>> cp.learn_initial_training_set(X, y)
+
+    Predict an object (output may not be exactly the same, as the dataset
+    depends on the random seed):
+    >>> cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both')
+    (0.7300645055562537, 1.2284930110121164)
+
+    You can of course learn a new data point online:
+
+    >>> cp.learn_one(np.array([0.5, 0.5]), 1.0)
+
+    The prediction set is the closed interval whose boundaries are indicated by the output.
+
+    We can then predict again:
+
+    >>> cp.predict(np.array([2,4]), epsilon=0.1, bounds='both')
+    (5.38655965677601, 6.334308300331534)
     '''
 
     def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=2024):

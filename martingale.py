@@ -17,6 +17,7 @@ class PluginMartingale:
         For numerical reasons, it is better to update the martingale in log scale
         '''
         self.logM = 0.0
+        self.max = 1 # The maximum value ever reachec by the maringale
 
         # At the moment, we just have one betting function, but more can be added.
         self.betting_function = betting_function
@@ -48,6 +49,9 @@ class PluginMartingale:
             self.logM += np.log(self.kernel_density_betting_function(p_values))
         else:
             raise NotImplementedError('Currently only kernel betting function is available. More to come...')
+        # Update the runnign max
+        if self.M > self.max:
+            self.max = self.M
 
     @property
     def M(self):

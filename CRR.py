@@ -223,7 +223,7 @@ class ConformalRidgeRegressor:
         Computes the smoothed p-value of the example (x, y).
         Smoothed p-values can be used to test the exchangeability assumption.
         '''
-        if self.X is not None:
+        if self.XTXinv is not None:
             X = np.append(self.X, x.reshape(1, -1), axis=0)
             XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
             A, B = self.compute_A_and_B(X, XTXinv, self.y)

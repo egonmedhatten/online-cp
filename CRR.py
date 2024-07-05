@@ -36,8 +36,8 @@ class ConformalRidgeRegressor:
 
     Predict an object (output may not be exactly the same, as the dataset
     depends on the random seed):
-    >>> cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both')
-    (0.7300645055562537, 1.2284930110121164)
+    >>> print("(%.2f, %.2f)" % cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both'))
+    (0.73, 1.23)
 
     You can of course learn a new data point online:
 
@@ -47,8 +47,8 @@ class ConformalRidgeRegressor:
 
     We can then predict again:
 
-    >>> cp.predict(np.array([2,4]), epsilon=0.1, bounds='both')
-    (5.38655965677601, 6.334308300331534)
+    >>> print("(%.2f, %.2f)" % cp.predict(np.array([2,4]), epsilon=0.1, bounds='both'))
+    (5.39, 6.33)
     '''
 
     def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=2024):

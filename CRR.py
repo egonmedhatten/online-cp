@@ -12,66 +12,13 @@ If we want to ad an exchangeability test, we have to use some other conformal tr
 We could also add kernel ridge regression.
 '''
 
-
-class ConformalRidgeRegressor:
+class ConformalRegressor:
     '''
-    Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
-
-    Let's create a dataset with noisy evaluations of the function f(x1,x2) = x1+x2:
-
-    >>> import numpy as np
-    >>> np.random.seed(31337) # only needed for doctests
-    >>> N = 30
-    >>> X = np.random.uniform(0, 1, (N, 2))
-    >>> y = X.sum(axis=1) + np.random.normal(0, 0.1, N)
-
-    Import the library and create a regressor:
-
-    >>> from CRR import ConformalRidgeRegressor
-    >>> cp = ConformalRidgeRegressor()
-
-    Learn the whole dataset:
-
-    >>> cp.learn_initial_training_set(X, y)
-
-    Predict an object (output may not be exactly the same, as the dataset
-    depends on the random seed):
-    >>> print("(%.2f, %.2f)" % cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both'))
-    (0.73, 1.23)
-
-    You can of course learn a new data point online:
-
-    >>> cp.learn_one(np.array([0.5, 0.5]), 1.0)
-
-    The prediction set is the closed interval whose boundaries are indicated by the output.
-
-    We can then predict again:
-
-    >>> print("(%.2f, %.2f)" % cp.predict(np.array([2,4]), epsilon=0.1, bounds='both'))
-    (5.39, 6.33)
+    Parent class for the different ridge regressors. Holds common methods
     '''
 
-    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=2024):
-        '''
-            Initialise.
-            Maybe input ridge parameter.
-        '''
-        self.a = a
-        self.X = None
-        self.y = None
-        self.p = None
-        self.Id = None
-        self.XTXinv = None
-
-        # Should we raise warnings
-        self.warnings = warnings
-        # Do we autotune ridge prarmeter on warning
-        self.autotune = autotune
-
-        self.verbose = verbose
-
-        self.rnd_gen = np.random.default_rng(rnd_state)
-
+    def __init__(self):
+        pass
 
     @staticmethod
     def _get_upper(u_dic, epsilon, n):
@@ -118,6 +65,73 @@ class ConformalRidgeRegressor:
         u_dic = {i+1: val for i, val in enumerate(u)}
 
         return l_dic, u_dic
+    
+
+    @staticmethod
+    def err(Gamma, y):
+        return int(not(Gamma[0] <= y <= Gamma[1]))
+    
+
+    @staticmethod
+    def width(Gamma):
+        return Gamma[1] - Gamma[0]
+    
+
+class ConformalRidgeRegressor(ConformalRegressor):
+    '''
+    Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
+
+    Let's create a dataset with noisy evaluations of the function f(x1,x2) = x1+x2:
+
+    >>> import numpy as np
+    >>> np.random.seed(31337) # only needed for doctests
+    >>> N = 30
+    >>> X = np.random.uniform(0, 1, (N, 2))
+    >>> y = X.sum(axis=1) + np.random.normal(0, 0.1, N)
+
+    Import the library and create a regressor:
+
+    >>> from CRR import ConformalRidgeRegressor
+    >>> cp = ConformalRidgeRegressor()
+
+    Learn the whole dataset:
+
+    >>> cp.learn_initial_training_set(X, y)
+
+    Predict an object (output may not be exactly the same, as the dataset
+    depends on the random seed):
+    >>> print("(%.2f, %.2f)" % cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both'))
+    (0.73, 1.23)
+
+    You can of course learn a new data point online:
+
+    >>> cp.learn_one(np.array([0.5, 0.5]), 1.0)
+
+    The prediction set is the closed interval whose boundaries are indicated by the output.
+
+    We can then predict again:
+
+    >>> print("(%.2f, %.2f)" % cp.predict(np.array([2,4]), epsilon=0.1, bounds='both'))
+    (5.39, 6.33)
+    '''
+
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=2024):
+        
+        self.a = a
+        self.X = None
+        self.y = None
+        self.p = None
+        self.Id = None
+        self.XTXinv = None
+
+        # Should we raise warnings
+        self.warnings = warnings
+        # Do we autotune ridge prarmeter on warning
+        self.autotune = autotune
+
+        self.verbose = verbose
+
+        self.rnd_gen = np.random.default_rng(rnd_state)
 
 
     def learn_initial_training_set(self, X, y):
@@ -165,6 +179,18 @@ class ConformalRidgeRegressor:
                 self.tune_ridge_parameter()
 
 
+    @staticmethod
+    def compute_A_and_B(X, XTXinv, y):
+        n = X.shape[0]
+        # Hat matrix (This block is the time consuming one...)
+        H = X @ XTXinv @ X.T
+        C = np.identity(n) - H
+        A = C @ np.append(y, 0) # Elements of this vector are denoted ai
+        B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
+        # Nonconformity scores are A + yB = y - yhat
+        return A, B
+    
+
     def predict(self, x, epsilon=0.1, bounds='both', debug_time=False):
         """
         This function makes a prediction.
@@ -172,6 +198,8 @@ class ConformalRidgeRegressor:
         If you start with no training,
         you get a null prediciton between
         -infinity and +infinity.
+
+        TODO Add possibility to learn object to save time
 
         >>> cp = ConformalRidgeRegressor()
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
@@ -237,18 +265,6 @@ class ConformalRidgeRegressor:
             upper = np.inf
 
         return lower, upper
-    
-
-    @staticmethod
-    def compute_A_and_B(X, XTXinv, y):
-        n = X.shape[0]
-        # Hat matrix (This block is the time consuming one...)
-        H = X @ XTXinv @ X.T
-        C = np.identity(n) - H
-        A = C @ np.append(y, 0) # Elements of this vector are denoted ai
-        B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
-        # Nonconformity scores are A + yB = y - yhat
-        return A, B
             
     
     def compute_smoothed_p_value(self, x, y):
@@ -271,16 +287,6 @@ class ConformalRidgeRegressor:
         else:
             p_y = self.rnd_gen.uniform(0, 1)
         return p_y
-
-
-    @staticmethod
-    def err(Gamma, y):
-        return int(not(Gamma[0] <= y <= Gamma[1]))
-    
-
-    @staticmethod
-    def width(Gamma):
-        return Gamma[1] - Gamma[0]
 
 
     def change_ridge_parameter(self, a):
@@ -365,6 +371,213 @@ class ConformalRidgeRegressor:
     Add references to papers and books to README
 '''
 
+
+
+from kernels import RBF # FIXME REMOVE LATER
+class KernelConformalRidgeRegressor(ConformalRegressor):
+
+    def __init__(self, kernel:RBF, a=0, warnings=True, verbose=0, rnd_state=2024):
+        
+        self.a = a
+        self.X = None
+        self.y = None
+        self.p = None
+        self.Id = None
+        self.K = None
+        self.Kinv = None
+
+        self.kernel = kernel
+
+        # Should we raise warnings
+        self.warnings = warnings
+        
+        self.verbose = verbose
+
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+    
+    def learn_initial_training_set(self, X, y):
+        self.X = X
+        self.y = y
+        Id = np.identity(self.X.shape[0])
+        if self.autotune:
+            self.tune_ridge_parameter()
+        else:
+            K = self.kernel(self.X)
+            self.Kinv = np.linalg.inv(K + self.a * Id)
+
+
+    @staticmethod
+    def _update_Kinv(Kinv, k, kappa):
+        d = 1 / (kappa - k.T @ Kinv @ k)
+        return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [ -d * k.T @ Kinv, d]])
+
+
+    @staticmethod
+    def _update_K(K, k, kappa):
+        # print(f'K: {K}')
+        # print(f'k: {k}')
+        # print(f'kappa: {kappa}')
+        return np.block([[K, k], [k.T, kappa]])
+
+
+    def learn_one(self, x, y):
+        '''
+        Learn a single example
+        >>> cp = ConformalRidgeRegressor()
+        >>> cp.learn_one(np.array([1,0]), 1)
+        >>> cp.X
+        array([[1, 0]])
+        >>> cp.y
+        array([1])
+        '''
+        # Learn label y
+        if self.y is None:
+            self.y = np.array([y])
+        else:
+            self.y = np.append(self.y, y)
+
+        # Learn object x
+        if self.X is None:
+            self.X = x.reshape(1,-1)
+            Id = np.identity(self.X.shape[0])
+            self.K = self.kernel(self.X)
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        elif self.X.shape[0] == 1:
+            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+            Id = np.identity(self.X.shape[0])
+            self.K = self.kernel(self.X)
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        else:
+            k = self.kernel(self.X, x).reshape(-1, 1)
+            kappa = self.kernel(x, x)
+            self.K = self._update_K(self.K, k, kappa)
+            self.Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
+            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+
+
+    @staticmethod
+    def compute_A_and_B(X, K, Kinv, y):
+        # print(f'X: {X}')
+        # print(f'K: {K}')
+        # print(f'Kinv: {Kinv}')
+        # print(f'y: {y}')
+        n = X.shape[0]
+        H = Kinv @ K
+        C = np.identity(n) - H
+        A = C @ np.append(y, 0) # Elements of this vector are denoted ai
+        B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
+        # Nonconformity scores are A + yB = y - yhat
+        return A, B
+    
+    
+    def predict(self, x, epsilon=0.1, bounds='both', debug_time=False):
+        """
+        This function makes a prediction.
+
+        If you start with no training,
+        you get a null prediciton between
+        -infinity and +infinity.
+
+        TODO Add possibility to learn object to save time
+
+        >>> cp = ConformalRidgeRegressor()
+        >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
+        (-inf, inf)
+        """
+
+        if self.X is not None:
+
+            tic = time.time()
+            
+            # Temporarily update kernel matrix
+            k = self.kernel(self.X, x).reshape(-1, 1)
+            kappa = self.kernel(x, x)
+            Id = np.identity(self.X.shape[0] + 1)
+            K = self._update_K(self.K, k, kappa)
+            Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
+
+            toc_update_kernel = time.time() - tic
+
+            tic = time.time()
+            # Add row to X matrix
+            X = np.append(self.X, x.reshape(1, -1), axis=0)
+            toc_add_row = time.time() - tic
+            n = X.shape[0]
+
+            # Check that the significance level is not too small. If it is, return infinite prediction interval
+            if bounds=='both':
+                if not (epsilon >= 2/n):
+                    if self.warnings:
+                        warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon))} examples. Increase or add more examples')
+                    return (-np.inf, np.inf)
+            else: 
+                if not (epsilon >= 1/n):
+                    if self.warnings:
+                        warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon))} examples. Increase or add more examples')
+                    return (-np.inf, np.inf)
+
+            
+            tic = time.time()
+            A, B = self.compute_A_and_B(X, K, Kinv, self.y)
+            toc_nc = time.time() - tic
+
+            tic = time.time()
+            l_dic, u_dic = self._vectorised_l_and_u(A, B)
+            toc_dics = time.time() - tic
+
+            if bounds=='both':
+                lower = self._get_lower(l_dic=l_dic, epsilon=epsilon/2, n=n)
+                upper = self._get_upper(u_dic=u_dic, epsilon=epsilon/2, n=n)
+            elif bounds=='lower':
+                lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
+                upper = np.inf
+            elif bounds=='upper':
+                lower = -np.inf
+                upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
+            else: 
+                raise Exception
+
+            if debug_time:
+                print(f'Add row: {toc_add_row}')
+                print(f'Update kernel: {toc_update_kernel}')
+                print(f'NC scores: {toc_nc}')
+                print(f'l and u: {toc_dics}')
+                print()
+        else:
+            # With just one object, and no label, we cannot predict any meaningful interval
+            lower = -np.inf
+            upper = np.inf
+
+        return lower, upper
+    
+
+    def compute_smoothed_p_value(self, x, y):
+        '''
+        Computes the smoothed p-value of the example (x, y).
+        Smoothed p-values can be used to test the exchangeability assumption.
+        '''
+        if self.Kinv is not None:
+            
+            k = self.kernel(self.X, x).reshape(-1, 1)
+            kappa = self.kernel(x, x)
+            K = self._update_K(self.K, k, kappa)
+            Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
+            X = np.append(self.X, x.reshape(1, -1), axis=0)
+
+            A, B = self.compute_A_and_B(X, K, Kinv, self.y)
+
+            # Nonconformity scores are A + yB = y - yhat
+            Alpha = A + y*B
+            alpha_y = Alpha[-1]
+            lt = np.where(Alpha < alpha_y)[0].shape[0]
+            eq = np.where(Alpha == alpha_y)[0].shape[0]
+            tau = self.rnd_gen.uniform(0, 1)
+            p_y = (lt + tau * eq)/Alpha.shape[0]
+        else:
+            p_y = self.rnd_gen.uniform(0, 1)
+        return p_y
+            
 
 if __name__ == "__main__":
     import doctest

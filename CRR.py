@@ -359,25 +359,17 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return True
 
 
-# TODO
-'''
-    Should we add some scaler? Don't know if it is neccesary for Ridge
-    Possibly add a class MimoConformalRidgeRegressor
-    Possibly add a class ExchangeabilityMartingale that takes a betting function as argument.
-    Possibly add CPS version of ridge regressor?
-    Possibly add a TeachingSchedule?
-    Possibly add ACI, both for single, and MIMO CRR?
-    (Possibly add C-MFAC as for ACI?)
-    Add references to papers and books to README
-'''
-
-
-
 from kernels import RBF # FIXME REMOVE LATER
 class KernelConformalRidgeRegressor(ConformalRegressor):
 
+    # TODO Add doctests to methods where applicable
+
     def __init__(self, kernel:RBF, a=0, warnings=True, verbose=0, rnd_state=2024):
-        
+        '''
+        KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is 
+        also compatible with (most) kernels from e.g. scikit-learn.
+        Custom kernels can also be passed as callable functions.
+        '''
         self.a = a
         self.X = None
         self.y = None
@@ -415,21 +407,12 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
     @staticmethod
     def _update_K(K, k, kappa):
-        # print(f'K: {K}')
-        # print(f'k: {k}')
-        # print(f'kappa: {kappa}')
         return np.block([[K, k], [k.T, kappa]])
 
 
     def learn_one(self, x, y):
         '''
         Learn a single example
-        >>> cp = ConformalRidgeRegressor()
-        >>> cp.learn_one(np.array([1,0]), 1)
-        >>> cp.X
-        array([[1, 0]])
-        >>> cp.y
-        array([1])
         '''
         # Learn label y
         if self.y is None:
@@ -493,7 +476,6 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             # Temporarily update kernel matrix
             k = self.kernel(self.X, x).reshape(-1, 1)
             kappa = self.kernel(x, x)
-            Id = np.identity(self.X.shape[0] + 1)
             K = self._update_K(self.K, k, kappa)
             Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
 
@@ -578,6 +560,26 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             p_y = self.rnd_gen.uniform(0, 1)
         return p_y
             
+
+'''
+    TODO
+    Should we add some scaler? Don't know if it is neccesary for Ridge
+    Possibly add a class MimoConformalRidgeRegressor
+    Possibly add a class ExchangeabilityMartingale that takes a betting function as argument.
+    Possibly add CPS version of ridge regressor?
+    Possibly add a TeachingSchedule?
+    Possibly add ACI, both for single, and MIMO CRR?
+    (Possibly add C-MFAC as for ACI?)
+    Add references to papers and books to README
+
+    FIXME
+    The matrix calculations to update the kernel (and this include linear kernel) are repeated three times if we want to predict, learn and compute p-value. 
+    This is massively inefficient. Can we come up wiht some way to avoid it? 
+    It is nice to be able to predict an object without learning it, but could we perhaps pass a keyword that updates or returns the new kernel along with
+    the prediction set so that it does not need to be recomputed?
+'''
+
+
 
 if __name__ == "__main__":
     import doctest

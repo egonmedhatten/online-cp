@@ -44,3 +44,5 @@ class LinearKernel(Kernel):
             K = X @ Y
             K = K.reshape(-1, )
         return K
+    
+# TODO Add doctest

@@ -5,7 +5,7 @@ class Kernel:
     def __init__(self):
         pass
 
-class RBF(Kernel):
+class GaussianKernel(Kernel):
     '''
     NOTE I think this is correct, but pdist and cdist are a bit confusing...
     X is a matrix and Y a column vector
@@ -13,7 +13,7 @@ class RBF(Kernel):
 
     def __init__(self, sigma):
         self.sigma = sigma
-        self.name = 'RBF'
+        self.name = 'Gaussian'
 
     def __call__(self, X, y=None):
         X = np.atleast_2d(X)

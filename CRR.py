@@ -148,9 +148,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a*self.Id)
     
 
-    def learn_one(self, x, y):
+    def learn_one(self, x, y, precomputed=None):
         '''
-        Learn a single example
+        Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
         >>> cp = ConformalRidgeRegressor()
         >>> cp.learn_one(np.array([1,0]), 1)
         >>> cp.X
@@ -163,21 +163,51 @@ class ConformalRidgeRegressor(ConformalRegressor):
             self.y = np.array([y])
         else:
             self.y = np.append(self.y, y)
+        
+        if precomputed is not None:
+            X = precomputed['X']
+            XTXinv = precomputed['XTXinv']
 
-        # Learn object x
-        if self.X is None:
-            self.X = x.reshape(1,-1)
-            self.p = self.X.shape[1]
-            self.Id = np.identity(self.p)
-        elif self.X.shape[0] == 1:
-            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+            if X is not None:
+                self.X = X
+                self.p = self.X.shape[1]
+                self.Id = np.identity(self.p)
+            
+            if XTXinv is not None:
+                self.XTXinv = XTXinv
+                
+            else:
+                if self.X.shape[0] == 1:
+                    # print(self.X)
+                    # print(self.Id)
+                    # print(self.a)
+                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+                else:
+                    # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                            #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+            
+                    # Check the rank
+                    rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+                    
+
         else:
-            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-            # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
-                    #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-            self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
-            rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+            # Learn object x
+            if self.X is None:
+                self.X = x.reshape(1,-1)
+                self.p = self.X.shape[1]
+                self.Id = np.identity(self.p)
+            elif self.X.shape[0] == 1:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+            else:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                        #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+        
+                # Check the rank
+                rank_deficient = not(self.check_matrix_rank(self.XTXinv))
 
 
     @staticmethod
@@ -192,7 +222,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         return A, B
     
 
-    def predict(self, x, epsilon=0.1, bounds='both', debug_time=False):
+    def predict(self, x, epsilon=0.1, bounds='both', return_update=False, debug_time=False):
         """
         This function makes a prediction.
 
@@ -200,12 +230,18 @@ class ConformalRidgeRegressor(ConformalRegressor):
         you get a null prediciton between
         -infinity and +infinity.
 
-        TODO Add possibility to learn object to save time
-
         >>> cp = ConformalRidgeRegressor()
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
         (-inf, inf)
         """
+        def build_precomputed(X, XTXinv, A, B):
+            computed = {
+                'X': X, # The updated matrix of objects
+                'XTXinv': XTXinv, # The updated kernel matrix
+                'A': A,
+                'B': B,
+            } 
+            return computed
 
         if self.X is not None:
 
@@ -214,18 +250,25 @@ class ConformalRidgeRegressor(ConformalRegressor):
             X = np.append(self.X, x.reshape(1, -1), axis=0)
             toc_add_row = time.time() - tic
             n = X.shape[0]
+            XTXinv = None
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
             if bounds=='both':
                 if not (epsilon >= 2/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon))} examples. Increase or add more examples')
-                    return (-np.inf, np.inf)
+                    if return_update:
+                        return (-np.inf, np.inf), build_precomputed(X, XTXinv, None, None)
+                    else: 
+                        return (-np.inf, np.inf)
             else: 
                 if not (epsilon >= 1/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon))} examples. Increase or add more examples')
-                    return (-np.inf, np.inf)
+                    if return_update:
+                        return (-np.inf, np.inf), build_precomputed(X, XTXinv, None, None)
+                    else: 
+                        return (-np.inf, np.inf)
 
             tic = time.time()
             # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
@@ -262,22 +305,28 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 print()
         else:
             # With just one object, and no label, we cannot predict any meaningful interval
+            X = x.reshape(1,-1)
+            XTXinv = None
+            A = None
+            B = None
+
             lower = -np.inf
             upper = np.inf
-
-        return lower, upper
+    
+        if return_update:
+            return (lower, upper), build_precomputed(X, XTXinv, A, B)
+        else:
+            return (lower, upper)
             
     
-    def compute_smoothed_p_value(self, x, y):
+    def compute_smoothed_p_value(self, x, y, precomputed=None):
         '''
         Computes the smoothed p-value of the example (x, y).
         Smoothed p-values can be used to test the exchangeability assumption.
+        If X and XTXinv are passed, x must be the last row of X.
         '''
-        if self.XTXinv is not None:
-            X = np.append(self.X, x.reshape(1, -1), axis=0)
-            XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
-            A, B = self.compute_A_and_B(X, XTXinv, self.y)
-
+        # Inner method to compute the p-value from NC scores
+        def calc_p(A, B, y):
             # Nonconformity scores are A + yB = y - yhat
             Alpha = A + y*B
             alpha_y = Alpha[-1]
@@ -285,8 +334,33 @@ class ConformalRidgeRegressor(ConformalRegressor):
             eq = np.where(Alpha == alpha_y)[0].shape[0]
             tau = self.rnd_gen.uniform(0, 1)
             p_y = (lt + tau * eq)/Alpha.shape[0]
+            return p_y
+
+        if precomputed is not None:
+            A = precomputed['A']
+            B = precomputed['B']
+            if A is not None and B is not None:
+                p_y = calc_p(A, B, y)
+            else:
+                if self.XTXinv is not None:
+                    X = np.append(self.X, x.reshape(1, -1), axis=0)
+                    XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    A, B = self.compute_A_and_B(X, XTXinv, self.y)
+                    p_y = calc_p(A, B, y)
+                    
+                else:
+                    p_y = self.rnd_gen.uniform(0, 1)
+        
         else:
-            p_y = self.rnd_gen.uniform(0, 1)
+            if self.XTXinv is not None:
+                X = np.append(self.X, x.reshape(1, -1), axis=0)
+                XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                A, B = self.compute_A_and_B(X, XTXinv, self.y)
+                p_y = calc_p(A, B, y)
+                
+            else:
+                p_y = self.rnd_gen.uniform(0, 1)
+
         return p_y
 
 
@@ -323,7 +397,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
             a0 = MACHINE_EPSILON # Just a small pertubation to avoid numerical issues
 
         # Bounds to ensure a >= 0
-        res = minimize(GCV, x0=a0, bounds=Bounds(lb=0, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
+        res = minimize(GCV, x0=a0, bounds=Bounds(lb=MACHINE_EPSILON, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
         a = res.x[0]
 
         if self.verbose > 0:
@@ -331,6 +405,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         self.change_ridge_parameter(a)
 
 
+    # TODO
     def prune_training_set(self):
         '''
         Just an idea at the moment, but perhaps we should have some inclusion criteria for examples to only include the informative ones. Could improve accuracy, but also significantly decrease computation time if we have a large dataset.
@@ -351,9 +426,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         True
         '''
         if np.linalg.matrix_rank(M) < M.shape[0]:
-            if self.autotune:
-                warnings.warn(f'The matrix X is rank deficient. Condition number: {np.linalg.cond(M)}. Autotuning ridge prarmeter.')
-            elif self.warnings:
+            if self.warnings:
                 warnings.warn(f'The matrix X is rank deficient. Condition number: {np.linalg.cond(M)}. Consider changing the ridge prarmeter')
             return False
         else:
@@ -414,7 +487,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         return np.block([[K, k], [k.T, kappa]])
 
 
-    def learn_one(self, x, y):
+    def learn_one(self, x, y, precomputed=None):
         '''
         Learn a single example
         '''
@@ -423,24 +496,42 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             self.y = np.array([y])
         else:
             self.y = np.append(self.y, y)
+        
+        if precomputed is not None:
+            X = precomputed['X']
+            K = precomputed['K']
+            Kinv = precomputed['Kinv']
 
-        # Learn object x
-        if self.X is None:
-            self.X = x.reshape(1,-1)
-            Id = np.identity(self.X.shape[0])
-            self.K = self.kernel(self.X)
-            self.Kinv = np.linalg.inv(self.K + self.a * Id)
-        elif self.X.shape[0] == 1:
-            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-            Id = np.identity(self.X.shape[0])
-            self.K = self.kernel(self.X)
-            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+            if X is not None:
+                self.X = X
+
+            if K is not None and Kinv is not None:
+                self.K = K
+                self.Kinv = Kinv
+
+            else:
+                Id = np.identity(self.X.shape[0])
+                self.K = self.kernel(self.X)
+                self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        
         else:
-            k = self.kernel(self.X, x).reshape(-1, 1)
-            kappa = self.kernel(x, x)
-            self.K = self._update_K(self.K, k, kappa)
-            self.Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
-            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+            # Learn object x
+            if self.X is None:
+                self.X = x.reshape(1,-1)
+                Id = np.identity(self.X.shape[0])
+                self.K = self.kernel(self.X)
+                self.Kinv = np.linalg.inv(self.K + self.a * Id)
+            elif self.X.shape[0] == 1:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                Id = np.identity(self.X.shape[0])
+                self.K = self.kernel(self.X)
+                self.Kinv = np.linalg.inv(self.K + self.a * Id)
+            else:
+                k = self.kernel(self.X, x).reshape(-1, 1)
+                kappa = self.kernel(x, x)
+                self.K = self._update_K(self.K, k, kappa)
+                self.Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
 
     @staticmethod
@@ -458,7 +549,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         return A, B
     
     
-    def predict(self, x, epsilon=0.1, bounds='both', debug_time=False):
+    def predict(self, x, epsilon=0.1, bounds='both', return_update=False, debug_time=False):
         """
         This function makes a prediction.
 
@@ -472,7 +563,16 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
         (-inf, inf)
         """
-
+        def build_precomputed(X, K, Kinv, A, B):
+            computed = {
+                'X': X, # The updated matrix of objects
+                'K': K, # The updated kernel matrix
+                'Kinv': Kinv,
+                'A': A,
+                'B': B,
+            } 
+            return computed
+        
         if self.X is not None:
 
             tic = time.time()
@@ -496,12 +596,18 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 if not (epsilon >= 2/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon))} examples. Increase or add more examples')
-                    return (-np.inf, np.inf)
+                    if return_update:
+                        return (-np.inf, np.inf), build_precomputed(X, K, Kinv, None, None)
+                    else: 
+                        return (-np.inf, np.inf)
             else: 
                 if not (epsilon >= 1/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon))} examples. Increase or add more examples')
-                    return (-np.inf, np.inf)
+                    if return_update:
+                        return (-np.inf, np.inf), build_precomputed(X, K, Kinv, None, None)
+                    else: 
+                        return (-np.inf, np.inf)
 
             
             tic = time.time()
@@ -532,27 +638,29 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 print()
         else:
             # With just one object, and no label, we cannot predict any meaningful interval
+            X = x.reshape(1,-1)
+            K = None
+            Kinv = None
+            A = None
+            B = None
+            
             lower = -np.inf
             upper = np.inf
 
-        return lower, upper
+        if return_update:
+            return (lower, upper), build_precomputed(X, K, Kinv, A, B)
+        else:
+            return (lower, upper)
     
 
-    def compute_smoothed_p_value(self, x, y):
+    def compute_smoothed_p_value(self, x, y, precomputed=None):
         '''
         Computes the smoothed p-value of the example (x, y).
         Smoothed p-values can be used to test the exchangeability assumption.
         '''
-        if self.Kinv is not None:
-            
-            k = self.kernel(self.X, x).reshape(-1, 1)
-            kappa = self.kernel(x, x)
-            K = self._update_K(self.K, k, kappa)
-            Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
-            X = np.append(self.X, x.reshape(1, -1), axis=0)
 
-            A, B = self.compute_A_and_B(X, K, Kinv, self.y)
-
+        # Inner method to compute the p-value from NC scores
+        def calc_p(A, B, y):
             # Nonconformity scores are A + yB = y - yhat
             Alpha = A + y*B
             alpha_y = Alpha[-1]
@@ -560,8 +668,39 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             eq = np.where(Alpha == alpha_y)[0].shape[0]
             tau = self.rnd_gen.uniform(0, 1)
             p_y = (lt + tau * eq)/Alpha.shape[0]
+            return p_y
+        if precomputed is not None:
+            A = precomputed['A']
+            B = precomputed['B']
+            X = precomputed['X']
+            K = precomputed['K']
+            Kinv = precomputed['Kinv']
+
+            if A is not None and B is not None:
+                p_y = calc_p(A, B, y)
+            else:
+                if Kinv is not None and X is not None and K is not None:
+
+                    A, B = self.compute_A_and_B(X, K, Kinv, self.y)
+                    p_y = calc_p(A, B, y)
+
+                else:
+                    p_y = self.rnd_gen.uniform(0, 1)
+                
         else:
-            p_y = self.rnd_gen.uniform(0, 1)
+            if self.Kinv is not None:
+                
+                k = self.kernel(self.X, x).reshape(-1, 1)
+                kappa = self.kernel(x, x)
+                K = self._update_K(self.K, k, kappa)
+                Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
+                X = np.append(self.X, x.reshape(1, -1), axis=0)
+
+                A, B = self.compute_A_and_B(X, K, Kinv, self.y)
+                p_y = calc_p(A, B, y)
+
+            else:
+                p_y = self.rnd_gen.uniform(0, 1)
         return p_y
             
 

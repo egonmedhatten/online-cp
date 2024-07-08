@@ -43,3 +43,18 @@ for i, (obj, lab) in enumerate(zip(X, y)):
     cp.learn_one(obj, lab)
 ```
 The output will be ```(inf, inf)``` for the first 19 predictions, after which we will typically see meaningful prediction sets.
+
+
+## Future considerations
+We will initally focus on regression, but online classification is actually easier. A simple class that uses e.g. scikit-learn classifiers to define nonconformity measure could be easily implemented. 
+
+There are at least three commonly used regularisations used in linear regression, all of which are compatible with the kernel trick. 
+* $L1$ (Lasso)
+* $L2$ (Ridge)
+* Linear combination of the above (Elastic net)
+
+All of these can be conformalized, and at least Ridge can also be used in conformal predictive systems (CPS).
+
+Another relatively simple regressor is the k-nearest neighbours algorithm, which is very flexible as it can use arbitrary distances. It is particularly interesting in the CPS setting. The distance can be measured in feature space as defined by a kernel.
+
+Ridge and KNN are described in detail in Algorithmic Learning in a Random World. Lasso and Elastic net are conformalised in the paper Fast Exact Conformalization of Lasso using Piecewise Linear Homotopy, but I am unaware of any extention to CPS. 

@@ -5,12 +5,6 @@ from scipy.optimize import minimize_scalar, minimize, Bounds
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
-'''
-The most basic version of CRR predicts a single target. 
-This conformal predictor is not smoothed, so p-values can not be used to test exchangeability.
-If we want to ad an exchangeability test, we have to use some other conformal transducer, e.g. 1-NN as in https://www.alrw.net/articles/04.pdf
-We could also add kernel ridge regression.
-'''
 
 class ConformalRegressor:
     '''
@@ -702,26 +696,6 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             else:
                 p_y = self.rnd_gen.uniform(0, 1)
         return p_y
-            
-
-'''
-    TODO
-    Should we add some scaler? Don't know if it is neccesary for Ridge
-    Possibly add a class MimoConformalRidgeRegressor
-    Possibly add a class ExchangeabilityMartingale that takes a betting function as argument.
-    Possibly add CPS version of ridge regressor?
-    Possibly add a TeachingSchedule?
-    Possibly add ACI, both for single, and MIMO CRR?
-    (Possibly add C-MFAC as for ACI?)
-    Add references to papers and books to README
-
-    FIXME
-    The matrix calculations to update the kernel (and this include linear kernel) are repeated three times if we want to predict, learn and compute p-value. 
-    This is massively inefficient. Can we come up wiht some way to avoid it? 
-    It is nice to be able to predict an object without learning it, but could we perhaps pass a keyword that updates or returns the new kernel along with
-    the prediction set so that it does not need to be recomputed?
-'''
-
 
 
 if __name__ == "__main__":

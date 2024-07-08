@@ -58,3 +58,15 @@ All of these can be conformalized, and at least Ridge can also be used in confor
 Another relatively simple regressor is the k-nearest neighbours algorithm, which is very flexible as it can use arbitrary distances. It is particularly interesting in the CPS setting. The distance can be measured in feature space as defined by a kernel.
 
 Ridge and KNN are described in detail in Algorithmic Learning in a Random World. Lasso and Elastic net are conformalised in the paper Fast Exact Conformalization of Lasso using Piecewise Linear Homotopy, but I am unaware of any extention to CPS. 
+
+## Todo
+* Should we add some scaler? Don't know if it is neccesary for Ridge
+* Possibly add a class MimoConformalRidgeRegressor
+* Add CPS version of ridge regressor?
+* Possibly add a TeachingSchedule?
+* Possibly add ACI, both for single, and MIMO CRR?
+* Add references to papers and books to README
+* Add k-NN regressor and CPS
+
+# References
+How to cite papers? I think I have seen it in some repos.

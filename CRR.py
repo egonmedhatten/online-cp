@@ -359,12 +359,11 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return True
 
 
-from kernels import RBF # FIXME REMOVE LATER
 class KernelConformalRidgeRegressor(ConformalRegressor):
 
     # TODO Add doctests to methods where applicable
 
-    def __init__(self, kernel:RBF, a=0, warnings=True, verbose=0, rnd_state=2024):
+    def __init__(self, kernel, a=0, warnings=True, verbose=0, rnd_state=2024):
         '''
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is 
         also compatible with (most) kernels from e.g. scikit-learn.

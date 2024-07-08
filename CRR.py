@@ -116,6 +116,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
     '''
 
     def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=2024):
+        '''
+        Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
+        '''
         
         self.a = a
         self.X = None
@@ -175,8 +178,6 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
             self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
             rank_deficient = not(self.check_matrix_rank(self.XTXinv))
-            if rank_deficient and self.autotune:
-                self.tune_ridge_parameter()
 
 
     @staticmethod

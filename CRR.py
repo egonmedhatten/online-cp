@@ -314,7 +314,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
             try:
                 A = self.X @ np.linalg.inv(XTX + a*self.Id) @ self.X.T
                 return (1/n)*np.linalg.norm((In - A) @ self.y)**2 / ((1/n)* np.trace(In- A))**2
-            except np.linalg.LinAlgError:
+            except (np.linalg.LinAlgError, ZeroDivisionError):
                 return np.inf
         
         # Initial guess
@@ -392,21 +392,25 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         self.X = X
         self.y = y
         Id = np.identity(self.X.shape[0])
-        if self.autotune:
-            self.tune_ridge_parameter()
-        else:
-            K = self.kernel(self.X)
-            self.Kinv = np.linalg.inv(K + self.a * Id)
+       
+        self.K = self.kernel(self.X)
+        self.Kinv = np.linalg.inv(self.K + self.a * Id)
 
 
     @staticmethod
     def _update_Kinv(Kinv, k, kappa):
+        # print(f'K: {K}')
+        # print(f'k: {k}')
+        # print(f'kappa: {kappa}')
         d = 1 / (kappa - k.T @ Kinv @ k)
         return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [ -d * k.T @ Kinv, d]])
 
 
     @staticmethod
     def _update_K(K, k, kappa):
+        # print(f'K: {K}')
+        # print(f'k: {k}')
+        # print(f'kappa: {kappa}')
         return np.block([[K, k], [k.T, kappa]])
 
 

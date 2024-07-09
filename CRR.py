@@ -701,7 +701,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
 class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
-    def __init__(self, k, distance='euclidean', kernel=None, distance_func=None, warnings=True, verbose=0, rnd_state=2024):
+    def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=2024):
         
         self.k = k
         self.distance = distance

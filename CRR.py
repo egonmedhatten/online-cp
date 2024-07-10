@@ -463,6 +463,229 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return True
         
 
+class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
+    '''
+    For time-series forecasting. Label y is a vector. However, we can only observe the first element at each step.
+    FIXME This makes very little sense. Perhaps we should just internaly build the matrices from an observed time-series.
+          In the electricity case, we observe demand and actual weather hourly, but we can also include weather forecasts
+          Something like predict()
+    '''
+    def __init__(self, fh, **kwargs):
+        self.fh = fh
+        super().__init__(**kwargs)
+        
+
+    @staticmethod
+    def err(Gamma, y:np.array):
+        '''
+        Check the error
+        '''
+        lowers = Gamma[0]
+        uppers = Gamma[1]
+        return (y < lowers).astype(int) + (y > uppers).astype(int)
+
+
+    def learn_one(self, x, y, precomputed=None):
+        '''
+        Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
+        We only learn a single label. To build a y-row, we have to know the last row.
+        '''
+        # Learn label y
+        if self.y.shape[0] < self.fh:
+            raise Exception('This is not possible!!!') # FIXME Not sure if this is the correct condition
+        else:
+            last_y = self.y[-1]
+            self.y = np.append(self.y, np.append(last_y[1:], y).reshape(1, self.fh), axis=0)
+    
+        if precomputed is not None:
+            X = precomputed['X']
+            XTXinv = precomputed['XTXinv']
+
+            if X is not None:
+                self.X = X
+                self.p = self.X.shape[1]
+                self.Id = np.identity(self.p)
+            
+            if XTXinv is not None:
+                self.XTXinv = XTXinv
+                
+            else:
+                if self.X.shape[0] == 1:
+                    # print(self.X)
+                    # print(self.Id)
+                    # print(self.a)
+                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+                else:
+                    # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                            #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+            
+                    # Check the rank
+                    rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+                    
+        else:
+            # Learn object x
+            if self.X is None:
+                self.X = x.reshape(1,-1)
+                self.p = self.X.shape[1]
+                self.Id = np.identity(self.p)
+            elif self.X.shape[0] == 1:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+            else:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                        #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+        
+                # Check the rank
+                rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+
+
+    @staticmethod
+    def compute_A_and_B(X, XTXinv, y, fh):
+        n = X.shape[0]
+        # Hat matrix (This block is the time consuming one...)
+        H = X @ XTXinv @ X.T
+        C = np.identity(n) - H
+        A = C @ np.vstack([y, np.zeros((1,fh))])
+        B = C @ np.vstack([np.zeros((n-1, fh)), np.ones((1,fh))])
+        return A, B
+
+
+    def predict(self, x, epsilon=0.1, bounds='both', return_update=False, debug_time=False):
+        """
+        This function makes a prediction.
+
+        If you start with no training,
+        you get a null prediciton between
+        -infinity and +infinity.
+
+        >>> cp = ConformalRidgeRegressor()
+        >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
+        (-inf, inf)
+        """
+
+        # Handle the significance level
+        if not hasattr(epsilon, 'shape'):
+            # Then it is a scalar, and needs to be tuned into a vector
+            epsilon = np.array([epsilon]*self.fh)
+        assert epsilon.shape[0] == self.fh
+
+        def build_precomputed(X, XTXinv, A, B):
+            computed = {
+                'X': X, # The updated matrix of objects
+                'XTXinv': XTXinv, # The updated kernel matrix
+                'A': A,
+                'B': B,
+            } 
+            return computed
+
+        if self.X is not None:
+
+            tic = time.time()
+            # Add row to X matrix
+            X = np.append(self.X, x.reshape(1, -1), axis=0)
+            toc_add_row = time.time() - tic
+            n = X.shape[0]
+            XTXinv = None
+
+            # Check that the significance level is not too small. If it is, return infinite prediction interval
+            if bounds=='both':
+                if not (epsilon >= 2/n).all():
+                    if self.warnings:
+                        warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon.min()))} examples. Increase or add more examples')
+                    if return_update:
+                        return (-np.inf, np.inf), build_precomputed(X, XTXinv, None, None)
+                    else: 
+                        return (-np.inf, np.inf)
+            else: 
+                if not (epsilon >= 1/n).all():
+                    if self.warnings:
+                        warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon.min()))} examples. Increase or add more examples')
+                    if return_update:
+                        return (-np.inf, np.inf), build_precomputed(X, XTXinv, None, None)
+                    else: 
+                        return (-np.inf, np.inf)
+
+            tic = time.time()
+            # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                    #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+
+            XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+            toc_update_XTXinv = time.time() - tic
+
+            tic = time.time()
+            A, B = self.compute_A_and_B(X, XTXinv, self.y, self.fh)
+            toc_nc = time.time() - tic
+
+            # FIXME This loop should be vectorized for efficiency
+            lowers = np.empty(self.fh, dtype=float) # predicted lower values go here
+            uppers = np.empty(self.fh, dtype=float) # predicted upper values go here
+
+            tic = time.time()
+            for j, eps in enumerate(epsilon):
+                
+                l_dic, u_dic = self._vectorised_l_and_u(A=A[:,j], B=B[:,j])
+
+                if bounds=='both':
+                    lower = self._get_lower(l_dic=l_dic, epsilon=eps/2, n=n)
+                    upper = self._get_upper(u_dic=u_dic, epsilon=eps/2, n=n)
+                    lowers[j] = lower
+                    uppers[j] = upper
+                elif bounds=='lower':
+                    lower = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
+                    lowers[j] = lower
+                    uppers[j] = np.inf
+                elif bounds=='upper':
+                    lower = -np.inf
+                    upper = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
+                    lowers[j] = -np.inf
+                    uppers[j] = upper
+                else: 
+                    raise Exception
+            toc_dics = time.time() - tic
+
+            if debug_time:
+                print(f'Add row: {toc_add_row}')
+                print(f'Update kernel: {toc_update_XTXinv}')
+                print(f'NC scores: {toc_nc}')
+                print(f'l and u: {toc_dics}')
+                print()
+        else:
+            # With just one object, and no label, we cannot predict any meaningful interval
+            X = x.reshape(1,-1)
+            XTXinv = None
+            A = None
+            B = None
+
+            lowers = -np.inf * np.ones(self.fh, dtype=float) 
+            uppers = np.inf * np.ones(self.fh, dtype=float)
+    
+        if return_update:
+            return (lowers, uppers), build_precomputed(X, XTXinv, A, B)
+        else:
+            return (lowers, uppers)
+
+
+class MimoConformalRidgeRegressor(ConformalRegressor):
+
+    '''
+    This class is intended for use in multi-step ahead time-series forecatsing.
+    To be of practical use in a realistic setting, it should only learn the time-series
+    and/or exogenous variables.
+    In, say, electricity demand forecasting, it should learn d_t, the demand at time t, 
+    T_t, the temperature at time t, F_t, the temperature forecast for the forecast horizon etc.
+    I think it makes sense to maintain a separate time-series for each exogenous variable.
+    Note that e.g. the forecast time-series will be multi-variate.
+
+    Then from these, whenever we want to predict, we build the X and y matrices from the stored
+    time-series, and the input objects, e.g. d_t, T_t, F_t, and so on. There may be ways to make 
+    this efficient, but let's start with the basics.
+
+    How do we store these things internally? 
+    Probably we have to declare at __init__ what time-series we maintain.
+    '''
 
 
 class KernelConformalRidgeRegressor(ConformalRegressor):

@@ -64,6 +64,42 @@ class ConformalRegressor:
     
 
     @staticmethod
+    def minimum_training_set(epsilon, bounds='both'):
+        '''
+        Returns the minimum initial training set size needed to output informative (finite) prediciton sets
+
+        >>> from CRR import ConformalRegressor
+        >>> cp = ConformalRegressor()
+        >>> cp.minimum_training_set(0.1)
+        20
+
+        >>> from CRR import ConformalRegressor
+        >>> cp = ConformalRegressor()
+        >>> cp.minimum_training_set(0.1, 'upper')
+        10
+
+        >>> from CRR import ConformalRegressor
+        >>> import numpy as np
+        >>> cp = ConformalRegressor()
+        >>> cp.minimum_training_set(np.array([0.1, 0.05]))
+        40
+
+        '''
+        if not hasattr(epsilon, 'shape'):
+            # Then it is a scalar
+            if bounds == 'both':
+                return int(np.ceil(2/epsilon)) 
+            else: 
+                return int(np.ceil(1/epsilon)) 
+        else:
+            # Then it is a vector
+            if bounds == 'both':
+                return int(np.ceil(2/epsilon.min())) 
+            else: 
+                return int(np.ceil(1/epsilon.min())) 
+    
+
+    @staticmethod
     def err(Gamma, y):
         return int(not(Gamma[0] <= y <= Gamma[1]))
     
@@ -138,7 +174,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         self.p = X.shape[1]
         self.Id = np.identity(self.p)
         if self.autotune:
-            self.tune_ridge_parameter()
+            self._tune_ridge_parameter()
         else:
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a*self.Id)
     
@@ -158,7 +194,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
             self.y = np.array([y])
         else:
             self.y = np.append(self.y, y)
-        
+    
         if precomputed is not None:
             X = precomputed['X']
             XTXinv = precomputed['XTXinv']
@@ -185,7 +221,6 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     # Check the rank
                     rank_deficient = not(self.check_matrix_rank(self.XTXinv))
                     
-
         else:
             # Learn object x
             if self.X is None:
@@ -373,7 +408,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
 
 
-    def tune_ridge_parameter(self, a0=None):
+    def _tune_ridge_parameter(self, a0=None):
         '''
         Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
         '''
@@ -426,6 +461,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return False
         else:
             return True
+        
+
 
 
 class KernelConformalRidgeRegressor(ConformalRegressor):
@@ -713,6 +750,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
         self.X = None
         self.y = None
+        self.D = None
 
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
@@ -883,6 +921,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         Smoothed p-values can be used to test the exchangeability assumption.
         If X and XTXinv are passed, x must be the last row of X.
         '''
+
         # Inner method to compute the p-value from NC scores
         def calc_p(A, B, y):
             # Nonconformity scores are A + yB = y - yhat
@@ -901,7 +940,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 p_y = calc_p(A, B, y)
             else:
                 X = precomputed['X']
-                if X.shape[0] > 0:
+                if self.X is not None:
                     assert np.allclose(x, X[-1])
                     D = precomputed['D']
                     A, B = self.compute_A_and_B(D, self.y, self.k)

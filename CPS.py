@@ -14,6 +14,12 @@ class ConformalPredictiveSystem:
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
     def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=2024):
+        '''
+        Consider adding possibility to update self.k as the training set grows, e.g. by some heuristic or something.
+        Two rules of thumb are quite simple:
+            1. Choose k close to sqrt(n) where n is the training set size
+            2. If the data has large variance, choose k larger. If the variance is small, choose k smaller. This is less clear, however.
+        '''
         
         self.k = k
 
@@ -86,26 +92,31 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             self.D = precomputed['D']
 
     
-    def predict_cpd(self, x, epsilon=0.1):
+    def predict_cpd(self, x, return_update=False, save_time=False):
 
         '''
         TODO Add possibility to return precomputed as we did with ConformalRegressor.
         '''
-        
+        tic = time.time()
         # Temporarily update the distance matrix
         if self.X is None:
             X = x.reshape(1,-1)
-            D = self.distance_func(self.X)
+            D = self.distance_func(X)
             y = np.array(-np.inf) # Initialise label as -inf
         else:
             d = self.distance_func(self.X, x)
             D = self.update_distance_matrix(self.D, d)
             X = np.append(self.X, x.reshape(1, -1), axis=0)
             y = np.append(self.y, -np.inf) # Initialise label as -inf
+        toc_dist = time.time()-tic
 
+        tic = time.time()
         # Find all neighbours and semi-neighbours
+        # NOTE I have a feeling that this could be stored in order to save time... Investigate later
         k_nearest = D.argsort(axis=0)[1:self.k+1]
+        toc_sort = time.time() - tic
 
+        tic = time.time()
         idx_all_neighbours_and_semi_neighbours = []
 
         full_neighbours = []
@@ -127,10 +138,10 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
                 # print(f'{i} is a semi-neighbour')
                 idx_all_neighbours_and_semi_neighbours.append(i)
                 semi_neighbours.append(y[i])
+        toc_find_neighbours = time.time() - tic
         
         # Line 1
         Kprime = len(idx_all_neighbours_and_semi_neighbours)
-
         # Line 2 and 3
         Y = np.zeros(shape=(Kprime+2,))
         Y[0] = -np.inf
@@ -153,6 +164,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         L[0] = 0
         U[0] = N[0]/(n+1)
 
+        tic = time.time()
         # Line 6
         for k in range(1, Kprime + 1):
             # FIXME Something is wrong with this loop... Very difficult to tell what.
@@ -174,10 +186,22 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             # Line 11
             L[k] = N[:int(Alpha[-1])].sum() / (n + 1) if Alpha[-1] != 0  else 0
             U[k] = N[:int(Alpha[-1]) + 1].sum() / (n + 1)
-        
+        toc_loop = time.time() - tic
+
+        time_dict = {
+            'Compute distance matrix': toc_dist,
+            'Sort distance matrix': toc_sort,
+            'Find all neighbours and semi-neighbours': toc_find_neighbours,
+            'Loop': toc_loop
+        }
+        time_dict = time_dict if save_time else None
         # Line 12
-        cps = KnnConformalPredictiveDistributionFunction(L, U, Y)
-        return cps
+        cps = KnnConformalPredictiveDistributionFunction(L, U, Y, time_dict)
+
+        if return_update:
+            return cps, {'X': X, 'D': D}
+        else:
+            return cps
     
 
 class ConformalPredictiveDistributionFunction:
@@ -188,25 +212,51 @@ class ConformalPredictiveDistributionFunction:
     prediction set. We can take quantiles and so on.
     '''
 
-    def quantile(self):
-        pass
+    def quantile(self, quantile, tau):
+        raise NotImplementedError('Parent class has not quantile function')
 
-    def predict_set(self):
-        pass
+
+    def predict_set(self, tau, epsilon=0.1):
+        '''
+        The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
+        the prediction set Gamma(epsilon)
+        TODO Add things like bounds, so we can predict just upper or lower...
+        '''
+        q1 = epsilon/2
+        q2 = 1 - epsilon/2
+        lower = self.quantile(q1, tau)
+        upper = self.quantile(q2, tau)
+
+        # print(f'Lower: {lower}')
+        # print(f'Upper: {upper}')
+        return lower, upper
+    
+
+    # These methods relate to when the cpd is used to predict sets
+    @staticmethod
+    def err(Gamma, y):
+        return int(not(Gamma[0] <= y <= Gamma[1]))
+    
+
+    @staticmethod
+    def width(Gamma):
+        return Gamma[1] - Gamma[0]
+
 
 
 class KnnConformalPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
 
-    def __init__(self, L, U, Y):
+    def __init__(self, L, U, Y, time_dict=None):
         self.L = L 
         self.U = U
         self.Y = Y
+
+        self.time_dict = time_dict
 
     def __call__(self, y, tau=None):
         Y = self.Y[:-1]
         idx_eq = np.where(y == Y)[0]
         if idx_eq.shape[0] > 0:
-            print('Here')
             k = idx_eq.min()
             interval = (self.L[k-1], self.U[k])
         else:
@@ -219,6 +269,14 @@ class KnnConformalPredictiveDistributionFunction(ConformalPredictiveDistribution
         if tau is None:
             return Pi0, Pi1
         else:
-            return tau * Pi0 + (1 - tau) * Pi1
+            return (1 - tau) * Pi0 + tau * Pi1
         
     
+    def quantile(self, quantile, tau):
+        q = np.inf
+        for y in self.Y[::-1]:
+            if self.__call__(y, tau) >= quantile:
+                q = y
+            else:
+                return q
+        return q

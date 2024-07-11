@@ -1,6 +1,8 @@
 import numpy as np
 from sklearn.neighbors import KernelDensity
 from scipy.integrate import quad
+import warnings
+
 
 class PluginMartingale:
     '''
@@ -12,15 +14,20 @@ class PluginMartingale:
     1.0
     '''
 
-    def __init__(self, betting_function='kernel'):
+    def __init__(self, betting_function='kernel', warning_level=100):
         '''
         For numerical reasons, it is better to update the martingale in log scale
+        Warning level set to 100 means that we warn if the exchangeability hypothesis can 
+        be discarded with confidence at least 0.99.
+        If you do not want to be warned, set to np.inf
         '''
         self.logM = 0.0
         self.max = 1 # The maximum value ever reachec by the maringale
 
         # At the moment, we just have one betting function, but more can be added.
         self.betting_function = betting_function
+
+        self.warning_level = warning_level
 
     def kernel_density_betting_function(self, p_values):
         '''
@@ -49,9 +56,13 @@ class PluginMartingale:
             self.logM += np.log(self.kernel_density_betting_function(p_values))
         else:
             raise NotImplementedError('Currently only kernel betting function is available. More to come...')
-        # Update the runnign max
+        # Update the running max
         if self.M > self.max:
             self.max = self.M
+
+        if self.max >= self.warning_level:
+            warnings.warn(f'Exchangeability assumption likely violated: Max martingale value is {self.max}')
+
 
     @property
     def M(self):

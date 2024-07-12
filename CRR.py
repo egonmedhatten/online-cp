@@ -193,7 +193,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
         if self.y is None:
             self.y = np.array([y])
         else:
-            self.y = np.append(self.y, y)
+            if hasattr(self, 'h'):
+                self.y = np.append(self.y, y.reshape(1, self.h), axis=0)
+            else:
+                self.y = np.append(self.y, y)
     
         if precomputed is not None:
             X = precomputed['X']
@@ -357,6 +360,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
         '''
         # Inner method to compute the p-value from NC scores
         def calc_p(A, B, y):
+            if hasattr(self, 'h'):
+                raise NotImplementedError('MimoConformalRidgeRegressor can not compute p-values at the moment. Working on it...')
             # Nonconformity scores are A + yB = y - yhat
             Alpha = A + y*B
             alpha_y = Alpha[-1]
@@ -463,15 +468,11 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return True
         
 
-class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
-    '''
-    For time-series forecasting. Label y is a vector. However, we can only observe the first element at each step.
-    FIXME This makes very little sense. Perhaps we should just internaly build the matrices from an observed time-series.
-          In the electricity case, we observe demand and actual weather hourly, but we can also include weather forecasts
-          Something like predict()
-    '''
-    def __init__(self, fh, **kwargs):
-        self.fh = fh
+class MimoConformalRidgeRegressor(ConformalRidgeRegressor):
+
+    
+    def __init__(self, h, **kwargs):
+        self.h = h
         super().__init__(**kwargs)
         
 
@@ -485,71 +486,70 @@ class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
         return (y < lowers).astype(int) + (y > uppers).astype(int)
 
 
-    def learn_one(self, x, y, precomputed=None):
-        '''
-        Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
-        We only learn a single label. To build a y-row, we have to know the last row.
-        '''
-        # Learn label y
-        if self.y.shape[0] < self.fh:
-            raise Exception('This is not possible!!!') # FIXME Not sure if this is the correct condition
-        else:
-            last_y = self.y[-1]
-            self.y = np.append(self.y, np.append(last_y[1:], y).reshape(1, self.fh), axis=0)
+    # def learn_one(self, x, y, precomputed=None):
+    #     '''
+    #     Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
+    #     We only learn a single label. To build a y-row, we have to know the last row.
+    #     '''
+    #     # Learn label y
+    #     if self.y is None:
+    #         self.y = np.array([y])
+    #     else:
+    #         self.y = np.append(self.y, y.reshape(1,-1), axis=0)
     
-        if precomputed is not None:
-            X = precomputed['X']
-            XTXinv = precomputed['XTXinv']
+    #     if precomputed is not None:
+    #         X = precomputed['X']
+    #         XTXinv = precomputed['XTXinv']
 
-            if X is not None:
-                self.X = X
-                self.p = self.X.shape[1]
-                self.Id = np.identity(self.p)
+    #         if X is not None:
+    #             self.X = X
+    #             self.p = self.X.shape[1]
+    #             self.Id = np.identity(self.p)
             
-            if XTXinv is not None:
-                self.XTXinv = XTXinv
+    #         if XTXinv is not None:
+    #             self.XTXinv = XTXinv
                 
-            else:
-                if self.X.shape[0] == 1:
-                    # print(self.X)
-                    # print(self.Id)
-                    # print(self.a)
-                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
-                else:
-                    # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
-                            #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+    #         else:
+    #             if self.X.shape[0] == 1:
+    #                 # print(self.X)
+    #                 # print(self.Id)
+    #                 # print(self.a)
+    #                 self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+    #             else:
+    #                 # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+    #                         #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+    #                 self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
             
-                    # Check the rank
-                    rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+    #                 # Check the rank
+    #                 rank_deficient = not(self.check_matrix_rank(self.XTXinv))
                     
-        else:
-            # Learn object x
-            if self.X is None:
-                self.X = x.reshape(1,-1)
-                self.p = self.X.shape[1]
-                self.Id = np.identity(self.p)
-            elif self.X.shape[0] == 1:
-                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
-            else:
-                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
-                        #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+    #     else:
+    #         # Learn object x
+    #         if self.X is None:
+    #             self.X = x.reshape(1,-1)
+    #             self.p = self.X.shape[1]
+    #             self.Id = np.identity(self.p)
+    #         elif self.X.shape[0] == 1:
+    #             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+    #             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+    #         else:
+    #             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+    #             # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+    #                     #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+    #             self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
         
-                # Check the rank
-                rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+    #             # Check the rank
+    #             rank_deficient = not(self.check_matrix_rank(self.XTXinv))
 
 
     @staticmethod
-    def compute_A_and_B(X, XTXinv, y, fh):
+    def compute_A_and_B(X, XTXinv, y, h):
         n = X.shape[0]
         # Hat matrix (This block is the time consuming one...)
         H = X @ XTXinv @ X.T
         C = np.identity(n) - H
-        A = C @ np.vstack([y, np.zeros((1,fh))])
-        B = C @ np.vstack([np.zeros((n-1, fh)), np.ones((1,fh))])
+        A = C @ np.vstack([y, np.zeros((1,h))])
+        B = C @ np.vstack([np.zeros((n-1, h)), np.ones((1,h))])
         return A, B
 
 
@@ -569,8 +569,8 @@ class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
         # Handle the significance level
         if not hasattr(epsilon, 'shape'):
             # Then it is a scalar, and needs to be tuned into a vector
-            epsilon = np.array([epsilon]*self.fh)
-        assert epsilon.shape[0] == self.fh
+            epsilon = np.array([epsilon]*self.h)
+        assert epsilon.shape[0] == self.h
 
         def build_precomputed(X, XTXinv, A, B):
             computed = {
@@ -616,12 +616,12 @@ class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
             toc_update_XTXinv = time.time() - tic
 
             tic = time.time()
-            A, B = self.compute_A_and_B(X, XTXinv, self.y, self.fh)
+            A, B = self.compute_A_and_B(X, XTXinv, self.y, self.h)
             toc_nc = time.time() - tic
 
             # FIXME This loop should be vectorized for efficiency
-            lowers = np.empty(self.fh, dtype=float) # predicted lower values go here
-            uppers = np.empty(self.fh, dtype=float) # predicted upper values go here
+            lowers = np.empty(self.h, dtype=float) # predicted lower values go here
+            uppers = np.empty(self.h, dtype=float) # predicted upper values go here
 
             tic = time.time()
             for j, eps in enumerate(epsilon):
@@ -659,8 +659,8 @@ class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
             A = None
             B = None
 
-            lowers = -np.inf * np.ones(self.fh, dtype=float) 
-            uppers = np.inf * np.ones(self.fh, dtype=float)
+            lowers = -np.inf * np.ones(self.h, dtype=float) 
+            uppers = np.inf * np.ones(self.h, dtype=float)
     
         if return_update:
             return (lowers, uppers), build_precomputed(X, XTXinv, A, B)
@@ -668,7 +668,8 @@ class NotGoodMimoConformalRidgeRegressor(ConformalRidgeRegressor):
             return (lowers, uppers)
 
 
-class MimoConformalRidgeRegressor(ConformalRegressor):
+# TODO Is this a good idea?
+class ConformalRidgeTimeSeriesForecaster(ConformalRegressor): 
 
     '''
     This class is intended for use in multi-step ahead time-series forecatsing.

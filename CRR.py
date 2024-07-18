@@ -15,6 +15,13 @@ class ConformalRegressor:
 
     def __init__(self):
         pass
+    
+
+    '''
+    TODO The methods _get_upper and _get_lower could be called with a vector of significance levels,
+         say one casual and one highly confident. In pracice, this could be useful when the aim is 
+         descision support. This would then have to play nice wiht everything else...
+    '''
 
     @staticmethod
     def _get_upper(u_dic, epsilon, n):

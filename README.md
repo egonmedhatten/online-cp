@@ -46,6 +46,8 @@ The output will be ```(inf, inf)``` for the first 19 predictions, after which we
 
 
 ## Future considerations
+
+### Linear regression
 We will initally focus on regression, but online classification is actually easier. A simple class that uses e.g. scikit-learn classifiers to define nonconformity measure could be easily implemented. 
 
 There are at least three commonly used regularisations used in linear regression, all of which are compatible with the kernel trick. 
@@ -58,6 +60,13 @@ All of these can be conformalized, and at least Ridge can also be used in confor
 Another relatively simple regressor is the k-nearest neighbours algorithm, which is very flexible as it can use arbitrary distances. It is particularly interesting in the CPS setting. The distance can be measured in feature space as defined by a kernel.
 
 Ridge and KNN are described in detail in Algorithmic Learning in a Random World. Lasso and Elastic net are conformalised in the paper Fast Exact Conformalization of Lasso using Piecewise Linear Homotopy, but I am unaware of any extention to CPS. 
+
+### Teaching schedule
+Section 3.3 in Algorithmic Learning in a Radnom World deals with, so called, weak teachers. In the pure online mode, labels arrive immediately after a predition is made. This makes little sense in practice. The notion of a teaching schedule formalises this, and makes the relevant validity guarantees clear. There are three types of validity; weak, strong, and iterated logartihm validity. 
+
+There may be settings where the user wants to specify a teaching schedule beforehand, to guarantee some property of validity. It may also be the case that the teaching schedule is implied by the usage, and it would then be useful to know if the resulting prediciton sets are valid.
+
+A teaching schedule also serves as documentation of what has been done, which could be useful in practice.
 
 ## Todo
 * Should we add some scaler? Don't know if it is neccesary for Ridge

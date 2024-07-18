@@ -216,7 +216,7 @@ class ConformalPredictiveDistributionFunction:
         raise NotImplementedError('Parent class has not quantile function')
 
 
-    def predict_set(self, tau, epsilon=0.1):
+    def predict_set(self, tau, epsilon=0.1, bounds='both'):
         '''
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
@@ -224,8 +224,17 @@ class ConformalPredictiveDistributionFunction:
         '''
         q1 = epsilon/2
         q2 = 1 - epsilon/2
-        lower = self.quantile(q1, tau)
-        upper = self.quantile(q2, tau)
+        if bounds=='both':
+            lower = self.quantile(q1, tau)
+            upper = self.quantile(q2, tau)
+        elif bounds=='lower':
+            lower = self.quantile(q1, tau)
+            upper = np.inf
+        elif bounds=='upper':
+            lower = -np.inf
+            upper = self.quantile(q2, tau)
+        else: 
+            raise Exception
 
         # print(f'Lower: {lower}')
         # print(f'Upper: {upper}')

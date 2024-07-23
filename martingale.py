@@ -29,6 +29,8 @@ class PluginMartingale:
 
         self.warning_level = warning_level
 
+        self.p_values = []
+
     def kernel_density_betting_function(self, p_values):
         '''
         Betting function from Vovk paper
@@ -53,9 +55,10 @@ class PluginMartingale:
         d, norm_fac = get_density_estimate(p_values[:-1])
         return betting_function(p_values[-1], d, norm_fac)
     
-    def update_log_martingale(self, p_values):
+    def update_log_martingale(self, p):
+        self.p_values.append(p)
         if self.betting_function == 'kernel':
-            self.logM += np.log(self.kernel_density_betting_function(p_values))
+            self.logM += np.log(self.kernel_density_betting_function(self.p_values))
         else:
             raise NotImplementedError('Currently only kernel betting function is available. More to come...')
         # Update the running max

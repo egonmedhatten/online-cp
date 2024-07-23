@@ -47,6 +47,11 @@ The output will be ```(inf, inf)``` for the first 19 predictions, after which we
 
 ## Future considerations
 
+### Properties of CPs?
+* Should we keep track of errors internally in the parent class? 
+* Should we store the average interval size?
+* For classifiers; should we store the efficiency metrics?
+
 ### Linear regression
 We will initally focus on regression, but online classification is actually easier. A simple class that uses e.g. scikit-learn classifiers to define nonconformity measure could be easily implemented. 
 

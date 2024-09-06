@@ -3,6 +3,16 @@ import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 
+
+class PredictionSet:
+    '''
+    Maybe nice to have a class for prediction sets. 
+    '''
+    def __init__(self, members:list):
+        self.members = members
+        self.size = len(members)
+
+
 class ConformalClssifier:
     '''
     Parent class for classifiers
@@ -66,7 +76,10 @@ class ConformalClssifier:
                 of += p
         self.OF += of
         return of
-
+    
+    def set_size(self, Gamma):
+        size = Gamma.shape[0]
+        return size
 
 class ConformalPassiveAggressive(ConformalClssifier):
     '''
@@ -81,6 +94,8 @@ class ConformalPassiveAggressive(ConformalClssifier):
 
     NOTE We can easily add on a kernel by simply changing the loss function, as described 
     just before Section 4 in the paper
+
+    FIXME The conformity measure needs revision...
     '''
 
     def __init__(self, d, warnings=True, verbose=0, rnd_state=2024):
@@ -134,6 +149,11 @@ class ConformalPassiveAggressive(ConformalClssifier):
 
 
     def predict_set(self, x, epsilon=0.1, return_p_values=False):
+        '''
+        FIXME The loop for computing conformity scores is terribly inneficient. If this 
+              conformal predictor is to be of any practical use, we have to speed it up
+              significantly. 
+        '''
         p_values = {}
 
         tau = self.rnd_gen.uniform(0, 1)
@@ -143,7 +163,21 @@ class ConformalPassiveAggressive(ConformalClssifier):
             
             y = np.append(self.y, label)
             
-            Beta = y * (X @ self.w)
+            # Beta = y * (X @ self.w)
+
+            Beta = np.empty_like(y)
+
+            # FIXME This loop is horrificly inefficient. It retrains the whole thing for each example
+                    # We have to do something better if this is to be included.
+            indices = np.arange(y.shape[0])
+            for i, (x_i, y_i) in enumerate(zip(X, y)):
+                w = np.zeros(self.d)
+                for x_j, y_j in zip(X[indices != i], y[indices != i]):
+                    l = self._loss(x_j, y_j)
+                    theta = self._compute_theta(l, x_j)
+                    w += theta * y_j * x_j
+                
+                Beta[i] = y_i * (x_i @ w)
 
             p_values[label] = self._compute_p_value(Beta, tau, 'conformity')
         

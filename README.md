@@ -75,12 +75,12 @@ A teaching schedule also serves as documentation of what has been done, which co
 
 ## Todo
 * Should we add some scaler? Don't know if it is neccesary for Ridge
-* Possibly add a class MimoConformalRidgeRegressor
 * Add CPS version of ridge regressor?
 * Possibly add a TeachingSchedule?
 * Possibly add ACI, both for single, and MIMO CRR?
 * Add references to papers and books to README
-* Add k-NN regressor and CPS
+* Add kernel alternative to classifiers.
+* For knn, kernels could likely be implemented by passing a suitable distance function. Probably a better API is to just pass a kernel.
 
 # References
 How to cite papers? I think I have seen it in some repos.

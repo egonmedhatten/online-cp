@@ -676,7 +676,7 @@ class MimoConformalRidgeRegressor(ConformalRidgeRegressor):
 
 
 # TODO Is this a good idea?
-class ConformalRidgeTimeSeriesForecaster(ConformalRegressor): 
+class ConformalRidgeRegressionTimeSeriesForecaster(ConformalRegressor): 
 
     '''
     This class is intended for use in multi-step ahead time-series forecatsing.
@@ -693,7 +693,15 @@ class ConformalRidgeTimeSeriesForecaster(ConformalRegressor):
 
     How do we store these things internally? 
     Probably we have to declare at __init__ what time-series we maintain.
+
+    The main purpose of this class, is to be used in electricity demand forecasting (JE project). 
+    Let's tailor it to that use case.
     '''
+
+    def __init__(self, a=0, warnings=True, verbose=0, rnd_state=2024):
+        '''
+        The time-series to be used for forecasting should be learned one after another
+        '''
 
 
 class KernelConformalRidgeRegressor(ConformalRegressor):

@@ -1,4 +1,4 @@
-#%%
+# %%
 import numpy as np
 import time
 from CRR import ConformalRidgeRegressor
@@ -15,15 +15,17 @@ gamma = 0.005
 tot_init = time.time()
 
 # Set the number of runs
-N = 1000
+N = 2000
 
 experiment = {}
+
+time.sleep(30)
 
 # Test 1: IID
 for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
     rnd_gen = np.random.default_rng(seed)
 
-    experiment[seed] = {'iid': {}, 'change_points': {}, 'drift': {}}
+    
 
     # Generate data
     X = rnd_gen.normal(loc=0, scale=1, size=(2000, 4))
@@ -39,9 +41,10 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
     y_run = Y[initial_training_size:]
 
     aci_bound = (max(epsilon, 1-epsilon) + gamma) / (gamma * y_run.shape[0])
+    experiment[seed] = {'iid': {}, 'change_points': {}, 'drift': {}, 'aci_bound': aci_bound, 'epsilon': epsilon, 'gamma': gamma}
 
     # Run full CP
-    cp = ConformalRidgeRegressor(a=0)
+    cp = ConformalRidgeRegressor(a=0, warnings=False)
 
     time_init_cp = time.time()
     cp.learn_initial_training_set(X_train, y_train)
@@ -62,7 +65,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
         err = cp.err(Gamma, label)
 
         eps += gamma*(epsilon - err)
-        eps = max(2/cp.X.shape[0], eps)
+        #eps = max(2/cp.X.shape[0], eps)
 
         res[i, 0] = err
         res[i, 1] = width
@@ -94,7 +97,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
         err = ols.err(Gamma, label)
 
         eps += gamma*(epsilon - err)
-        eps = max(2/ols.X.shape[0], eps)
+        #eps = max(2/ols.X.shape[0], eps)
 
         res[i, 0] = err
         res[i, 1] = width
@@ -125,7 +128,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
     y_run = Y[initial_training_size:]
 
     # Run full CP
-    cp = ConformalRidgeRegressor(a=0)
+    cp = ConformalRidgeRegressor(a=0, warnings=False)
 
     time_init_cp = time.time()
     cp.learn_initial_training_set(X_train, y_train)
@@ -146,7 +149,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
         err = cp.err(Gamma, label)
 
         eps += gamma*(epsilon - err)
-        eps = max(2/cp.X.shape[0], eps)
+        #eps = max(2/cp.X.shape[0], eps)
 
         res[i, 0] = err
         res[i, 1] = width
@@ -178,7 +181,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
         err = ols.err(Gamma, label)
 
         eps += gamma*(epsilon - err)
-        eps = max(2/ols.X.shape[0], eps)
+        #eps = max(2/ols.X.shape[0], eps)
 
         res[i, 0] = err
         res[i, 1] = width
@@ -205,7 +208,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
     y_run = Y[initial_training_size:]
 
     # Run full CP
-    cp = ConformalRidgeRegressor(a=0)
+    cp = ConformalRidgeRegressor(a=0, warnings=False)
 
     time_init_cp = time.time()
     cp.learn_initial_training_set(X_train, y_train)
@@ -226,7 +229,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
         err = cp.err(Gamma, label)
 
         eps += gamma*(epsilon - err)
-        eps = max(2/cp.X.shape[0], eps)
+        #eps = max(2/cp.X.shape[0], eps)
 
         res[i, 0] = err
         res[i, 1] = width
@@ -258,7 +261,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
         err = ols.err(Gamma, label)
 
         eps += gamma*(epsilon - err)
-        eps = max(2/ols.X.shape[0], eps)
+        #eps = max(2/ols.X.shape[0], eps)
 
         res[i, 0] = err
         res[i, 1] = width
@@ -272,8 +275,7 @@ for seed in tqdm(range(N), total=N, desc='Running linear experiment'):
 with open(f'ACI_linear_experiment_{N}.pkl', 'wb') as fp:
     pickle.dump(experiment, fp)
 # %%
-with open(f'ACI_linear_experiment.pkl_{N}', 'rb') as fp:
+with open(f'ACI_linear_experiment_{N}.pkl', 'rb') as fp:
     test_load = pickle.load(fp)
 # %%
-
 print(f'Mean time: {(time.time() - tot_init)/N:,.4f} s')

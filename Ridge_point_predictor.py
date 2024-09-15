@@ -390,3 +390,37 @@ class ConfidencePredictor:
     @staticmethod
     def width(Gamma):
         return Gamma[1] - Gamma[0]
+    
+
+class ReallyStupidPredictor:
+
+    def __init__(self, low, high, rnd_state=2024):
+        self.low = low
+        self.high = high
+        self.random_gen = np.random.default_rng(rnd_state)
+
+
+    @staticmethod
+    def err(Gamma, y):
+        return int(not(Gamma[0] <= y <= Gamma[1]))
+    
+
+    @staticmethod
+    def width(Gamma):
+        return Gamma[1] - Gamma[0]
+    
+
+    def predict_interval(self, x, epsilon=0.1):
+        if epsilon <= 0:
+            low = -np.inf
+            high = np.inf
+        elif epsilon >= 1:
+            low = -1
+            high = 1
+        else:
+            bound1 = self.random_gen.uniform(self.low, self.high)
+            bound2 = self.random_gen.uniform(self.low, self.high)
+            low = min(bound1, bound2)
+            high = max(bound1, bound2)
+
+        return low, high

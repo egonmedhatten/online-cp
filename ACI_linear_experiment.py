@@ -15,7 +15,7 @@ epsilon = 0.1
 tot_init = time.time()
 
 # Set the number of runs
-N = 10#00
+N = 1000
 
 delta = 0.05
 M = 1900

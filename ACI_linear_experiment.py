@@ -17,13 +17,18 @@ tot_init = time.time()
 # Set the number of runs
 N = 1000
 
+delta = 0.05
+M = 1900
+gamma_opt = (max(epsilon, 1-epsilon))/(delta*M - 1)
+gamma_opt
+
 experiment = {}
 
-for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
-    time.sleep(3)
+for j, gamma in enumerate([gamma_opt, 0]):
+    time.sleep(1)
     tot_init = time.time()
     # Test 1: IID
-    for seed in tqdm(range(N), total=N, desc=f'Running linear experiment: gamma = {gamma}'):
+    for seed in tqdm(range(N), total=N, desc=f'Running linear experiment {j+1}/2: gamma = {gamma}'):
         rnd_gen = np.random.default_rng(seed)
 
 
@@ -47,6 +52,10 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
         experiment[seed] = {'iid': {}, 'change_points': {}, 'drift': {}, 'aci_bound': aci_bound, 'epsilon': epsilon, 'gamma': gamma}
 
         # Run full CP
+
+        S = 0
+        num_finite = 0
+
         cp = ConformalRidgeRegressor(a=0, warnings=False)
 
         time_init_cp = time.time()
@@ -67,6 +76,16 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
             cp.learn_one(x, y, precomputed)
             err = cp.err(Gamma, label)
 
+            if np.isfinite(Gamma).all():
+                num_finite += 1
+                if err == 0:
+                    S += width
+                else:
+                    if y < Gamma[0]:
+                        S += width + (2/epsilon)*(Gamma[0] - y)
+                    elif y > Gamma[1]:
+                        S += width + (2/epsilon)*(y - Gamma[1])
+
             eps += gamma*(epsilon - err)
             #eps = max(2/cp.X.shape[0], eps)
 
@@ -76,10 +95,14 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
 
         time_cp = time.time() - time_init_cp
 
-        experiment[seed]['iid']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon}
+        experiment[seed]['iid']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
 
         # Run OLS
+
+        S = 0
+        num_finite = 0
+
         ols = OnlineRidgeRegressor(a=0)
 
         time_init_ols = time.time()
@@ -99,6 +122,16 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
             ols.learn_one(x, y)
             err = ols.err(Gamma, label)
 
+            if np.isfinite(Gamma).all():
+                num_finite += 1
+                if err == 0:
+                    S += width
+                else:
+                    if y < Gamma[0]:
+                        S += width + (2/epsilon)*(Gamma[0] - y)
+                    elif y > Gamma[1]:
+                        S += width + (2/epsilon)*(y - Gamma[1])
+
             eps += gamma*(epsilon - err)
             #eps = max(2/ols.X.shape[0], eps)
 
@@ -108,35 +141,51 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
 
         time_ols = time.time() - time_init_ols
 
-        experiment[seed]['iid']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon}
+        experiment[seed]['iid']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
-        # Run Stupid
-        stupid = ReallyStupidPredictor(low=-1, high=1)
+        # # Run Stupid
 
-        time_init_stupid = time.time()
+        # S = 0
+        # num_finite = 0
 
-        eps = epsilon
+        # stupid = ReallyStupidPredictor(low=-1, high=1)
 
-        res = np.empty((X_run.shape[0], 3))
-        for i, (obj, label) in enumerate(zip(X_run, y_run)):
-            # Reality presents the object x
-            x = obj
-            Gamma = stupid.predict_interval(x, epsilon=eps)
-            width = stupid.width(Gamma)
-            # Reality reveals y
-            y = label
-            err = stupid.err(Gamma, label)
+        # time_init_stupid = time.time()
 
-            eps += gamma*(epsilon - err)
-            #eps = max(2/ols.X.shape[0], eps)
+        # eps = epsilon
 
-            res[i, 0] = err
-            res[i, 1] = width
-            res[i, 2] = eps
+        # res = np.empty((X_run.shape[0], 3))
+        # for i, (obj, label) in enumerate(zip(X_run, y_run)):
+        #     # Reality presents the object x
+        #     x = obj
+        #     Gamma = stupid.predict_interval(x, epsilon=eps)
+        #     width = stupid.width(Gamma)
+        #     # Reality reveals y
+        #     y = label
+        #     err = stupid.err(Gamma, label)
 
-        time_stupid = time.time() - time_init_stupid
+        #     if np.isfinite(Gamma).all():
+        #         num_finite += 1
+        #         if err == 0:
+        #             S += width
+        #         else:
+        #             if y < Gamma[0]:
+        #                 S += width + (2/epsilon)*(Gamma[0] - y)
+        #             elif y > Gamma[1]:
+        #                 S += width + (2/epsilon)*(y - Gamma[1])
 
-        experiment[seed]['iid']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon}
+        #     eps += gamma*(epsilon - err)
+
+        #     eps += gamma*(epsilon - err)
+        #     #eps = max(2/ols.X.shape[0], eps)
+
+        #     res[i, 0] = err
+        #     res[i, 1] = width
+        #     res[i, 2] = eps
+
+        # time_stupid = time.time() - time_init_stupid
+
+        # experiment[seed]['iid']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
 
     # Test 2: Change points
@@ -159,6 +208,10 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
         y_run = Y[initial_training_size:]
 
         # Run full CP
+
+        S = 0
+        num_finite = 0
+
         cp = ConformalRidgeRegressor(a=0, warnings=False)
 
         time_init_cp = time.time()
@@ -179,6 +232,16 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
             cp.learn_one(x, y, precomputed)
             err = cp.err(Gamma, label)
 
+            if np.isfinite(Gamma).all():
+                num_finite += 1
+                if err == 0:
+                    S += width
+                else:
+                    if y < Gamma[0]:
+                        S += width + (2/epsilon)*(Gamma[0] - y)
+                    elif y > Gamma[1]:
+                        S += width + (2/epsilon)*(y - Gamma[1])
+
             eps += gamma*(epsilon - err)
             #eps = max(2/cp.X.shape[0], eps)
 
@@ -188,10 +251,14 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
 
         time_cp = time.time() - time_init_cp
 
-        experiment[seed]['change_points']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon}
+        experiment[seed]['change_points']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
 
         # Run OLS
+
+        S = 0
+        num_finite = 0
+
         ols = OnlineRidgeRegressor(a=0)
 
         time_init_ols = time.time()
@@ -210,6 +277,16 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
             y = label
             ols.learn_one(x, y)
             err = ols.err(Gamma, label)
+            
+            if np.isfinite(Gamma).all():
+                num_finite += 1
+                if err == 0:
+                    S += width
+                else:
+                    if y < Gamma[0]:
+                        S += width + (2/epsilon)*(Gamma[0] - y)
+                    elif y > Gamma[1]:
+                        S += width + (2/epsilon)*(y - Gamma[1])
 
             eps += gamma*(epsilon - err)
             #eps = max(2/ols.X.shape[0], eps)
@@ -220,35 +297,50 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
 
         time_ols = time.time() - time_init_ols
 
-        experiment[seed]['change_points']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon}
+        experiment[seed]['change_points']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
-        # Run Stupid
-        stupid = ReallyStupidPredictor(low=-1, high=1)
+        # # Run Stupid
 
-        time_init_stupid = time.time()
+        # S = 0
+        # num_finite = 0
 
-        eps = epsilon
+        # stupid = ReallyStupidPredictor(low=-1, high=1)
 
-        res = np.empty((X_run.shape[0], 3))
-        for i, (obj, label) in enumerate(zip(X_run, y_run)):
-            # Reality presents the object x
-            x = obj
-            Gamma = stupid.predict_interval(x, epsilon=eps)
-            width = stupid.width(Gamma)
-            # Reality reveals y
-            y = label
-            err = stupid.err(Gamma, label)
+        # time_init_stupid = time.time()
 
-            eps += gamma*(epsilon - err)
-            #eps = max(2/ols.X.shape[0], eps)
+        # eps = epsilon
 
-            res[i, 0] = err
-            res[i, 1] = width
-            res[i, 2] = eps
+        # res = np.empty((X_run.shape[0], 3))
+        # for i, (obj, label) in enumerate(zip(X_run, y_run)):
+        #     # Reality presents the object x
+        #     x = obj
+        #     Gamma = stupid.predict_interval(x, epsilon=eps)
+        #     width = stupid.width(Gamma)
+        #     # Reality reveals y
+        #     y = label
+        #     err = stupid.err(Gamma, label)
 
-        time_stupid = time.time() - time_init_stupid
+        #     if np.isfinite(Gamma).all():
+        #         num_finite += 1
+        #         if err == 0:
+        #             S += width
+        #         else:
+        #             if y < Gamma[0]:
+        #                 S += width + (2/epsilon)*(Gamma[0] - y)
+        #             elif y > Gamma[1]:
+        #                 S += width + (2/epsilon)*(y - Gamma[1])
 
-        experiment[seed]['change_points']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon}
+
+        #     eps += gamma*(epsilon - err)
+        #     #eps = max(2/ols.X.shape[0], eps)
+
+        #     res[i, 0] = err
+        #     res[i, 1] = width
+        #     res[i, 2] = eps
+
+        # time_stupid = time.time() - time_init_stupid
+
+        # experiment[seed]['change_points']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
     # Test 3: Drifring mean
 
@@ -267,6 +359,10 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
         y_run = Y[initial_training_size:]
 
         # Run full CP
+
+        S = 0
+        num_finite = 0
+
         cp = ConformalRidgeRegressor(a=0, warnings=False)
 
         time_init_cp = time.time()
@@ -287,6 +383,16 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
             cp.learn_one(x, y, precomputed)
             err = cp.err(Gamma, label)
 
+            if np.isfinite(Gamma).all():
+                num_finite += 1
+                if err == 0:
+                    S += width
+                else:
+                    if y < Gamma[0]:
+                        S += width + (2/epsilon)*(Gamma[0] - y)
+                    elif y > Gamma[1]:
+                        S += width + (2/epsilon)*(y - Gamma[1])
+
             eps += gamma*(epsilon - err)
             #eps = max(2/cp.X.shape[0], eps)
 
@@ -296,10 +402,14 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
 
         time_cp = time.time() - time_init_cp
 
-        experiment[seed]['drift']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon}
+        experiment[seed]['drift']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
 
         # Run OLS
+
+        S = 0
+        num_finite = 0
+
         ols = OnlineRidgeRegressor(a=0)
 
         time_init_ols = time.time()
@@ -319,6 +429,17 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
             ols.learn_one(x, y)
             err = ols.err(Gamma, label)
 
+            if np.isfinite(Gamma).all():
+                num_finite += 1
+                if err == 0:
+                    S += width
+                else:
+                    if y < Gamma[0]:
+                        S += width + (2/epsilon)*(Gamma[0] - y)
+                    elif y > Gamma[1]:
+                        S += width + (2/epsilon)*(y - Gamma[1])
+
+
             eps += gamma*(epsilon - err)
             #eps = max(2/ols.X.shape[0], eps)
 
@@ -328,35 +449,50 @@ for j, gamma in tqdm(enumerate([0, 0.001, 0.005, 0.007, 0.01]), total=5):
 
         time_ols = time.time() - time_init_ols
 
-        experiment[seed]['drift']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon}
+        experiment[seed]['drift']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
 
-        # Run Stupid
-        stupid = ReallyStupidPredictor(low=-1, high=1)
+        # # Run Stupid
 
-        time_init_stupid = time.time()
+        # S = 0
+        # num_finite = 0
 
-        eps = epsilon
+        # stupid = ReallyStupidPredictor(low=-1, high=1)
 
-        res = np.empty((X_run.shape[0], 3))
-        for i, (obj, label) in enumerate(zip(X_run, y_run)):
-            # Reality presents the object x
-            x = obj
-            Gamma = stupid.predict_interval(x, epsilon=eps)
-            width = stupid.width(Gamma)
-            # Reality reveals y
-            y = label
-            err = stupid.err(Gamma, label)
+        # time_init_stupid = time.time()
 
-            eps += gamma*(epsilon - err)
-            #eps = max(2/ols.X.shape[0], eps)
+        # eps = epsilon
 
-            res[i, 0] = err
-            res[i, 1] = width
-            res[i, 2] = eps
+        # res = np.empty((X_run.shape[0], 3))
+        # for i, (obj, label) in enumerate(zip(X_run, y_run)):
+        #     # Reality presents the object x
+        #     x = obj
+        #     Gamma = stupid.predict_interval(x, epsilon=eps)
+        #     width = stupid.width(Gamma)
+        #     # Reality reveals y
+        #     y = label
+        #     err = stupid.err(Gamma, label)
 
-        time_stupid = time.time() - time_init_stupid
+        #     if np.isfinite(Gamma).all():
+        #         num_finite += 1
+        #         if err == 0:
+        #             S += width
+        #         else:
+        #             if y < Gamma[0]:
+        #                 S += width + (2/epsilon)*(Gamma[0] - y)
+        #             elif y > Gamma[1]:
+        #                 S += width + (2/epsilon)*(y - Gamma[1])
 
-        experiment[seed]['drift']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon}
+
+        #     eps += gamma*(epsilon - err)
+        #     #eps = max(2/ols.X.shape[0], eps)
+
+        #     res[i, 0] = err
+        #     res[i, 1] = width
+        #     res[i, 2] = eps
+
+        # time_stupid = time.time() - time_init_stupid
+
+        # experiment[seed]['drift']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
     # %%
 
     with open(f'ACI_linear_experiment_{N}_{j}.pkl', 'wb') as fp:

@@ -15,7 +15,7 @@ epsilon = 0.1
 tot_init = time.time()
 
 # Set the number of runs
-N = 1000
+N = 10#00
 
 delta = 0.05
 M = 1900
@@ -95,7 +95,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         time_cp = time.time() - time_init_cp
 
-        experiment[seed]['iid']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        experiment[seed]['iid']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
 
         # Run OLS
@@ -141,7 +141,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         time_ols = time.time() - time_init_ols
 
-        experiment[seed]['iid']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        experiment[seed]['iid']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
         # # Run Stupid
 
@@ -185,7 +185,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         # time_stupid = time.time() - time_init_stupid
 
-        # experiment[seed]['iid']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        # experiment[seed]['iid']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
 
     # Test 2: Change points
@@ -251,7 +251,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         time_cp = time.time() - time_init_cp
 
-        experiment[seed]['change_points']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        experiment[seed]['change_points']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
 
         # Run OLS
@@ -297,7 +297,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         time_ols = time.time() - time_init_ols
 
-        experiment[seed]['change_points']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        experiment[seed]['change_points']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
         # # Run Stupid
 
@@ -340,7 +340,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         # time_stupid = time.time() - time_init_stupid
 
-        # experiment[seed]['change_points']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        # experiment[seed]['change_points']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
     # Test 3: Drifring mean
 
@@ -402,7 +402,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         time_cp = time.time() - time_init_cp
 
-        experiment[seed]['drift']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        experiment[seed]['drift']['cp'] = {'time': time_cp, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
 
         # Run OLS
@@ -449,7 +449,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         time_ols = time.time() - time_init_ols
 
-        experiment[seed]['drift']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        experiment[seed]['drift']['ols'] = {'time': time_ols, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
 
         # # Run Stupid
 
@@ -492,7 +492,7 @@ for j, gamma in enumerate([gamma_opt, 0]):
 
         # time_stupid = time.time() - time_init_stupid
 
-        # experiment[seed]['drift']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite}
+        # experiment[seed]['drift']['stupid'] = {'time': time_stupid, 'result': res, 'epsilon': epsilon, 'finite_IS': S/num_finite, 'frac_inf': 1 - num_finite/y_run.shape[0]}
     # %%
 
     with open(f'ACI_linear_experiment_{N}_{j}.pkl', 'wb') as fp:

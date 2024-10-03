@@ -969,7 +969,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
 class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
-    def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=2024):
+    def __init__(self, k, distance='euclidean', distance_func=None, aggregation_method='mean', warnings=True, verbose=0, rnd_state=2024):
         
         self.k = k
         self.distance = distance
@@ -978,6 +978,12 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         else:
             self.distance_func = distance_func
             self.distance = 'custom'
+
+        self.aggregation_method = aggregation_method
+        if aggregation_method == 'mean':
+            self.agg_func = np.mean
+        elif aggregation_method == 'median':
+            self.agg_func = np.median
 
         self.X = None
         self.y = None
@@ -1124,8 +1130,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         else:
             return (lower, upper)
 
-    @staticmethod
-    def compute_A_and_B(D, y, k):
+
+    def compute_A_and_B(self, D, y, k):
         y = np.append(y, 0)
         n = D.shape[0] - 1 
         A = np.zeros(n + 1)
@@ -1135,13 +1141,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
         for i, col in enumerate(k_nearest.T): # Transpose to iterate over columns
             if i < n:
-                A[i] = y[i] - y[col].mean()
+                A[i] = y[i] - self.agg_func(y[col])
                 if n in col:
                     B[i] = -1/k
                 else:
                     B[i] = 0
             else:
-                A[i] = -y[col].mean()
+                A[i] = - self.agg_func(y[col])
                 B[i] = 1
         return A, B
     

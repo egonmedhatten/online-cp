@@ -14,7 +14,7 @@ class PluginMartingale:
     1.0
     '''
 
-    def __init__(self, betting_function='kernel', warning_level=100, warn=True):
+    def __init__(self, betting_function='kernel', warning_level=100, warnings=True):
         '''
         For numerical reasons, it is better to update the martingale in log scale
         Warning level set to 100 means that we warn if the exchangeability hypothesis can 
@@ -28,7 +28,7 @@ class PluginMartingale:
         self.betting_function = betting_function
 
         self.warning_level = warning_level
-        self.warn = warn
+        self.warnings = warnings
 
         self.p_values = []
 
@@ -66,7 +66,7 @@ class PluginMartingale:
         if self.M > self.max:
             self.max = self.M
 
-        if self.max >= self.warning_level and self.warn:
+        if self.max >= self.warning_level and self.warnings:
             warnings.warn(f'Exchangeability assumption likely violated: Max martingale value is {self.max}')
 
 

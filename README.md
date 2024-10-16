@@ -47,6 +47,12 @@ The output will be ```(inf, inf)``` for the first 19 predictions, after which we
 
 ## Future considerations
 
+### Release minimal version 
+For use in projects, it may be good to have a released minimal version of OnlineConformalPrediction. Initially, it could include
+* Conformalised Ridge Regression
+* Plugin martingale
+* Possibly Conformalised Nearest Neighbours Regression (but I will have to check it carefully for any bugs)
+
 ### Properties of CPs?
 * Should we keep track of errors internally in the parent class? 
 * Should we store the average interval size?

@@ -10,7 +10,7 @@ class PluginMartingale:
     We reject exchangeability with confidence 1-1/alpha if we ever observe M >= alpha for any alpha>0
 
     >>> martingale = PluginMartingale()
-    >>> martingale.M
+    >>> print(martingale.M)
     1.0
     '''
 

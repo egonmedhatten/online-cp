@@ -27,3 +27,12 @@ jobs:
       # validate the pyproject.toml
       - run: validate-pyproject pyproject.toml
       # TODO: run: pytest once tests are added
+      - name: Code coverage quick report
+        run: |
+          coverage erase
+          coverage run -a CRR.py
+          coverage run -a classifiers.py
+          coverage run -a CPS.py
+          coverage run -a kernels.py
+          coverage run -a martingale.py
+          coverage report

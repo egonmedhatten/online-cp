@@ -15,14 +15,15 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers
-      - name: Parse CRR library and runs doctests
-        run: python CRR.py
-      - name: Parse the martingale library and run doctests
-        run: python martingale.py
-      # TODO: uncomment once tests are added
-      # - name: Run tests
-      #   run: pytest
-      - name: Run notebook
-        run: jupyter-nbconvert --execute example.ipynb --to html
-      - name: Validate pyproject.toml
-        run: validate-pyproject pyproject.toml
+      # parse libraries and run doctests:
+      - run: python classifiers.py
+      - run: python CPS.py
+      - run: python CRR.py
+      - run: python kernels.py
+      - run: python martingale.py
+      # run our notebooks
+      - run: jupyter-nbconvert --execute example.ipynb --to html
+      - run: jupyter-nbconvert --execute test_exchangeability.ipynb --to html
+      # validate the pyproject.toml
+      - run: validate-pyproject pyproject.toml
+      # TODO: run: pytest once tests are added

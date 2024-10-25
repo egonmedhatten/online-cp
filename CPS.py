@@ -221,6 +221,7 @@ class ConformalPredictiveDistributionFunction:
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
         TODO Add things like bounds, so we can predict just upper or lower...
+             Make it possible to pass two epsilons to predict skewed intervals...
         '''
         q1 = epsilon/2
         q2 = 1 - epsilon/2

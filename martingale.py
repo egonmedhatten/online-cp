@@ -96,6 +96,7 @@ class PluginMartingale:
         M = np.exp(logM)
         return max, M, M_arr
 
+
 if __name__ == "__main__":
     import doctest
     import sys

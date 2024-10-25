@@ -452,7 +452,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         '''
         Just an idea at the moment, but perhaps we should have some inclusion criteria for examples to only include the informative ones. Could improve accuracy, but also significantly decrease computation time if we have a large dataset.
         '''
-        pass
+        raise NotImplementedError
 
 
     def check_matrix_rank(self, M):

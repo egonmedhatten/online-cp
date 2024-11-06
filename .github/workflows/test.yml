@@ -16,19 +16,20 @@ jobs:
           pip install -r requirements.txt
           pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage
       # parse libraries and run doctests:
-      - run: python oncp/classifiers.py
-      - run: python oncp/CPS.py
-      - run: python oncp/CRR.py
-      - run: python oncp/kernels.py
-      - run: python oncp/martingale.py
+      - run: PYTHONPATH=src python oncp/classifiers.py
+      - run: PYTHONPATH=src python oncp/CPS.py
+      - run: PYTHONPATH=src python oncp/CRR.py
+      - run: PYTHONPATH=src python oncp/kernels.py
+      - run: PYTHONPATH=src python oncp/martingale.py
       # run our notebooks
-      - run: jupyter-nbconvert --execute example.ipynb --to html
-      - run: jupyter-nbconvert --execute test_exchangeability.ipynb --to html
+      - run: PYTHONPATH=src jupyter-nbconvert --execute example.ipynb --to html
+      - run: PYTHONPATH=src jupyter-nbconvert --execute test_exchangeability.ipynb --to html
       # validate the pyproject.toml
       - run: validate-pyproject pyproject.toml
       # TODO: run: pytest once tests are added
       - name: Code coverage quick report
         run: |
+          export PYTHONPATH=src
           coverage erase
           coverage run -a oncp/CRR.py
           coverage run -a oncp/classifiers.py

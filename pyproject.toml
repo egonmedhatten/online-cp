@@ -26,3 +26,9 @@ classifiers = [
 [project.urls]
 "Homepage"    = "https://github.com/egonmedhatten/OnlineConformalPrediction"
 "Bug Tracker" = "https://github.com/egonmedhatten/OnlineConformalPrediction/issues"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

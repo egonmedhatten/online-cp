@@ -1,5 +1,9 @@
 [project]
-name = "online-conformal-prediction"
+name = "oncp"
+# other possibilities
+# name = "online-conformal-prediction" # online_conformal_prediction
+# name = "online-cp" # online_cp
+# name = "predictionline"
 # TODO: adhere to PEP 0423 - https://peps.python.org/pep-0423/
 # online_conformal_prediction module?  or some other shorter name?
 version = "0.0.0"
@@ -22,3 +26,9 @@ classifiers = [
 [project.urls]
 "Homepage"    = "https://github.com/egonmedhatten/OnlineConformalPrediction"
 "Bug Tracker" = "https://github.com/egonmedhatten/OnlineConformalPrediction/issues"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

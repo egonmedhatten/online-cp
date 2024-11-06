@@ -22,8 +22,8 @@ jobs:
       - run: python src/oncp/kernels.py
       - run: python src/oncp/martingale.py
       # run our notebooks
-      - run: PYTHONPATH=src jupyter-nbconvert --execute example.ipynb --to html
-      - run: PYTHONPATH=src jupyter-nbconvert --execute test_exchangeability.ipynb --to html
+      - run: PYTHONPATH=src jupyter-nbconvert --execute notebooks/example.ipynb --to html
+      - run: PYTHONPATH=src jupyter-nbconvert --execute notebooks/test_exchangeability.ipynb --to html
       # validate the pyproject.toml
       - run: validate-pyproject pyproject.toml
       # TODO: run: pytest once tests are added

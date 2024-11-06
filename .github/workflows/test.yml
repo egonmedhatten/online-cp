@@ -16,11 +16,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage
       # parse libraries and run doctests:
-      - run: python classifiers.py
-      - run: python CPS.py
-      - run: python CRR.py
-      - run: python kernels.py
-      - run: python martingale.py
+      - run: python oncp/classifiers.py
+      - run: python oncp/CPS.py
+      - run: python oncp/CRR.py
+      - run: python oncp/kernels.py
+      - run: python oncp/martingale.py
       # run our notebooks
       - run: jupyter-nbconvert --execute example.ipynb --to html
       - run: jupyter-nbconvert --execute test_exchangeability.ipynb --to html
@@ -30,9 +30,9 @@ jobs:
       - name: Code coverage quick report
         run: |
           coverage erase
-          coverage run -a CRR.py
-          coverage run -a classifiers.py
-          coverage run -a CPS.py
-          coverage run -a kernels.py
-          coverage run -a martingale.py
+          coverage run -a oncp/CRR.py
+          coverage run -a oncp/classifiers.py
+          coverage run -a oncp/CPS.py
+          coverage run -a oncp/kernels.py
+          coverage run -a oncp/martingale.py
           coverage report

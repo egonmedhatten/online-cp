@@ -16,7 +16,7 @@ class ConformalClassifier:
 
 
     @staticmethod
-    def _compute_p_value(Alpha, tau=1, score_type='nonconformity'):
+    def _compute_p_value(Alpha, tau=1, score_type='nonconformity', return_string=False):
         '''
         Assumes that the (non) conformity scores are organised so that the 
         test example is the last element.
@@ -26,13 +26,18 @@ class ConformalClassifier:
             gt = np.count_nonzero(Alpha > Alpha[-1])
             eq = np.count_nonzero(Alpha == Alpha[-1])
             p = (gt + tau * eq) / Alpha.shape[0]
+            string = f'({gt} + {eq}*tau)/{Alpha.shape[0]}'
 
         elif score_type == 'conformity':
             lt = np.count_nonzero(Alpha < Alpha[-1])
             eq = np.count_nonzero(Alpha == Alpha[-1])
             p = (lt + tau * eq) / Alpha.shape[0]
-
-        return p
+            string = f'({lt} + {eq}*tau)/{Alpha.shape[0]}'
+        
+        if return_string:
+            return p, string
+        else:
+            return p
 
 
     def _compute_Gamma(self, p_values, epsilon):
@@ -40,7 +45,7 @@ class ConformalClassifier:
         for y in self.label_space:
             if p_values[y] > epsilon:
                 Gamma.append(y)
-        return np.array(Gamma) #self.label_space[np.where(p_values > epsilon)[0]]
+        return np.array(Gamma) 
     
 
     def err(self, Gamma, y):
@@ -157,7 +162,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             # Extract distances for the different label
             if np.any(different_label_mask):
                 different_label_distances[i] = np.sort(D[i, different_label_mask])[:self.k].mean()
-        
+
         return same_label_distances, different_label_distances
     
 
@@ -177,7 +182,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
 
-    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False):
+    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False, verbose=0):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -188,22 +193,26 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             for label in self.label_space:
                 y = np.append(self.y, label)
                 
-                same_label_distances, different_label_distances = self._find_nearest_distances(D, y)
+                same_label_distances, different_label_distances = self._find_nearest_distances(D, y)              
 
-                Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                Alpha =same_label_distances / different_label_distances# np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+
+                if verbose > 10:
+                    print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')
+                    p_values[label], string = self._compute_p_value(Alpha, tau, 'nonconformity', return_string=True)
+                    print(f'p-value for hypothesis y={label}: {string}')
 
                 p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
         
             Gamma = self._compute_Gamma(p_values, epsilon)
-                        
-            # if return_p_values:
-            #     return Gamma, p_values
-            # else:
-            #     return Gamma
             
         else:
             for label in self.label_space:
-                Alpha = np.array([0])
+                Alpha = np.array([np.inf])
+                if verbose > 10:
+                    print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')
+                    p_values[label], string = self._compute_p_value(Alpha, tau, 'nonconformity', return_string=True)
+                    print(f'p-value for hypothesis y={label}: {string}')
                 p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
             Gamma = self._compute_Gamma(p_values, epsilon)
             D = None

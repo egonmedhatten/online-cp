@@ -9,5 +9,8 @@ set -e
 
 for notebook in notebooks/*.ipynb
 do
-	PYTHONPATH=../src jupyter-nbconvert --execute $notebook --to html
+    echo PYTHONPATH=../src jupyter-nbconvert --execute $notebook --to html
+	PYTHONPATH=../src \
+	/usr/bin/time -f "%es  ($notebook)\n" \
+    jupyter-nbconvert --execute $notebook --to html
 done

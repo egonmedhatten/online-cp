@@ -5,7 +5,9 @@
 #
 # This is intended to be run from CI.
 
+set -e
+
 for notebook in notebooks/*.ipynb
 do
-	PYTHONPATH=../src jupyter-nbconvert --execute $notebook --to html || exit 1
+	PYTHONPATH=../src jupyter-nbconvert --execute $notebook --to html
 done

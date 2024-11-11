@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+# This runs all Python files in src's root
+# from the command line.
+#
+# This is intended to be run from CI.
+
+set -e
+
+for module in src/oncp/*.py
+do
+	[ "$module" == src/oncp/__init__.py ] && continue
+	echo python $module
+	python $module
+done

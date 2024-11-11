@@ -227,3 +227,11 @@ class ConformalNearestNeighboursClassifier(ConformalClssifier):
                 p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
         
         return p_values
+    
+    
+if __name__ == "__main__":
+    import doctest
+    import sys
+    (failures, _) = doctest.testmod()
+    if failures:
+        sys.exit(1)

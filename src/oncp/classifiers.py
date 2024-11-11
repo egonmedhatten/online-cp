@@ -67,7 +67,7 @@ class ConformalClssifier:
         return of
 
 
-class ConformalNearestNeighbours(ConformalClssifier):
+class ConformalNearestNeighboursClassifier(ConformalClssifier):
 
     # TODO Write tests
 

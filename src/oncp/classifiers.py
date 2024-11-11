@@ -75,16 +75,16 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
     >>> Gamma, p_values = cp.predict(3, epsilon=0.1, return_p_values=True)
     >>> Gamma # predict both labels, as this is the first
     array([-1,  1])
-    >>> p_values
-    {np.int64(-1): 0.8781019003471183, np.int64(1): 0.8781019003471183}
+    >>> [p_values[i] for i in [-1, 1]]
+    [0.8781019003471183, 0.8781019003471183]
 
     >>> cp.learn_one(np.int64(3), 1)
 
     >>> Gamma, p_values = cp.predict(-2, epsilon=0.1, return_p_values=True)
     >>> Gamma # predict both labels, as this is the first
     array([-1,  1])
-    >>> p_values
-    {np.int64(-1): 0.18552796163759344, np.int64(1): 0.18552796163759344}
+    >>> [p_values[i] for i in [-1, 1]]
+    [0.18552796163759344, 0.18552796163759344]
 
     """
     # TODO: implement: cp.learn_several([[3,1],[4,7],[5,2]], [1, -1, 1])

@@ -3,7 +3,7 @@ import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 
-class ConformalClssifier:
+class ConformalClassifier:
     '''
     Parent class for classifiers
     '''
@@ -68,7 +68,7 @@ class ConformalClssifier:
         return of
 
 
-class ConformalPassiveAggressive(ConformalClssifier):
+class ConformalPassiveAggressive(ConformalClassifier):
     '''
     One of three passive-aggressive algorithms described in
     https://jmlr.csail.mit.edu/papers/volume7/crammer06a/crammer06a.pdf
@@ -196,7 +196,7 @@ class ConformalPassiveAggressive_II(ConformalPassiveAggressive):
         return l / ( np.linalg.norm(x)**2 + 1 / (2*self.C))
     
 
-class ConformalOneNearestNeighbours(ConformalClssifier):
+class ConformalOneNearestNeighbours(ConformalClassifier):
 
     # TODO Add possibility to consider more neighbours
     #      Add compute_smoothed_p_value

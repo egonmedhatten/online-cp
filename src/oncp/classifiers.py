@@ -3,7 +3,7 @@ import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 
-class ConformalClssifier:
+class ConformalClassifier:
     '''
     Parent class for classifiers
     '''
@@ -67,7 +67,7 @@ class ConformalClssifier:
         return of
 
 
-class ConformalNearestNeighboursClassifier(ConformalClssifier):
+class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
     # TODO Write tests
 

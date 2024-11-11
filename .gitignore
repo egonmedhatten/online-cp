@@ -5,3 +5,5 @@ Makefile
 example.html
 test_exchangeability.html
 .coverage
+notebooks/*.html
+notebooks/*.pdf

@@ -69,7 +69,7 @@ class ConformalClassifier:
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
     """
-    Classifier using nearest neighbours as the difficulty estimate.
+    Classifier using nearest neighbours as the nonconformity measure.
 
     >>> cp = ConformalNearestNeighboursClassifier(k=1, rnd_state=1337)
     >>> Gamma, p_values = cp.predict(3, epsilon=0.1, return_p_values=True)
@@ -85,13 +85,12 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
     array([-1,  1])
     >>> [p_values[i] for i in [-1, 1]]
     [0.18552796163759344, 0.18552796163759344]
-
     """
     # TODO: implement: cp.learn_several([[3,1],[4,7],[5,2]], [1, -1, 1])
 
     # TODO Write tests
 
-    def __init__(self, k=1, label_space=np.array([-1, 1]), distance='euclidean', distance_func=None, verbose=0, rnd_state=2024):
+    def __init__(self, k=1, label_space=np.array([-1, 1]), distance='euclidean', distance_func=None, verbose=0, rnd_state=None):
         super().__init__()
         self.label_space = label_space
 
@@ -107,9 +106,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self.y = np.empty(0)
         self.X = None
         self.D = None
-
-        # Should we raise warnings
-        self.warnings = warnings
 
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)

@@ -13,7 +13,7 @@ class ConformalPredictiveSystem:
 
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
-    def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=2024):
+    def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=None):
         '''
         Consider adding possibility to update self.k as the training set grows, e.g. by some heuristic or something.
         Two rules of thumb are quite simple:

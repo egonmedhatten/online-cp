@@ -19,9 +19,9 @@ jobs:
         run: ./scripts/run-modules
       # run our notebooks
       # TODO: replace with the following after fix
-      # - run: ./bin/run-notebooks
-      - run: PYTHONPATH=../src jupyter-nbconvert --execute notebooks/example.ipynb --to html
-      - run: PYTHONPATH=../src jupyter-nbconvert --execute notebooks/test_exchangeability.ipynb --to html
+      - run: ./bin/run-notebooks
+      #- run: PYTHONPATH=../src jupyter-nbconvert --execute notebooks/example.ipynb --to html
+      #- run: PYTHONPATH=../src jupyter-nbconvert --execute notebooks/test_exchangeability.ipynb --to html
       # validate the pyproject.toml
       - run: validate-pyproject pyproject.toml
       # TODO: run: pytest once tests are added

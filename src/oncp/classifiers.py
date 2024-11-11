@@ -145,7 +145,7 @@ class ConformalNearestNeighboursClassifier(ConformalClssifier):
         return same_label_distances, different_label_distances
     
 
-    def learn_one(self, x, y):
+    def learn_one(self, x, y, D=None):
         # Learn label y
         self.y = np.append(self.y, y)
 
@@ -154,15 +154,14 @@ class ConformalNearestNeighboursClassifier(ConformalClssifier):
             self.X = x.reshape(1,-1)
             self.D = self.distance_func(self.X)
         else:
-            d = self.distance_func(self.X, x)
-            self.D = self.update_distance_matrix(self.D, d)
+            if D is None:
+                d = self.distance_func(self.X, x)
+                D = self.update_distance_matrix(self.D, d)
+            self.D = D
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
 
-    def predict(self, x, epsilon=0.1, return_p_values=False):
-        '''
-        TODO Fix the precomputed option as in the regression setting.
-        '''
+    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -181,22 +180,29 @@ class ConformalNearestNeighboursClassifier(ConformalClssifier):
         
             Gamma = self._compute_Gamma(p_values, epsilon)
                         
-            if return_p_values:
-                return Gamma, p_values
-            else:
-                return Gamma
+            # if return_p_values:
+            #     return Gamma, p_values
+            # else:
+            #     return Gamma
             
         else:
             for label in self.label_space:
                 Alpha = np.array([0])
                 p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
             Gamma = self._compute_Gamma(p_values, epsilon)
+            D = None
 
+        if return_update: 
             if return_p_values:
-                return self.label_space, {label: tau for label in self.label_space}
+                return Gamma, p_values, D
             else:
-                return self.label_space
-            
+                return Gamma, D
+        else:
+            if return_p_values:
+                return Gamma, p_values
+            else:
+                return Gamma
+        
 
     def predict_p(self, x):
         p_values = {}

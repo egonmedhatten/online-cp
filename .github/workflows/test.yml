@@ -15,8 +15,8 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage
-      - name: Parse libraries and run doctests (./scripts/run-py)
-        run: ./scripts/run-py
+      - name: Parse libraries and run doctests (./scripts/run-modules)
+        run: ./scripts/run-modules
       # run our notebooks
       # TODO: replace with the following after fix
       # - run: ./bin/run-notebooks

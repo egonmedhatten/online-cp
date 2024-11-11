@@ -1,15 +1,8 @@
 [project]
 name = "oncp"
-# other possibilities
-# name = "online-conformal-prediction" # online_conformal_prediction
-# name = "online-cp" # online_cp
-# name = "predictionline"
-# TODO: adhere to PEP 0423 - https://peps.python.org/pep-0423/
-# online_conformal_prediction module?  or some other shorter name?
 version = "0.0.0"
 authors = [
-	# TODO: add Johan's email
-	{ name="Johan Hallberg Szabadvary", email="TODO@example.com" },
+	{ name="Johan Hallberg Szabadvary", email="johan.hallberg.szabadvary@ju.se" },
 ]
 description = "An implementation of online conformal prediction"
 readme = "README.md"
@@ -21,6 +14,7 @@ classifiers = [
 	"Development Status :: 2 - Pre-Alpha",
 	"Programming Language :: Python :: 3",
 	# TODO: choose a license
+    "Operating System :: OS Independent",
 ]
 
 [project.urls]

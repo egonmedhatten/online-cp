@@ -30,9 +30,8 @@ class ConformalClssifier:
         elif score_type == 'conformity':
             lt = np.count_nonzero(Alpha < Alpha[-1])
             eq = np.count_nonzero(Alpha == Alpha[-1])
-
             p = (lt + tau * eq) / Alpha.shape[0]
-        
+
         return p
 
 
@@ -194,7 +193,7 @@ class ConformalNearestNeighbours(ConformalClssifier):
             Gamma = self._compute_Gamma(p_values, epsilon)
 
             if return_p_values:
-                return self.label_space, {label: self.rnd_gen.uniform(0, 1) for label in self.label_space}
+                return self.label_space, {label: tau for label in self.label_space}
             else:
                 return self.label_space
             

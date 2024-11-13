@@ -31,6 +31,7 @@ class PluginMartingale:
         self.warnings = warnings
 
         self.p_values = []
+        self.martingale_values = []
 
     def kernel_density_betting_function(self, p_values):
         '''
@@ -71,6 +72,8 @@ class PluginMartingale:
         # Update the running max
         if self.M > self.max:
             self.max = self.M
+        
+        self.martingale_values.append(self.M)
 
         if self.max >= self.warning_level and self.warnings:
             warnings.warn(f'Exchangeability assumption likely violated: Max martingale value is {self.max}')

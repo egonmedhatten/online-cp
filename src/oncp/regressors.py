@@ -112,6 +112,58 @@ class ConformalRegressor:
     def width(Gamma):
         return Gamma[1] - Gamma[0]
     
+    def process_dataset(self, X, y, epsilon=0.1, init_train=0, return_results=False):
+
+        Err = 0
+        Width = 0
+
+        X_train = X[:init_train]
+        y_train = y[:init_train]
+        X_run = X[init_train:]
+        y_run = y[init_train:]
+
+        if return_results:
+            res = np.zeros(shape=(y_run.shape[0], 2))
+            prediction_sets = {}
+
+        self.learn_initial_training_set(X=X_train, y=y_train)
+
+        time_init = time.time()
+        for i, (obj, lab) in enumerate(zip(X_run, y_run)):
+            
+            # Make prediction
+            Gamma = self.predict(obj, epsilon=epsilon) 
+
+            # Check error
+            Err += self.err(Gamma, lab)
+
+            # Learn the label
+            self.learn_one(obj, lab)
+            
+            # Width of interval
+            width = self.width(Gamma)
+            Width += width
+
+            if return_results:
+                res[i, 0] = Err
+                res[i, 1] = width
+                prediction_sets[i] = Gamma
+
+        time_process = time.time() - time_init
+
+        result = {
+            'Efficiency': {
+                'Average error': Err/self.y.shape[0],
+                'Average width': Width/self.y.shape[0],
+                'Time': time_process
+                }
+            }
+        if return_results:
+            result['Prediction sets'] = prediction_sets
+            result['Cummulative Err'] = res[:, 0]
+            result['Width'] = res[:, 1]
+        
+        return result
 
 class ConformalRidgeRegressor(ConformalRegressor):
     '''
@@ -225,7 +277,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
             
                     # Check the rank
-                    rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+                    if self.warnings:
+                        rank_deficient = not(self.check_matrix_rank(self.XTXinv))
                     
         else:
             # Learn object x
@@ -243,7 +296,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
         
                 # Check the rank
-                rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+                if self.warnings:
+                    rank_deficient = not(self.check_matrix_rank(self.XTXinv))
 
 
     @staticmethod

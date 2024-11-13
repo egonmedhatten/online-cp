@@ -75,17 +75,14 @@ class ConformalRegressor:
         '''
         Returns the minimum initial training set size needed to output informative (finite) prediciton sets
 
-        >>> from CRR import ConformalRegressor
         >>> cp = ConformalRegressor()
         >>> cp.minimum_training_set(0.1)
         20
 
-        >>> from CRR import ConformalRegressor
         >>> cp = ConformalRegressor()
         >>> cp.minimum_training_set(0.1, 'upper')
         10
 
-        >>> from CRR import ConformalRegressor
         >>> import numpy as np
         >>> cp = ConformalRegressor()
         >>> cp.minimum_training_set(np.array([0.1, 0.05]))
@@ -130,7 +127,6 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     Import the library and create a regressor:
 
-    >>> from CRR import ConformalRidgeRegressor
     >>> cp = ConformalRidgeRegressor()
 
     Learn the whole dataset:

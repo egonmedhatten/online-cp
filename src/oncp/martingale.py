@@ -35,6 +35,7 @@ class PluginMartingale:
     def kernel_density_betting_function(self, p_values):
         '''
         Betting function from Vovk paper
+        TODO: Make it possible to extract the current betting funciton. It can be used for protected probabilistic regression (https://www.alrw.net/articles/34.pdf)
         '''
         def get_density_estimate(p_values):
             P = np.array([[-p, p, 2-p] for p in p_values]).flatten()[:, np.newaxis]
@@ -54,7 +55,12 @@ class PluginMartingale:
                 return 0.0
             
         d, norm_fac = get_density_estimate(p_values[:-1])
+
+        # FIXME: This is a bit of a hack. Something nicer would be good.
+        self.current_betting_function = lambda p: betting_function(p, d, norm_fac)
+
         return betting_function(p_values[-1], d, norm_fac)
+    
     
     def update_log_martingale(self, p):
         self.p_values.append(p)

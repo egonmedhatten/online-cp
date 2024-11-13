@@ -29,7 +29,7 @@ jobs:
         run: |
           export PYTHONPATH=src
           coverage erase
-          coverage run -a src/oncp/CRR.py
+          coverage run -a src/oncp/regressors.py
           coverage run -a src/oncp/classifiers.py
           coverage run -a src/oncp/CPS.py
           coverage run -a src/oncp/kernels.py

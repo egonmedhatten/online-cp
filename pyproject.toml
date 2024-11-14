@@ -13,7 +13,7 @@ dependencies = [
 classifiers = [
 	"Development Status :: 2 - Pre-Alpha",
 	"Programming Language :: Python :: 3",
-	# TODO: choose a license
+	"License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
 ]
 

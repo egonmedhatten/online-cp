@@ -11,9 +11,9 @@ set -e
 
 export PYTHONPATH=src
 coverage erase
-for module in src/oncp/*.py
+for module in src/online_cp/*.py
 do
-	[ "$module" == src/oncp/__init__.py ] && continue
+	[ "$module" == src/online_cp/__init__.py ] && continue
 	echo $ coverage run -a $module
 	/usr/bin/time -f "%es  (python $module)\n" \
 	coverage run -a $module

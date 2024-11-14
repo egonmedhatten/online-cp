@@ -9,3 +9,4 @@ notebooks/*.html
 notebooks/*.pdf
 dist/
 src/oncp.egg-info/
+src/online_cp.egg-info/

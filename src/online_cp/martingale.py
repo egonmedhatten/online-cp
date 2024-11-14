@@ -33,6 +33,9 @@ class PluginMartingale:
         self.p_values = []
         self.martingale_values = []
 
+        # FIXME: This is a bit ad hoc... 
+        self.current_betting_function = lambda p: 1
+
     def kernel_density_betting_function(self, p_values):
         '''
         Betting function from Vovk paper
@@ -57,7 +60,7 @@ class PluginMartingale:
             
         d, norm_fac = get_density_estimate(p_values[:-1])
 
-        # FIXME: This is a bit of a hack. Something nicer would be good.
+        # FIXME: This is a bit ad hoc . Something nicer would be good.
         self.current_betting_function = lambda p: betting_function(p, d, norm_fac)
 
         return betting_function(p_values[-1], d, norm_fac)

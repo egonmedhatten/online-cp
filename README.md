@@ -1,4 +1,4 @@
-# OnlineConformalPrediction
+# oncp -- Online Conformal Prediction
 
 This project is an implementation of Online Conformal Prediction.
 
@@ -19,7 +19,7 @@ cp.learn_initial_training_set(X, y)
 Import the library and create a regressor:
 
 ```py
-from CRR import ConformalRidgeRegressor
+from oncp import ConformalRidgeRegressor
 cp = ConformalRidgeRegressor()
 ```
 

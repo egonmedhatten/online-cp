@@ -201,9 +201,12 @@ class ConformalRidgeRegressor(ConformalRegressor):
     >>> print("(%.2f, %.2f)" % cp.predict(np.array([2,4]), epsilon=0.1, bounds='both'))
     (5.39, 6.33)
     '''
+    # TODO: Fix gracefull error handling when the matrix is singular. It should raise an exception, but we could
+    #       specify that it can be handled by changing the ridge parameter.
 
     def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None):
         '''
+        The ridge parameter (L2 regularisation) is a.
         Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
         '''
         

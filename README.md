@@ -30,70 +30,39 @@ from online_cp import ConformalRidgeRegressor
 cp = ConformalRidgeRegressor()
 ```
 
-Alternative 1: Learn the whole dataset online
+To predict, simply do
 ```py
-cp.learn_initial_training_set(X, y)
+cp.predict(X[0], epsilon=0.1)
+(-inf, inf)
 ```
+The output is non-informative since we have not learned anything yet. The parameter `epsilon` is the significance level.
 
-Predict an object (your output may not be exactly the same, as the dataset depends on the random seed).
+Alternative 1: Learn the dataset sequentially online, and make predictions as we go. In order to output nontrivial prediction at significance level `epsilon=0.1`, we need to have learned at least 20 examples.
 ```py
-cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both')
-(0.8065748777057368, 1.2222461945130274)
+for x, y in zip(X[-1], Y[-1]):
+    print(f'Prediction set: {cp.predict(x, epsilon=0.1)}')
+    cp.learn_one(x, y)
+```
+In the online setting, we first observe the object $x$, which is used to make a prediction, only then to observe the label $y$. The output will be ```(inf, inf)``` for the first 19 predictions, after which we will typically see meaningful prediction sets. The snippet above learned all but the last example. To predict it, do (your output may not be exactly the same, as the dataset depends on the random seed).
+```py
+cp.predict(X[-1], epsilon=0.1)
+(0.029643344144500712, 0.34909922671253196)
 ```
 The prediction set is the closed interval whose boundaries are indicated by the output.
 
-Alternative 2: Learn the dataset sequentially online, and make predictions as we go. In order to output nontrivial prediction at significance level $\epsilon=0.1$, we need to have learned at least 20 examples.
+Alternative 2: Learn an initial training set offline, and predict e.g. only the last example
 ```py
 cp = ConformalRidgeRegressor()
-for i, (obj, lab) in enumerate(zip(X, y)):
-    print(cp.predict(obj, epsilon=0.1, bounds='both'))
-    cp.learn_one(obj, lab)
+cp.learn_initial_training_set(X[:-1], Y[:-1])
+cp.predict(X[-1], epsilon=0.1)
+(0.8748194061248175, 1.3357383729107446)
 ```
-The output will be ```(inf, inf)``` for the first 19 predictions, after which we will typically see meaningful prediction sets.
-
-
-## Future considerations
-
-### Release minimal version 
-For use in projects, it may be good to have a released minimal version of OnlineConformalPrediction. Initially, it could include
-* Conformalised Ridge Regression
-* Plugin martingale
-* Possibly Conformalised Nearest Neighbours Regression (but I will have to check it carefully for any bugs)
-
-### Properties of CPs?
-* Should we keep track of errors internally in the parent class? 
-* Should we store the average interval size?
-* For classifiers; should we store the efficiency metrics?
-
-### Linear regression
-We will initally focus on regression, but online classification is actually easier. A simple class that uses e.g. scikit-learn classifiers to define nonconformity measure could be easily implemented. 
-
-There are at least three commonly used regularisations used in linear regression, all of which are compatible with the kernel trick. 
-* $L1$ (Lasso)
-* $L2$ (Ridge)
-* Linear combination of the above (Elastic net)
-
-All of these can be conformalized, and at least Ridge can also be used in conformal predictive systems (CPS).
-
-Another relatively simple regressor is the k-nearest neighbours algorithm, which is very flexible as it can use arbitrary distances. It is particularly interesting in the CPS setting. The distance can be measured in feature space as defined by a kernel.
-
-Ridge and KNN are described in detail in Algorithmic Learning in a Random World. Lasso and Elastic net are conformalised in the paper Fast Exact Conformalization of Lasso using Piecewise Linear Homotopy, but I am unaware of any extention to CPS. 
-
-### Teaching schedule
-Section 3.3 in Algorithmic Learning in a Radnom World deals with, so called, weak teachers. In the pure online mode, labels arrive immediately after a predition is made. This makes little sense in practice. The notion of a teaching schedule formalises this, and makes the relevant validity guarantees clear. There are three types of validity; weak, strong, and iterated logartihm validity. 
-
-There may be settings where the user wants to specify a teaching schedule beforehand, to guarantee some property of validity. It may also be the case that the teaching schedule is implied by the usage, and it would then be useful to know if the resulting prediciton sets are valid.
-
-A teaching schedule also serves as documentation of what has been done, which could be useful in practice.
-
-## Todo
-* Should we add some scaler? Don't know if it is neccesary for Ridge
-* Possibly add a class MimoConformalRidgeRegressor
-* Add CPS version of ridge regressor?
-* Possibly add a TeachingSchedule?
-* Possibly add ACI, both for single, and MIMO CRR?
-* Add references to papers and books to README
-* Add k-NN regressor and CPS
+Furhter examples can be found in the notebooks, e.g. [`example.ipynb`](example.ipynb). Current functionality includes
+* Conformal regression
+* Conformal classification
+* Testing exchangeability through conformal test martignales
 
 # References
-How to cite papers? I think I have seen it in some repos.
+The main reference for Conformal Prediction is the book
+
+Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a Random World (2nd ed). Springer Nature, 2022.

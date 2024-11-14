@@ -6,6 +6,13 @@ For now, take a look at [`example.ipynb`](example.ipynb) to see how to use the l
 
 
 ## Quick start
+
+The `online-cp` package is available on PyPI, to install just:
+
+```bash
+pip install online-cp
+```
+
 Let's create a dataset with noisy evaluations of the function $f(x_1, x_2) = x_1 + x_2$.
 
 ```py

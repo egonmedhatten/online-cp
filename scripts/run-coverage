@@ -1,0 +1,21 @@
+#!/bin/bash
+#
+# This runs all Python files in src's root
+# from the command line with coverage
+# activated and reports the coverage
+# results at the end.
+#
+# This is intended to be run from CI.
+
+set -e
+
+export PYTHONPATH=src
+coverage erase
+for module in src/oncp/*.py
+do
+	[ "$module" == src/oncp/__init__.py ] && continue
+	echo $ coverage run -a $module
+	/usr/bin/time -f "%es  (python $module)\n" \
+	coverage run -a $module
+done
+coverage report

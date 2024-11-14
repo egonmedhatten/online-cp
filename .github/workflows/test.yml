@@ -17,21 +17,7 @@ jobs:
           pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage tqdm ipywidgets
       - name: Parse libraries and run doctests (./scripts/run-modules)
         run: ./scripts/run-modules
-      # run our notebooks
-      # TODO: replace with the following after fix
       - run: ./scripts/run-notebooks
-      #- run: PYTHONPATH=../src jupyter-nbconvert --execute notebooks/example.ipynb --to html
-      #- run: PYTHONPATH=../src jupyter-nbconvert --execute notebooks/test_exchangeability.ipynb --to html
-      # validate the pyproject.toml
       - run: validate-pyproject pyproject.toml
       # TODO: run: pytest once tests are added
-      - name: Code coverage quick report
-        run: |
-          export PYTHONPATH=src
-          coverage erase
-          coverage run -a src/oncp/regressors.py
-          coverage run -a src/oncp/classifiers.py
-          coverage run -a src/oncp/CPS.py
-          coverage run -a src/oncp/kernels.py
-          coverage run -a src/oncp/martingale.py
-          coverage report
+      - run: scripts/run-coverage

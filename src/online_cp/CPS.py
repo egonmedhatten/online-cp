@@ -232,8 +232,10 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         L[0] = 0
         U[0] = N[0]/(n+1)
 
-        # print(f'Alpha: {Alpha}')
-        # print(f'N: {N}')
+        print(idx_mem)
+
+        print(f'Alpha: {Alpha}')
+        print(f'N: {N}')
 
         tic = time.time()
         # Line 6
@@ -243,12 +245,15 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
                 Alpha[-1] += 1
                 N[Alpha[-1]] += 1
             if (idx_mem[k] in full_neighbours + semi_neighbours):
-                idx = np.argwhere(y == Y[k])[0, 0]
+                idx = idx_mem[k]
+                print(f'idx: {idx}')
                 N[Alpha[idx]] -= 1
                 Alpha[idx] -= 1
                 N[Alpha[idx]] += 1
             L[k] = N[:Alpha[-1]].sum() / (n+1) if Alpha[-1] != 0  else 0
             U[k] = N[:Alpha[-1] + 1].sum() / (n+1) if Alpha[-1] != 0  else N[0] / (n+1)
+            print(f'Alpha: {Alpha}')
+            print(f'N: {N}')
         toc_loop = time.time() - tic
 
         time_dict = {

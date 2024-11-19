@@ -14,7 +14,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage tqdm ipywidgets
+          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage tqdm ipywidgets ucimlrepo
       - name: Parse libraries and run doctests (./scripts/run-modules)
         run: ./scripts/run-modules
       - run: ./scripts/run-notebooks

@@ -64,40 +64,32 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> y = np.array([1, 2])
         >>> cps.learn_initial_training_set(X, y)
         >>> cps.X
-        array([[1.],
-               [2.]])
+        array([[1],
+               [2]])
         >>> cps.y
-        array([1., 2.])
+        array([1, 2])
         >>> cps.D
         array([[0., 1.],
                [1., 0.]])
-        
-        If we have ties:
-        >>> cps = NearestNeighboursPredictionMachine(k=3, rnd_state=2024)
-        >>> X = np.array([[1], [2]])
-        >>> y = np.array([1, 1])
-        >>> cps.learn_initial_training_set(X, y)
-        >>> cps.y
-        array([1.00000035, 0.99999943])
         '''
         # FIXME: It also assumes all distances are unique. Figure out how to handle this
-        self.X = X.astype('float')
+        self.X = X
         self.D = self.distance_func(X)
 
-        # Ensure all labels are unique
-        y = y.astype('float')
-        if np.unique(y).shape[0] < y.shape[0] and self.verbose > 1:
-            print('Duplicate labels detected. Breaking ties with random noise.')
-        while np.unique(y).shape[0] < y.shape[0]:
-            # Find duplicates
-            unique, counts = np.unique(y, return_counts=True)
-            duplicates = unique[counts > 1]
+        # # Ensure all labels are unique
+        # y = y
+        # if np.unique(y).shape[0] < y.shape[0] and self.verbose > 1:
+        #     print('Duplicate labels detected. Breaking ties with random noise.')
+        # while np.unique(y).shape[0] < y.shape[0]:
+        #     # Find duplicates
+        #     unique, counts = np.unique(y, return_counts=True)
+        #     duplicates = unique[counts > 1]
 
-            # Add noise to duplicate entries
-            for label in duplicates:
-                indices = np.where(y == label)[0]
-                noise = self.rnd_gen.uniform(low=-noise_range, high=noise_range, size=len(indices))
-                y[indices] += noise
+        #     # Add noise to duplicate entries
+        #     for label in duplicates:
+        #         indices = np.where(y == label)[0]
+        #         noise = self.rnd_gen.uniform(low=-noise_range, high=noise_range, size=len(indices))
+        #         y[indices] += noise
         self.y = y
 
     
@@ -120,11 +112,11 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> cps.learn_initial_training_set(X, y)
         >>> cps.learn_one(np.array([3]), 1)
         >>> cps.y
-        array([1.        , 2.        , 1.00000035])
+        array([1, 2, 1])
         >>> cps.X
-        array([[1.],
-               [2.],
-               [3.]])
+        array([[1],
+               [2],
+               [3]])
         >>> cps.D
         array([[0., 1., 2.],
                [1., 0., 1.],
@@ -132,12 +124,12 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         '''
         # Learn label y
         if self.y is None:
-            self.y = np.array([y]).astype('float')
+            self.y = np.array([y])
         else:
-            if y in self.y and self.verbose > 1:
-                print('Duplicate label. Breaking tie with random noise.')
-            while y in self.y:
-                y = y + self.rnd_gen.uniform(low=-noise_range, high=noise_range)
+            # if y in self.y and self.verbose > 1:
+            #     print('Duplicate label. Breaking tie with random noise.')
+            # while y in self.y:
+            #     y = y + self.rnd_gen.uniform(low=-noise_range, high=noise_range)
             self.y = np.append(self.y, y)
 
         if precomputed is None:
@@ -166,9 +158,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> x = rnd_gen.normal(loc=0, scale=1, size=(1, 4))
         >>> cpd = cps.predict_cpd(x)
         >>> cpd.L
-        array([0.        , 0.        , 0.18811881, 0.53465347, 0.76237624])
+        array([0.        , 0.17821782, 0.53465347, 0.75247525, 0.76237624])
         >>> cpd.U
-        array([0.17821782, 0.18811881, 0.54455446, 0.76237624, 1.        ])
+        array([0.17821782, 0.54455446, 0.76237624, 1.        , 1.        ])
         '''
         tic = time.time()
         # Temporarily update the distance matrix
@@ -197,30 +189,38 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
         k_nearest_of_n = k_nearest.T[-1]
 
+        # FIXME: How do we save the full, single and semi-neighbours so that we can acess them later in a nice way?
         for i, col in enumerate(k_nearest.T):
             if i in k_nearest_of_n and n in col:
                 # print(f'z_{i} is a full neighbour')
-                idx_all_neighbours_and_semi_neighbours.append(i)
-                full_neighbours.append(y[i])
+                # idx_all_neighbours_and_semi_neighbours.append(i)
+                full_neighbours.append(i)
             if i in k_nearest_of_n and not n in col:
                 # print(f'z_{i} is a single neighbour')
-                idx_all_neighbours_and_semi_neighbours.append(i)
-                single_neighbours.append(y[i])
+                # idx_all_neighbours_and_semi_neighbours.append(i)
+                single_neighbours.append(i)
             if not i in k_nearest_of_n and n in col:
                 # print(f'z_{i} is a semi-neighbour')
-                idx_all_neighbours_and_semi_neighbours.append(i)
-                semi_neighbours.append(y[i])
-        all_neighbours_and_semi_neighbours = np.array(full_neighbours + single_neighbours + semi_neighbours)
+                # idx_all_neighbours_and_semi_neighbours.append(i)
+                semi_neighbours.append(i)
+        idx_all_neighbours_and_semi_neighbours = np.array(full_neighbours + single_neighbours + semi_neighbours)
         toc_find_neighbours = time.time() - tic
         
         # Line 1
-        Kprime = len(all_neighbours_and_semi_neighbours)
+        Kprime = len(idx_all_neighbours_and_semi_neighbours)
         # Line 2 and 3
+        # FIXME: This sorting makes the indexing very difficult... How can we sort and keep track of z_{i_k}?
         Y = np.zeros(shape=Kprime + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
         Y[1:-1] = y[idx_all_neighbours_and_semi_neighbours]
+        idx_mem = {i: idx_all_neighbours_and_semi_neighbours[i-1] for i in range(1, Kprime+1)}
+        # sorted_indices = np.argsort(Y)[1:-1]
+        # print(idx_mem)
+        # print(idx_all_neighbours_and_semi_neighbours)
+        # print(sorted_indices)
         Y.sort()
+        
 
         # Line 4
         Alpha = np.array([(y[k_nearest.T[i]] <= y_i).sum() for i, y_i in enumerate(y)])
@@ -238,11 +238,11 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         tic = time.time()
         # Line 6
         for k in range(1, Kprime+1):
-            if (Y[k] in full_neighbours + single_neighbours):
+            if (idx_mem[k] in full_neighbours + single_neighbours):
                 N[Alpha[-1]] -= 1
                 Alpha[-1] += 1
                 N[Alpha[-1]] += 1
-            if (Y[k] in full_neighbours + semi_neighbours):
+            if (idx_mem[k] in full_neighbours + semi_neighbours):
                 idx = np.argwhere(y == Y[k])[0, 0]
                 N[Alpha[idx]] -= 1
                 Alpha[idx] -= 1

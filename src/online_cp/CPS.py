@@ -40,7 +40,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
 
-        self.verbose=verbose
 
     def _standard_distance_func(self, X, y=None):
         '''
@@ -270,7 +269,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         }
         time_dict = time_dict if save_time else None
         # Line 12
-        cps = KnnConformalPredictiveDistributionFunction(L, U, Y, time_dict)
+        cps = NearestNeighboursPredictiveDistributionFunction(L, U, Y, time_dict)
 
         if return_update:
             X = np.append(self.X, x.reshape(1, -1), axis=0)
@@ -278,6 +277,36 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         else:
             return cps
     
+
+class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
+
+    def __init__(self, verbose=0, rnd_state=None):
+        '''
+        The Dempster-Hill conformal predictive system uses only the labels of the examples, so the latter can be ignored.
+        '''
+        self.y = None
+        self.verbose = verbose
+        self.rnd_gen = np.random.default_rng(rnd_state)
+    
+    def learn_initial_training_set(self, y):
+        self.y = y
+
+    def learn_one(self, y):
+        self.y = np.append(self.y, y)
+
+    def predict_cpd(self, save_time=False):
+        tic = time.time()
+        Y = np.zeros(shape=self.y.shape[0] + 2)
+        Y[0] = -np.inf
+        Y[-1] = np.inf
+        Y[1:-1] = self.y
+        Y.sort()
+        time_sort = time.time() - tic
+
+        time_dict = {'Sort labels': time_sort} if save_time else None
+
+        return DempsterHillConformalPredictiveDistribution(Y, time_dict)
+
 
 class ConformalPredictiveDistributionFunction:
 
@@ -327,7 +356,7 @@ class ConformalPredictiveDistributionFunction:
 
 
 
-class KnnConformalPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
+class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
     '''
     TODO: Write tests
     '''
@@ -358,6 +387,40 @@ class KnnConformalPredictiveDistributionFunction(ConformalPredictiveDistribution
             return (1 - tau) * Pi0 + tau * Pi1
         
     
+    def quantile(self, quantile, tau):
+        q = np.inf
+        for y in self.Y[::-1]:
+            if self.__call__(y, tau) >= quantile:
+                q = y
+            else:
+                return q
+        return q
+    
+class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributionFunction):
+
+    def __init__(self, Y, time_dict=None):
+        self.Y = Y
+        self.time_dict = time_dict
+
+    
+    def __call__(self, y, tau=None):
+        Y = self.Y[:-1]
+        idx_eq = np.where(y == Y)[0]
+        if idx_eq.shape[0] > 0:
+            k = idx_eq.min()
+            interval = ((k-1)/(Y.shape[0]), (k+1)/(Y.shape[0]))
+        else:
+            k = np.where(Y <= y)[0].max()
+            interval = ((k)/(Y.shape[0]), (k+1)/(Y.shape[0]))
+        
+        Pi0 = interval[0]
+        Pi1 = interval[1]
+
+        if tau is None:
+            return Pi0, Pi1
+        else:
+            return (1 - tau) * Pi0 + tau * Pi1
+        
     def quantile(self, quantile, tau):
         q = np.inf
         for y in self.Y[::-1]:

@@ -158,9 +158,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> x = rnd_gen.normal(loc=0, scale=1, size=(1, 4))
         >>> cpd = cps.predict_cpd(x)
         >>> cpd.L
-        array([0.        , 0.17821782, 0.53465347, 0.75247525, 0.76237624])
+        array([0.        , 0.        , 0.18811881, 0.53465347, 0.76237624])
         >>> cpd.U
-        array([0.17821782, 0.54455446, 0.76237624, 1.        , 1.        ])
+        array([0.17821782, 0.18811881, 0.54455446, 0.76237624, 1.        ])
         '''
         tic = time.time()
         # Temporarily update the distance matrix
@@ -209,18 +209,17 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         # Line 1
         Kprime = len(idx_all_neighbours_and_semi_neighbours)
         # Line 2 and 3
-        # FIXME: This sorting makes the indexing very difficult... How can we sort and keep track of z_{i_k}?
         Y = np.zeros(shape=Kprime + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
         Y[1:-1] = y[idx_all_neighbours_and_semi_neighbours]
         idx_mem = {i: idx_all_neighbours_and_semi_neighbours[i-1] for i in range(1, Kprime+1)}
-        # sorted_indices = np.argsort(Y)[1:-1]
-        # print(idx_mem)
-        # print(idx_all_neighbours_and_semi_neighbours)
-        # print(sorted_indices)
+        sorted_indices = np.argsort(Y)[1:-1]
+        # print(f'idx_mem: {idx_mem}')
+        # print(f'idx_all_neighbours_and_semi_neighbours: {idx_all_neighbours_and_semi_neighbours}')
+        # print(f'sorted_indices: {sorted_indices}')
         Y.sort()
-        
+        # print(f'Y: {Y}')
 
         # Line 4
         Alpha = np.array([(y[k_nearest.T[i]] <= y_i).sum() for i, y_i in enumerate(y)])
@@ -232,28 +231,35 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         L[0] = 0
         U[0] = N[0]/(n+1)
 
-        print(idx_mem)
+        # print(f'Alpha: {Alpha}')
+        # print(f'N: {N}')
 
-        print(f'Alpha: {Alpha}')
-        print(f'N: {N}')
+        # print(f'Kprime: {Kprime}')
 
         tic = time.time()
         # Line 6
         for k in range(1, Kprime+1):
-            if (idx_mem[k] in full_neighbours + single_neighbours):
+            idx = idx_mem[sorted_indices[k-1]]
+            # print(f'idx: {idx}')
+            if (idx in full_neighbours + single_neighbours):
+                # print(f'{idx} is a full or a single neighbour')
                 N[Alpha[-1]] -= 1
                 Alpha[-1] += 1
                 N[Alpha[-1]] += 1
-            if (idx_mem[k] in full_neighbours + semi_neighbours):
-                idx = idx_mem[k]
-                print(f'idx: {idx}')
+            if (idx in full_neighbours + semi_neighbours):
+                # print(f'{idx} is a full or a semi-neighbour')
                 N[Alpha[idx]] -= 1
                 Alpha[idx] -= 1
                 N[Alpha[idx]] += 1
             L[k] = N[:Alpha[-1]].sum() / (n+1) if Alpha[-1] != 0  else 0
             U[k] = N[:Alpha[-1] + 1].sum() / (n+1) if Alpha[-1] != 0  else N[0] / (n+1)
-            print(f'Alpha: {Alpha}')
-            print(f'N: {N}')
+            # print(f'Alpha: {Alpha}')
+            # print(f'Alpha_n: {Alpha[-1]}')
+            # print(f'L[k]: {L[k]}')
+            # print(f'N: {N}')
+        # print(f'full_neighbours: {full_neighbours}')
+        # print(f'single neighbours: {single_neighbours}')
+        # print(f'semi_neighbours: {semi_neighbours}')
         toc_loop = time.time() - tic
 
         time_dict = {

@@ -489,10 +489,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
         
         # Initial guess
         if a0 is None:
-            a0 = MACHINE_EPSILON # Just a small pertubation to avoid numerical issues
+            a0 = 1e-6 # Just a small pertubation to avoid numerical issues
 
         # Bounds to ensure a >= 0
-        res = minimize(GCV, x0=a0, bounds=Bounds(lb=MACHINE_EPSILON, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
+        res = minimize(GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
         a = res.x[0]
 
         if self.verbose > 0:

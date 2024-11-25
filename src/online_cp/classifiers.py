@@ -2,6 +2,8 @@ import numpy as np
 import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
+from joblib import Parallel, delayed
+
 
 class ConformalClassifier:
     '''
@@ -36,9 +38,9 @@ class ConformalClassifier:
             string = f'({lt} + {eq}*tau)/{Alpha.shape[0]}'
         
         if return_string:
-            return p, string
+            return float(p), string
         else:
-            return p
+            return float(p)
 
 
     def _compute_Gamma(self, p_values, epsilon):
@@ -157,7 +159,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
     # TODO Write tests
 
-    def __init__(self, k=1, label_space=np.array([-1, 1]), distance='euclidean', distance_func=None, verbose=0, rnd_state=None):
+    def __init__(self, k=1, label_space=np.array([-1, 1]), distance='euclidean', distance_func=None, verbose=0, rnd_state=None, n_jobs=None):
         super().__init__()
         self.label_space = label_space
 
@@ -176,6 +178,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
+
+        self.n_jobs = n_jobs
     
     def reset(self):
 
@@ -260,19 +264,36 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             
             tic = time.time()
             # TODO: Is it worth doing this in parallel? Could potentially save a lot of time
-            for label in self.label_space:
-                y = np.append(self.y, label)
-                
-                same_label_distances, different_label_distances = self._find_nearest_distances(D, y)              
 
-                Alpha = same_label_distances / different_label_distances# np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+            if self.n_jobs is not None:
+                def process_label(label):
+                    y = np.append(self.y, label)
+                    same_label_distances, different_label_distances = self._find_nearest_distances(D, y)
 
-                if verbose > 10:
-                    print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')
-                    p_values[label], string = self._compute_p_value(Alpha, tau, 'nonconformity', return_string=True)
-                    print(f'p-value for hypothesis y={label}: {string}')
+                    Alpha = same_label_distances / different_label_distances
+                    if verbose > 10:
+                        print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')
+                        _, string = self._compute_p_value(Alpha, tau, 'nonconformity', return_string=True)
+                        print(f'p-value for hypothesis y={label}: {string}')
 
-                p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
+                    return label, self._compute_p_value(Alpha, tau, 'nonconformity')
+
+                results = Parallel(n_jobs=self.n_jobs)(delayed(process_label)(label) for label in self.label_space)
+                p_values = dict(results)
+            else:
+                for label in self.label_space:
+                    y = np.append(self.y, label)
+                    
+                    same_label_distances, different_label_distances = self._find_nearest_distances(D, y)              
+
+                    Alpha = same_label_distances / different_label_distances# np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+
+                    if verbose > 10:
+                        print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')
+                        p_values[label], string = self._compute_p_value(Alpha, tau, 'nonconformity', return_string=True)
+                        print(f'p-value for hypothesis y={label}: {string}')
+
+                    p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
             time_compute_p_values = time.time() - tic
 
             tic = time.time()
@@ -308,30 +329,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             else:
                 return Gamma
         
-
-    def predict_p(self, x):
-        p_values = {}
-        tau = self.rnd_gen.uniform(0, 1)
-        
-        if self.y.shape[0] >= 1: 
-            d = self.distance_func(self.X, x)
-            D = self.update_distance_matrix(self.D, d)
-            
-            for label in self.label_space:
-                y = np.append(self.y, label)
-                
-                same_label_distances, different_label_distances = self._find_nearest_distances(D, y)
-
-                Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
-
-                p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
-            
-        else:
-            for label in self.label_space:
-                Alpha = np.array([0])
-                p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
-        
-        return p_values
     
     
 if __name__ == "__main__":

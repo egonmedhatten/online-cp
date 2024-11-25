@@ -22,15 +22,16 @@ class ConformalClassifier:
         test example is the last element.
         If tau is not provided, the non-smoothed p-value is computed.
         '''
+        alpha_n = Alpha[-1]
         if score_type == 'nonconformity':
-            gt = np.count_nonzero(Alpha > Alpha[-1])
-            eq = np.count_nonzero(Alpha == Alpha[-1])
+            gt = np.sum(Alpha > alpha_n)
+            eq = np.sum(Alpha == alpha_n)
             p = (gt + tau * eq) / Alpha.shape[0]
             string = f'({gt} + {eq}*tau)/{Alpha.shape[0]}'
 
         elif score_type == 'conformity':
-            lt = np.count_nonzero(Alpha < Alpha[-1])
-            eq = np.count_nonzero(Alpha == Alpha[-1])
+            lt = np.sum(Alpha < alpha_n)
+            eq = np.sum(Alpha == alpha_n)
             p = (lt + tau * eq) / Alpha.shape[0]
             string = f'({lt} + {eq}*tau)/{Alpha.shape[0]}'
         
@@ -247,20 +248,24 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
 
-    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False, verbose=0):
+    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False, verbose=0, save_time=False):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
         if self.y.shape[0] >= 1: 
+            tic = time.time()
             d = self.distance_func(self.X, x)
             D = self.update_distance_matrix(self.D, d)
+            time_update_D = time.time() - tic
             
+            tic = time.time()
+            # TODO: Is it worth doing this in parallel? Could potentially save a lot of time
             for label in self.label_space:
                 y = np.append(self.y, label)
                 
                 same_label_distances, different_label_distances = self._find_nearest_distances(D, y)              
 
-                Alpha =same_label_distances / different_label_distances# np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                Alpha = same_label_distances / different_label_distances# np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
 
                 if verbose > 10:
                     print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')
@@ -268,8 +273,17 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                     print(f'p-value for hypothesis y={label}: {string}')
 
                 p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
-        
+            time_compute_p_values = time.time() - tic
+
+            tic = time.time()
             Gamma = self._compute_Gamma(p_values, epsilon)
+            time_Gamma = time.time()- tic
+
+            self.time_dict = {
+                'Update distance matrix': time_update_D,
+                'Compute p-values': time_compute_p_values,
+                'Compute Gamma': time_Gamma
+            }
             
         else:
             for label in self.label_space:
@@ -281,6 +295,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 p_values[label] = self._compute_p_value(Alpha, tau, 'nonconformity')
             Gamma = self._compute_Gamma(p_values, epsilon)
             D = None
+            self.time_dict = {}
 
         if return_update: 
             if return_p_values:

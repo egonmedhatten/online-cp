@@ -20,7 +20,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             1. Choose k close to sqrt(n) where n is the training set size
             2. If the data has large variance, choose k larger. If the variance is small, choose k smaller. This is less clear, however.
         '''
-        
+        # TODO: The sorting of conformity scores is the most time consuming step. Can it be done with parallel processing to speed things up?
         self.k = k
 
         self.distance = distance
@@ -45,6 +45,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         '''
         By default we use scipy to compute distances
         '''
+        # TODO: Can this be done using parallel processing? 
         X = np.atleast_2d(X)
         if y is None:
             dists = squareform(pdist(X, metric=self.distance))
@@ -222,6 +223,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
         # Line 4
         Alpha = np.array([(y[k_nearest.T[i]] <= y_i).sum() for i, y_i in enumerate(y)])
+        # FIXME: Based on the description in ALRW, alpha_n = 0 initially, which seems to imply that 
+        #        they consider -inf <= -inf to be false. Or possibly it is a consequence of assuming
+        #        all labels and distances are distinct...
         N = np.array([(Alpha == k).sum() for k in range(self.k+1)])
 
         # Line 5
@@ -230,8 +234,14 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         L[0] = 0
         U[0] = N[0]/(n+1)
 
-        # print(f'Alpha: {Alpha}')
-        # print(f'N: {N}')
+        # if Alpha[-1] > 0:
+        #     print(f'n: {D.shape[0]}')
+        #     print(f'Alpha: {Alpha}')
+        #     print(f'N: {N}')
+        #     print(f'y: {y}')
+        #     print(f'{[k_nearest.T[i] for i, y_i in enumerate(y)]}')
+        #     print(f'k_nearest: {k_nearest}')
+            # print(f'Kprime: {Kprime}')
 
         # print(f'Kprime: {Kprime}')
 
@@ -369,6 +379,11 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
         self.time_dict = time_dict
 
     def __call__(self, y, tau=None):
+        # TODO: Check carefully that this is correct
+        if y == self.Y[0]:
+            return 0
+        if y == self.Y[-1]:
+            return 1
         Y = self.Y[:-1]
         idx_eq = np.where(y == Y)[0]
         if idx_eq.shape[0] > 0:

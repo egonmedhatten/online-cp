@@ -6,6 +6,11 @@ from scipy.special import betaln
 from scipy.stats import beta
 import warnings
 
+# TODO: Restructure this so that we have two cases regulated by a keyword (or possibly two classes)
+#       1) Kernel estimate: **kwargs for kernel and bandwidth. Kernel should also be able to give the corresponding CDF, that can be used for protection.
+#       2) Beta estimate: **kwargs for inference method. There are essentially three choices; moments, maximum likelihood, and Bayesian (the latter needs some research to implement properly)
+#       The martingale should maintain the current PDF (betting function b_n), and the current CDF (protection B_n), and we must have B_n = db_n/dp.
+#       A starting point is https://chatgpt.com/share/674574bf-d12c-8007-bc32-0fcf48e81c9f
 
 class PluginMartingale:
     '''
@@ -39,13 +44,22 @@ class PluginMartingale:
         if self.betting_function == 'beta_moments':
             min_sample_size = self.params.get("min_sample_size", 20)
             self.beta_stats = OnlineBetaMOM(min_sample_size)
+            self.ahat = 1
+            self.bhat = 1
+
         if self.betting_function == 'beta_mle':
             min_sample_size = self.params.get("min_sample_size", 30)
             self.beta_stats = OnlineBetaMLE(min_sample_size)
+            self.ahat = 1
+            self.bhat = 1
+
         if self.betting_function == 'beta_bayes':
-            self.alpha = self.params.get("prior_alpha", 5)
-            self.beta = self.params.get("prior_beta", 5)
-            self.beta_stats = BayesianBetaEstimator(self.alpha, self.beta)
+            raise NotImplementedError('This estimator is under construction')
+            self.prior_alpha = self.params.get("prior_alpha", 5)
+            self.prior_beta = self.params.get("prior_beta", 5)
+            self.ahat = self.prior_alpha
+            self.bhat = self.prior_beta
+            self.beta_stats = BayesianBetaEstimator(self.prior_alpha, self.prior_beta)
 
         self.warning_level = warning_level
         self.warnings = warnings
@@ -132,6 +146,9 @@ class PluginMartingale:
 #        estimates for small sample sizes so that they are uniform (refrain from betting) in the beginning.
 # TODO:  I don't like having the beta estimators in the same file as the martingales. They should be kept separately,
 #        but we have to solve the imports.
+# FIXME: The Bayesian estimator is unreliable. I think it can be fixed by storing all points and runing a batch estimate
+#        at each step instead.
+
 class OnlineBetaMLE:
     def __init__(self, min_sample_size=30):
         self.n = 0

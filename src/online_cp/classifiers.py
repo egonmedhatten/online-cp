@@ -252,7 +252,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
 
-    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False, verbose=0, save_time=False):
+    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False, verbose=0):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -263,8 +263,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             time_update_D = time.time() - tic
             
             tic = time.time()
-            # TODO: Is it worth doing this in parallel? Could potentially save a lot of time
-
             if self.n_jobs is not None:
                 def process_label(label):
                     y = np.append(self.y, label)

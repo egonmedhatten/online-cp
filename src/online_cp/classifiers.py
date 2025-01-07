@@ -284,7 +284,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                     
                     same_label_distances, different_label_distances = self._find_nearest_distances(D, y)              
 
-                    Alpha = same_label_distances / different_label_distances# np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
 
                     if verbose > 10:
                         print(f'Nonconformity scores for hypothesis y={label}: {Alpha}')

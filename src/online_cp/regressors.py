@@ -411,10 +411,12 @@ class ConformalRidgeRegressor(ConformalRegressor):
         else:
             return (lower, upper)
             
-    
+    # FIXME The function below is the upper p-value. We need also to be able to compute the lower, and combined p-value
     def compute_smoothed_p_value(self, x, y, precomputed=None):
         '''
         Computes the smoothed p-value of the example (x, y).
+        NOTE: This is the p-value for the upper CRR
+        FIXME: Add possibility to compute lower p-value as well. (Are they equal?)
         Smoothed p-values can be used to test the exchangeability assumption.
         If X and XTXinv are passed, x must be the last row of X.
         '''
@@ -422,10 +424,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
         def calc_p(A, B, y):
             if hasattr(self, 'h'):
                 raise NotImplementedError('MimoConformalRidgeRegressor can not compute p-values at the moment. Working on it...')
-            # Nonconformity scores are A + yB = y - yhat
+            # Nonconformity scores are A + yB = y - yhat for upper CRR
             Alpha = A + y*B
             alpha_y = Alpha[-1]
-            lt = np.where(Alpha < alpha_y)[0].shape[0]
+            lt = np.where(Alpha > alpha_y)[0].shape[0]
             eq = np.where(Alpha == alpha_y)[0].shape[0]
             tau = self.rnd_gen.uniform(0, 1)
             p_y = (lt + tau * eq)/Alpha.shape[0]
@@ -980,10 +982,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             # Nonconformity scores are A + yB = y - yhat
             Alpha = A + y*B
             alpha_y = Alpha[-1]
-            lt = np.where(Alpha < alpha_y)[0].shape[0]
+            gt = np.where(Alpha > alpha_y)[0].shape[0]
             eq = np.where(Alpha == alpha_y)[0].shape[0]
             tau = self.rnd_gen.uniform(0, 1)
-            p_y = (lt + tau * eq)/Alpha.shape[0]
+            p_y = (gt + tau * eq)/Alpha.shape[0]
             return p_y
         if precomputed is not None:
             A = precomputed['A']
@@ -1217,10 +1219,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             # Nonconformity scores are A + yB = y - yhat
             Alpha = A + y*B
             alpha_y = Alpha[-1]
-            lt = np.where(Alpha < alpha_y)[0].shape[0]
+            gt = np.where(Alpha < alpha_y)[0].shape[0]
             eq = np.where(Alpha == alpha_y)[0].shape[0]
             tau = self.rnd_gen.uniform(0, 1)
-            p_y = (lt + tau * eq)/Alpha.shape[0]
+            p_y = (gt + tau * eq)/Alpha.shape[0]
             return p_y
         
         if precomputed is not None:

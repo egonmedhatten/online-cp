@@ -88,6 +88,14 @@ class PluginMartingale:
     def M(self):
         return np.exp(self.logM)
     
+    def calculate_bandwidth(self, data, bw_mehtod='silverman', sigma=None):
+        if bw_mehtod == 'silverman':
+            assert sigma is not None
+            h = ((4 * sigma**5) / (3 * data.size))**(1/5)
+        else:
+            raise NotImplementedError
+        return h
+    
     @property
     def martingale_values(self):
         return np.exp(self.log_martingale_values)
@@ -128,6 +136,7 @@ class PluginMartingale:
             warnings.warn(f'Exchangeability assumption likely violated: Max martingale value is {self.max}')
 
 
+    # FIXME: b_n must be set to 0 outside the unit interval, and B_n must be 0 to the left, and 1 to the right...
     def kernel_betting_function(self, p):
         if self.kernel == 'gaussian':
             gain, b_n, B_n = self.kernel_gaussian_betting_function(p)
@@ -147,10 +156,19 @@ class PluginMartingale:
             data = np.array(self.p_values)[-self.calculate_window_size():]
             
             if self.kernel_method == 'reflect':
-                kde = gaussian_kde(data, bw_method=self.bandwidth)
-                h = kde.factor # The bandwidth
+                # kde = gaussian_kde(data, bw_method=self.bandwidth)
+                # h = kde.factor # The bandwidth
 
                 sigma = data.std()
+
+                # FIXME: Is this reasonable? Maybe rather something very concentrated
+                if sigma == 0:
+                    'If there is no variability: do not bet at all.'
+                    b_n = lambda x: beta.pdf(x, 1, 1)
+                    B_n = lambda x: beta.cdf(x, 1, 1)
+                    return 1, b_n, B_n
+
+                h = self.calculate_bandwidth(data=data, bw_mehtod=self.bandwidth, sigma=sigma)
 
                 # Ensure `x` works for both scalars and arrays
                 def kernel_pdf_raw(x):
@@ -195,9 +213,18 @@ class PluginMartingale:
                 
                 transformed_data = transform_with_edge_adjustment(data, self.edge_adjustment)
 
-                kde = gaussian_kde(transformed_data, bw_method=self.bandwidth)
-                h = kde.factor
+                # kde = gaussian_kde(transformed_data, bw_method=self.bandwidth)
+                # h = kde.factor
                 sigma = transformed_data.std()
+
+                if sigma == 0:
+                    'If there is no variability: do not bet at all.'
+                    b_n = lambda x: beta.pdf(x, 1, 1)
+                    B_n = lambda x: beta.cdf(x, 1, 1)
+                    return 1, b_n, B_n
+
+
+                h = self.calculate_bandwidth(data=data, bw_mehtod=self.bandwidth, sigma=sigma)
 
                 def kernel_pdf_transformed(x):
                     x = np.atleast_1d(x)  # Ensure x is an array

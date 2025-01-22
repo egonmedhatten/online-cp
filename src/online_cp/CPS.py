@@ -2,13 +2,230 @@ import numpy as np
 import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
-
-MACHINE_EPSILON = np.finfo(np.float64).eps
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize_scalar, minimize, Bounds
+MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
 class ConformalPredictiveSystem:
     '''
     Parent class for conformal predictive systems. Unclear if some methods are common to all, so perhaps we don't need it.
     '''
+
+class RidgePredictionMachine(ConformalPredictiveSystem):
+    'This conformal predictive system uses the "studentised residuals as conformity measure'
+
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None):
+        self.a = a
+        self.X = None
+        self.y = None
+        self.p = None
+        self.Id = None
+        self.XTXinv = None
+
+        # Should we raise warnings
+        self.warnings = warnings
+        # Do we autotune ridge prarmeter on warning
+        self.autotune = autotune
+
+        self.verbose = verbose
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+    def learn_initial_training_set(self, X, y):
+        self.X = X
+        self.y = y
+        self.p = X.shape[1]
+        self.Id = np.identity(self.p)
+        if self.autotune:
+            self._tune_ridge_parameter()
+        else:
+            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a*self.Id)
+
+    def learn_one(self, x, y, precomputed=None):
+        '''
+        Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
+        >>> cp = ConformalRidgeRegressor()
+        >>> cp.learn_one(np.array([1,0]), 1)
+        >>> cp.X
+        array([[1, 0]])
+        >>> cp.y
+        array([1])
+        '''
+        # Learn label y
+        if self.y is None:
+            self.y = np.array([y])
+        else:
+            if hasattr(self, 'h'):
+                self.y = np.append(self.y, y.reshape(1, self.h), axis=0)
+            else:
+                self.y = np.append(self.y, y)
+    
+        if precomputed is not None:
+            X = precomputed['X']
+            XTXinv = precomputed['XTXinv']
+
+            if X is not None:
+                self.X = X
+                self.p = self.X.shape[1]
+                self.Id = np.identity(self.p)
+            
+            if XTXinv is not None:
+                self.XTXinv = XTXinv
+                
+            else:
+                if self.X.shape[0] == 1:
+                    # print(self.X)
+                    # print(self.Id)
+                    # print(self.a)
+                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+                else:
+                    # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                            #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+            
+                    # Check the rank
+                    if self.warnings:
+                        rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+                    
+        else:
+            # Learn object x
+            if self.X is None:
+                self.X = x.reshape(1,-1)
+                self.p = self.X.shape[1]
+                self.Id = np.identity(self.p)
+            elif self.X.shape[0] == 1:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+            else:
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                        #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+        
+                # Check the rank
+                if self.warnings:
+                    rank_deficient = not(self.check_matrix_rank(self.XTXinv))
+
+
+    def change_ridge_parameter(self, a):
+        '''
+        Change the ridge parameter
+        >>> cp = ConformalRidgeRegressor()
+        >>> cp.learn_one(np.array([1,0]), 1)
+        >>> cp.change_ridge_parameter(1)
+        >>> cp.a
+        1
+        '''
+        self.a = a
+        if self.X is not None:
+            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+
+
+    def check_matrix_rank(self, M):
+        '''
+        Check if a matrix has full rank <==> is invertible
+        Returns False if matrix is rank deficient
+        NOTE In numerical linear algebra it is a bit more subtle. The condition number can tell us more.
+
+        >>> cp = ConformalRidgeRegressor(warnings=False)
+        >>> cp.check_matrix_rank(np.array([[1, 0], [1, 0]]))
+        False
+        >>> cp.check_matrix_rank(np.array([[1, 0], [0, 1]]))
+        True
+        '''
+        if np.linalg.matrix_rank(M) < M.shape[0]:
+            if self.warnings:
+                warnings.warn(f'The matrix X is rank deficient. Condition number: {np.linalg.cond(M)}. Consider changing the ridge prarmeter')
+            return False
+        else:
+            return True
+
+
+    def _tune_ridge_parameter(self, a0=None):
+        '''
+        Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
+        '''
+        XTX = self.X.T @ self.X
+        n = self.X.shape[0]
+        In = np.identity(n)
+
+        def GCV(a):
+            try:
+                A = self.X @ np.linalg.inv(XTX + a*self.Id) @ self.X.T
+                return (1/n)*np.linalg.norm((In - A) @ self.y)**2 / ((1/n)* np.trace(In- A))**2
+            except (np.linalg.LinAlgError, ZeroDivisionError):
+                return np.inf
+        
+        # Initial guess
+        if a0 is None:
+            a0 = 1e-6 # Just a small pertubation to avoid numerical issues
+
+        # Bounds to ensure a >= 0
+        res = minimize(GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True)) # May be relevant to pass some arguments here, or even use another minimizer.
+        a = res.x[0]
+
+        if self.verbose > 0:
+            print(f'New ridge parameter: {a}')
+        self.change_ridge_parameter(a)
+
+
+    def predict_cpd(self, x, return_update=False, save_time=False):
+        def build_precomputed(X, XTXinv, C):
+            computed = {
+                'X': X, # The updated matrix of objects
+                'XTXinv': XTXinv, # The updated kernel matrix
+                'C': C
+            } 
+            return computed
+
+        tic = time.time()
+        # Add row to X matrix
+        X = np.append(self.X, x.reshape(1, -1), axis=0)
+        toc_add_row = time.time() - tic
+        n = X.shape[0]
+        y = self.y
+
+        tic = time.time()
+        # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                #https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+
+        XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+        toc_update_XTXinv = time.time() - tic
+
+        tic = time.time()
+        H = X @ XTXinv @ X.T
+        h = H.diagonal()
+        A = np.dot(H[-1, :-1], y) / np.sqrt(1 - h[-1])  + (y - H[:-1, :-1] @ y) / np.sqrt(1 - h[:-1])
+        B = np.sqrt(1 - h[-1]) * np.ones(n-1) + H[-1, :-1] / np.sqrt(1 - h[:-1])
+        C = np.zeros(n + 1)
+        C[1:-1] = A / B
+        C[0] = -np.inf
+        C[-1] = np.inf
+        C.sort()
+
+        # NOTE: Keep the loop version for a bit, if we run into problems...
+        # C = np.empty(n+1)
+        # for i in range(n - 1):
+        #     a_i = sum([H[j, -1] * y[j] for j in range(n-1)]) / np.sqrt(1 - h[-1]) + (y[i] - sum([H[i, j] * y[j] for j in range(n-1)])) / np.sqrt(1 - h[i])
+        #     b_i = np.sqrt(1 - h[-1]) + H[i, -1] / np.sqrt(1 - h[i])
+        #     C[i+1] = a_i / b_i
+        # C[0] = -np.inf
+        # C[-1] = np.inf
+        # C.sort()
+
+        toc_compute_C = time.time()
+
+        time_dict = {
+            'Update hat matrix': toc_update_XTXinv,
+            'Compute C': toc_compute_C
+        }
+        time_dict = time_dict if save_time else None
+        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict)
+
+        if return_update:
+            return cpd, build_precomputed(X, XTXinv, C)
+        else:
+            return cpd
+
 
 
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
@@ -55,7 +272,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         return dists
     
 
-    def learn_initial_training_set(self, X, y, noise_range=1e-6):
+    def learn_initial_training_set(self, X, y):
         '''
         The Nearest neighbours prediction machine assumes all labels are unique. If they are not, we add noise to break ties.
 
@@ -76,21 +293,10 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         self.X = X
         self.D = self.distance_func(X)
 
-        # # Ensure all labels are unique
-        # y = y
-        # if np.unique(y).shape[0] < y.shape[0] and self.verbose > 1:
-        #     print('Duplicate labels detected. Breaking ties with random noise.')
-        # while np.unique(y).shape[0] < y.shape[0]:
-        #     # Find duplicates
-        #     unique, counts = np.unique(y, return_counts=True)
-        #     duplicates = unique[counts > 1]
-
-        #     # Add noise to duplicate entries
-        #     for label in duplicates:
-        #         indices = np.where(y == label)[0]
-        #         noise = self.rnd_gen.uniform(low=-noise_range, high=noise_range, size=len(indices))
-        #         y[indices] += noise
         self.y = y
+        
+        if np.unique(self.y).size != self.y.size:
+            raise Exception('All labels y must be distinct for the NearestNeighboursPredictionMachine to be valid')
 
     
     @staticmethod
@@ -98,7 +304,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         return np.block([[D, d], [d.T, np.array([0])]])
     
 
-    def learn_one(self, x, y, precomputed=None, noise_range=1e-6):
+    def learn_one(self, x, y, precomputed=None):
         '''
         The Nearest neighbours prediction machine assumes all labels are unique. If they are not, we add noise to break ties.
         precomputed is a dictionary
@@ -126,10 +332,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         if self.y is None:
             self.y = np.array([y])
         else:
-            # if y in self.y and self.verbose > 1:
-            #     print('Duplicate label. Breaking tie with random noise.')
-            # while y in self.y:
-            #     y = y + self.rnd_gen.uniform(low=-noise_range, high=noise_range)
             self.y = np.append(self.y, y)
 
         if precomputed is None:
@@ -144,6 +346,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         else:
             self.X = precomputed['X']
             self.D = precomputed['D']
+
+        if np.unique(self.y).size != self.y.size:
+            raise Exception('All labels y must be distinct for the NearestNeighboursPredictionMachine to be valid')
 
     
     def predict_cpd(self, x, return_update=False, save_time=False):
@@ -279,13 +484,13 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         }
         time_dict = time_dict if save_time else None
         # Line 12
-        cps = NearestNeighboursPredictiveDistributionFunction(L, U, Y, time_dict)
+        cpd = NearestNeighboursPredictiveDistributionFunction(L, U, Y, time_dict)
 
         if return_update:
             X = np.append(self.X, x.reshape(1, -1), axis=0)
-            return cps, {'X': X, 'D': D}
+            return cpd, {'X': X, 'D': D}
         else:
-            return cps
+            return cpd
     
 
 class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
@@ -326,28 +531,42 @@ class ConformalPredictiveDistributionFunction:
     prediction set. We can take quantiles and so on.
     '''
 
-    def quantile(self, quantile, tau):
-        raise NotImplementedError('Parent class has not quantile function')
+    def quantile(self, p, tau=None):
+        raise NotImplementedError('Parent class has no quantile function')
 
 
-    def predict_set(self, tau, epsilon=0.1, bounds='both'):
+    def predict_set(self, tau, epsilon=0.1, bounds='both', minimise_width=False):
         '''
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
         '''
-        q1 = epsilon/2
-        q2 = 1 - epsilon/2
-        if bounds=='both':
-            lower = self.quantile(q1, tau)
-            upper = self.quantile(q2, tau)
-        elif bounds=='lower':
-            lower = self.quantile(q1, tau)
-            upper = np.inf
-        elif bounds=='upper':
-            lower = -np.inf
-            upper = self.quantile(q2, tau)
-        else: 
-            raise Exception
+        if minimise_width:
+            if bounds != 'both':
+                raise Exception('bounds must be "both" if we are to minimise the interval width')
+            def compute_width(delta, epsilon):
+                epsilon_minus_delta = epsilon - delta
+                return self.quantile(1-epsilon_minus_delta, tau) - self.quantile(delta, tau)
+
+            delta = minimize_scalar(lambda x: compute_width(x, epsilon), bounds=(0, epsilon)).x
+            eps_minus_delta = epsilon - delta
+            lower = self.quantile(delta, tau)
+            upper = self.quantile(1-eps_minus_delta, tau)
+
+        
+        else:
+            q1 = epsilon/2
+            q2 = 1 - epsilon/2
+            if bounds=='both':
+                lower = self.quantile(q1, tau)
+                upper = self.quantile(q2, tau)
+            elif bounds=='lower':
+                lower = self.quantile(q1, tau)
+                upper = np.inf
+            elif bounds=='upper':
+                lower = -np.inf
+                upper = self.quantile(q2, tau)
+            else: 
+                raise Exception
 
         # print(f'Lower: {lower}')
         # print(f'Upper: {upper}')
@@ -363,14 +582,96 @@ class ConformalPredictiveDistributionFunction:
     @staticmethod
     def width(Gamma):
         return Gamma[1] - Gamma[0]
+    
 
+class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
+
+    def __init__(self, C, time_dict=None):
+        self.C = C
+        self.L = np.array([self.__call__(y, 0) for y in self.C])
+        self.U = np.array([self.__call__(y, 1) for y in self.C])
+        self.Y = C
+
+        self.time_dict = time_dict
+
+        # What about
+        self.y_vals = np.array(sorted([-np.inf, np.inf] + self.C[1: -1].tolist() + (self.C[1: -1] + MACHINE_EPSILON(self.C[1: -1])).tolist() + (self.C[1: -1] - MACHINE_EPSILON(self.C[1: -1])).tolist()))
+        self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
+        self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
+        # Then the quantile can be computed by
+        # self.y_vals[np.where((1 - tau) * self.L + tau * self.U >= p)[0].min()]
+
+    def __call__(self, y, tau=None):
+        if y == -np.inf:
+            Pi0, Pi1 = 0.0, 0.0
+        elif y == np.inf:
+            Pi0, Pi1 = 1.0, 1.0
+        else:
+            C = self.C[:-1]
+            idx_eq = np.where(y == C)[0]
+            if idx_eq.shape[0] > 0:
+                i_prime = idx_eq.min()
+                i_bis = idx_eq.max()
+                interval = ((i_prime - 1) / C.shape[0], (i_bis + 1) / C.shape[0])
+            else:
+                i = np.where(C <= y)[0].max()
+                interval = (i / C.shape[0], (i + 1) / C.shape[0])
+
+            Pi0 = interval[0]
+            Pi1 = interval[1]            
+
+        if tau is None:
+            return Pi0, Pi1
+        else:
+            return (1 - tau) * Pi0 + tau * Pi1
+        
+    
+    # NOTE: This takes forever if we have a large training set. 
+    # Why not just invert?
+    def quantile(self, p, tau=None):
+        def compute_quantile(p, tau):
+            # q = np.inf
+            # y_vals = np.array(sorted([-np.inf, np.inf] + self.C[1: -1].tolist() + (self.C[1: -1] + MACHINE_EPSILON(self.C[1: -1])).tolist() + (self.C[1: -1] - MACHINE_EPSILON(self.C[1: -1])).tolist()))
+            # # This loop is not very nice. Can we get rid of it?
+            # for y in y_vals[::-1]:
+            #     if self.__call__(y, tau) >= p:
+            #         q = y
+            #     else:
+            #         return q
+            # return q
+            q = self.y_vals[np.where((1 - tau) * self.lowers + tau * self.uppers >= p)[0].min()]
+            return q
+        
+        if tau is not None:
+            q = compute_quantile(p, tau)
+            return q
+        else:
+            q0 = compute_quantile(p, 0)
+            q1 = compute_quantile(p, 1)
+            return q0, q1
+    
+        
+    def plot(self, tau=None):
+        if tau is None:
+            fig, ax = plt.subplots()
+            ax.step(self.C, self.L, label=r'$\Pi(y, 0)$')
+            ax.step(self.C, self.U, label=r'$\Pi(y, 1)$')
+            ax.fill_between(self.C, self.L, self.U, step='pre', alpha=0.5, color='green')
+            ax.legend()
+        else: 
+            fig, ax = plt.subplots()
+            ax.step(self.C, (1 - tau) * self.L + tau * self.U, label=r'$\Pi(y, \tau)$')
+            ax.legend()
+
+        plt.close(fig)  # Prevent implicit display
+        return fig
 
 
 class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
     '''
     TODO: Write tests
     '''
-
+    # NOTE: It would be possible to pass a protection function here...
     def __init__(self, L, U, Y, time_dict=None):
         self.L = L 
         self.U = U
@@ -378,23 +679,28 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
 
         self.time_dict = time_dict
 
+        self.y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
+        self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
+        self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
+
     def __call__(self, y, tau=None):
         # TODO: Check carefully that this is correct
         if y == self.Y[0]:
-            return 0
-        if y == self.Y[-1]:
-            return 1
-        Y = self.Y[:-1]
-        idx_eq = np.where(y == Y)[0]
-        if idx_eq.shape[0] > 0:
-            k = idx_eq.min()
-            interval = (self.L[k-1], self.U[k])
+            Pi0, Pi1 = 0.0, 0.0
+        elif y == self.Y[-1]:
+            Pi0, Pi1 = 1.0, 1.0
         else:
-            k = np.where(Y <= y)[0].max()
-            interval = (self.L[k], self.U[k])
-        
-        Pi0 = interval[0]
-        Pi1 = interval[1]
+            Y = self.Y[:-1]
+            idx_eq = np.where(y == Y)[0]
+            if idx_eq.shape[0] > 0:
+                k = idx_eq.min()
+                interval = (self.L[k-1], self.U[k])
+            else:
+                k = np.where(Y <= y)[0].max()
+                interval = (self.L[k], self.U[k])
+            
+            Pi0 = interval[0]
+            Pi1 = interval[1]            
 
         if tau is None:
             return Pi0, Pi1
@@ -402,48 +708,93 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
             return (1 - tau) * Pi0 + tau * Pi1
         
     
-    def quantile(self, quantile, tau):
-        q = np.inf
-        for y in self.Y[::-1]:
-            if self.__call__(y, tau) >= quantile:
-                q = y
-            else:
-                return q
-        return q
+    def quantile(self, p, tau=None):
+        def compute_quantile(p, tau):
+            # q = np.inf
+            # y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
+            # for y in y_vals[::-1]:
+            #     if self.__call__(y, tau) >= p:
+            #         q = y
+            #     else:
+            #         return q
+            q = self.y_vals[np.where((1 - tau) * self.lowers + tau * self.uppers >= p)[0].min()]
+            return q
+        if tau is not None:
+            q = compute_quantile(p, tau)
+            return q
+        else:
+            q0 = compute_quantile(p, 0)
+            q1 = compute_quantile(p, 1)
+            return q0, q1
     
+    def plot(self, tau=None):
+        if tau is None:
+            fig, ax = plt.subplots()
+            ax.step(self.Y[1:], self.L, label=r'$\Pi(y, 0)$')
+            ax.step(self.Y[1:], self.U, label=r'$\Pi(y, 1)$')
+            ax.fill_between(self.Y[1:], self.L, self.U, step='pre', alpha=0.5, color='green')
+            ax.legend()
+        else: 
+            fig, ax = plt.subplots()
+            ax.step(self.Y[1:], (1 - tau) * self.L + tau * self.U, label=r'$\Pi(y, \tau)$')
+            ax.legend()
+
+        plt.close(fig)  # Prevent implicit display
+        return fig
+
+
 class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributionFunction):
 
     def __init__(self, Y, time_dict=None):
         self.Y = Y
         self.time_dict = time_dict
 
+        self.y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
+        self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
+        self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
+
     
     def __call__(self, y, tau=None):
-        Y = self.Y[:-1]
-        idx_eq = np.where(y == Y)[0]
-        if idx_eq.shape[0] > 0:
-            k = idx_eq.min()
-            interval = ((k-1)/(Y.shape[0]), (k+1)/(Y.shape[0]))
+        if y == self.Y[0]:
+            Pi0, Pi1 = 0.0, 0.0
+        elif y == self.Y[-1]:
+            Pi0, Pi1 = 1.0, 1.0
         else:
-            k = np.where(Y <= y)[0].max()
-            interval = ((k)/(Y.shape[0]), (k+1)/(Y.shape[0]))
-        
-        Pi0 = interval[0]
-        Pi1 = interval[1]
+            Y = self.Y[:-1]
+            idx_eq = np.where(y == Y)[0]
+            if idx_eq.shape[0] > 0:
+                k = idx_eq.min()
+                interval = ((k-1)/(Y.shape[0]), (k+1)/(Y.shape[0]))
+            else:
+                k = np.where(Y <= y)[0].max()
+                interval = ((k)/(Y.shape[0]), (k+1)/(Y.shape[0]))
+            
+            Pi0 = interval[0]
+            Pi1 = interval[1]
 
         if tau is None:
             return Pi0, Pi1
         else:
             return (1 - tau) * Pi0 + tau * Pi1
         
-    def quantile(self, quantile, tau):
-        q = np.inf
-        for y in self.Y[::-1]:
-            if self.__call__(y, tau) >= quantile:
-                q = y
-            else:
-                return q
-        return q
+    def quantile(self, p, tau=None):
+        def compute_quantile(p, tau):
+            # q = np.inf
+            # y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
+            # for y in y_vals[::-1]:
+            #     if self.__call__(y, tau) >= p:
+            #         q = y
+            #     else:
+            #         return q
+            q = self.y_vals[np.where((1 - tau) * self.lowers + tau * self.uppers >= p)[0].min()]
+            return q
+        if tau is not None:
+            q = compute_quantile(p, tau)
+            return q
+        else:
+            q0 = compute_quantile(p, 0)
+            q1 = compute_quantile(p, 1)
+            return q0, q1
 
 if __name__ == "__main__":
     import doctest

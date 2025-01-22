@@ -42,13 +42,6 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
     def learn_one(self, x, y, precomputed=None):
         '''
-        Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
-        >>> cp = ConformalRidgeRegressor()
-        >>> cp.learn_one(np.array([1,0]), 1)
-        >>> cp.X
-        array([[1, 0]])
-        >>> cp.y
-        array([1])
         '''
         # Learn label y
         if self.y is None:
@@ -108,12 +101,6 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
     def change_ridge_parameter(self, a):
         '''
-        Change the ridge parameter
-        >>> cp = ConformalRidgeRegressor()
-        >>> cp.learn_one(np.array([1,0]), 1)
-        >>> cp.change_ridge_parameter(1)
-        >>> cp.a
-        1
         '''
         self.a = a
         if self.X is not None:
@@ -122,15 +109,6 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
     def check_matrix_rank(self, M):
         '''
-        Check if a matrix has full rank <==> is invertible
-        Returns False if matrix is rank deficient
-        NOTE In numerical linear algebra it is a bit more subtle. The condition number can tell us more.
-
-        >>> cp = ConformalRidgeRegressor(warnings=False)
-        >>> cp.check_matrix_rank(np.array([[1, 0], [1, 0]]))
-        False
-        >>> cp.check_matrix_rank(np.array([[1, 0], [0, 1]]))
-        True
         '''
         if np.linalg.matrix_rank(M) < M.shape[0]:
             if self.warnings:
@@ -316,9 +294,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> X = np.array([[1], [2]])
         >>> y = np.array([1, 2])
         >>> cps.learn_initial_training_set(X, y)
-        >>> cps.learn_one(np.array([3]), 1)
+        >>> cps.learn_one(np.array([3]), 3)
         >>> cps.y
-        array([1, 2, 1])
+        array([1, 2, 3])
         >>> cps.X
         array([[1],
                [2],

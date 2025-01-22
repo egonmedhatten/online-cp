@@ -10,3 +10,5 @@ notebooks/*.pdf
 dist/
 src/oncp.egg-info/
 src/online_cp.egg-info/
+work_in_progress/
+*.sh

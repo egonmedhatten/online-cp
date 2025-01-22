@@ -7,6 +7,8 @@ from scipy.spatial.distance import pdist, cdist, squareform
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
+# FIXME: The p-values for all regressors should be modified. We should be able to compute the upper, lower, and combined p-value
+
 
 class ConformalRegressor:
     '''
@@ -22,6 +24,42 @@ class ConformalRegressor:
          say one casual and one highly confident. In pracice, this could be useful when the aim is 
          descision support. This would then have to play nice wiht everything else...
     '''
+
+    @staticmethod
+    def _safe_size_check(X):
+        if X is None:
+            size = 0
+        else:
+            size = X.shape[0]
+        return size
+    
+    @staticmethod
+    def _calculate_p(Alpha, tau=None, c_type='nonconformity'):
+        '''
+        Method to compute the smoothed p-value, given an array of nonconformity scores where the last element corresponds 
+        to the test object, and a random number tau. If tau is None, the non-smoothed p-value is returned.
+        '''
+        if c_type == 'nonconformity':
+            alpha_y = Alpha[-1]
+            if tau is not None:
+                gt = np.where(Alpha > alpha_y)[0].size
+                eq = np.where(Alpha == alpha_y)[0].size
+                p_y = (gt + tau * eq) / Alpha.size
+            else:
+                geq = np.where(Alpha >= alpha_y)[0].size
+                p_y = geq / Alpha.size
+        elif c_type == 'conformity':
+            alpha_y = Alpha[-1]
+            if tau is not None:
+                lt = np.where(Alpha < alpha_y)[0].size
+                eq = np.where(Alpha == alpha_y)[0].size
+                p_y = (lt + tau * eq) / Alpha.size
+            else:
+                leq = np.where(Alpha <= alpha_y)[0].size
+                p_y = leq / Alpha.size
+        else:
+            raise Exception()
+        return p_y
 
     @staticmethod
     def _get_upper(u_dic, epsilon, n):
@@ -204,7 +242,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
     # TODO: Fix gracefull error handling when the matrix is singular. It should raise an exception, but we could
     #       specify that it can be handled by changing the ridge parameter.
 
-    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None):
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False):
         '''
         The ridge parameter (L2 regularisation) is a.
         Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
@@ -224,6 +262,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
+
+        # Do we use the studentised residuals
+        self.studentised = studentised
 
 
     def learn_initial_training_set(self, X, y):
@@ -303,14 +344,18 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     rank_deficient = not(self.check_matrix_rank(self.XTXinv))
 
 
-    @staticmethod
-    def compute_A_and_B(X, XTXinv, y):
+    
+    def compute_A_and_B(self, X, XTXinv, y):
         n = X.shape[0]
         # Hat matrix (This block is the time consuming one...)
         H = X @ XTXinv @ X.T
         C = np.identity(n) - H
         A = C @ np.append(y, 0) # Elements of this vector are denoted ai
         B = C @ np.append(np.zeros((n-1,)), 1) # Elements of this vector are denoted bi
+        if self.studentised:
+            h = H.diagonal()
+            A = A / np.sqrt(1 - h)
+            B = B / np.sqrt(1 - h)
         # Nonconformity scores are A + yB = y - yhat
         return A, B
     
@@ -336,7 +381,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
             } 
             return computed
 
-        if self.X is not None:
+        if self._safe_size_check(self.X) > 0:
 
             tic = time.time()
             # Add row to X matrix
@@ -369,14 +414,22 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
             XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
             toc_update_XTXinv = time.time() - tic
-
+            
             tic = time.time()
             A, B = self.compute_A_and_B(X, XTXinv, self.y)
             toc_nc = time.time() - tic
 
-            tic = time.time()
-            l_dic, u_dic = self._vectorised_l_and_u(A, B)
-            toc_dics = time.time() - tic
+            if self.studentised:
+                tic = time.time()
+                t = (A[:-1] - A[-1]) / (B[-1] - B[:-1])
+                t.sort()
+                l_dic = {i+1: val for i, val in enumerate(t)}
+                u_dic = {i+1: val for i, val in enumerate(t)}
+                toc_dics = time.time() - tic
+            else:
+                tic = time.time()
+                l_dic, u_dic = self._vectorised_l_and_u(A, B)
+                toc_dics = time.time() - tic
 
             if bounds=='both':
                 lower = self._get_lower(l_dic=l_dic, epsilon=epsilon/2, n=n)
@@ -410,56 +463,55 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return (lower, upper), build_precomputed(X, XTXinv, A, B)
         else:
             return (lower, upper)
-            
-    # FIXME The function below is the upper p-value. We need also to be able to compute the lower, and combined p-value
-    def compute_smoothed_p_value(self, x, y, precomputed=None):
+
+    def compute_p_value(self, x, y, bounds='both', precomputed=None, tau=None, smoothed=True):
         '''
         Computes the smoothed p-value of the example (x, y).
-        NOTE: This is the p-value for the upper CRR
-        FIXME: Add possibility to compute lower p-value as well. (Are they equal?)
-        Smoothed p-values can be used to test the exchangeability assumption.
-        If X and XTXinv are passed, x must be the last row of X.
         '''
-        # Inner method to compute the p-value from NC scores
-        def calc_p(A, B, y):
-            if hasattr(self, 'h'):
-                raise NotImplementedError('MimoConformalRidgeRegressor can not compute p-values at the moment. Working on it...')
-            # Nonconformity scores are A + yB = y - yhat for upper CRR
-            Alpha = A + y*B
-            alpha_y = Alpha[-1]
-            lt = np.where(Alpha > alpha_y)[0].shape[0]
-            eq = np.where(Alpha == alpha_y)[0].shape[0]
+        if tau is None and smoothed:
             tau = self.rnd_gen.uniform(0, 1)
-            p_y = (lt + tau * eq)/Alpha.shape[0]
-            return p_y
-
         if precomputed is not None:
+            
+            assert np.allclose(x, precomputed['X'][-1])
             A = precomputed['A']
             B = precomputed['B']
-            if A is not None and B is not None:
-                p_y = calc_p(A, B, y)
-            else:
-                if self.XTXinv is not None:
-                    X = np.append(self.X, x.reshape(1, -1), axis=0)
-                    XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
-                    A, B = self.compute_A_and_B(X, XTXinv, self.y)
-                    p_y = calc_p(A, B, y)
-                    
-                else:
-                    p_y = self.rnd_gen.uniform(0, 1)
-        
         else:
             if self.XTXinv is not None:
                 X = np.append(self.X, x.reshape(1, -1), axis=0)
                 XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
                 A, B = self.compute_A_and_B(X, XTXinv, self.y)
-                p_y = calc_p(A, B, y)
-                
             else:
-                p_y = self.rnd_gen.uniform(0, 1)
+                A, B = None, None 
+        
+        if A is not None and B is not None:
+            if bounds == 'both':
+                E = A + y*B
+                Alpha = np.zeros_like(A)
+                for i, e in enumerate(E):
+                    alpha = min((E >= e).sum(), (E<=e).sum())
+                    Alpha[i] = alpha
+                c_type = 'conformity'
+            elif bounds == 'lower':
+                Alpha = -(A + y*B)
+                c_type = 'nonconformity'
+            elif bounds=='upper':
+                Alpha = A + y*B
+                c_type = 'nonconformity'
+            else:
+                raise Exception('bounds must be one of "both", "lower", "upper"')
 
-        return p_y
+            if smoothed:
+                p = self._calculate_p(Alpha, tau, c_type=c_type)
+            else: 
+                p = self._calculate_p(Alpha, c_type=c_type)
+        else:
+            if smoothed:
+                p = tau
+            else:
+                p = 1
 
+        return p
+    
 
     def change_ridge_parameter(self, a):
         '''
@@ -969,6 +1021,60 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             return (lower, upper), build_precomputed(X, K, Kinv, A, B)
         else:
             return (lower, upper)
+        
+
+    def compute_p_value(self, x, y, bounds='both', precomputed=None, tau=None, smoothed=True):
+        '''
+        Computes the smoothed p-value of the example (x, y).
+        '''
+        if tau is None and smoothed:
+            tau = self.rnd_gen.uniform(0, 1)
+        if precomputed is not None:
+            
+            assert np.allclose(x, precomputed['X'][-1])
+            A = precomputed['A']
+            B = precomputed['B']
+
+        else:
+            if self.Kinv is not None:
+
+                k = self.kernel(self.X, x).reshape(-1, 1)
+                kappa = self.kernel(x, x)
+                K = self._update_K(self.K, k, kappa)
+                Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
+                X = np.append(self.X, x.reshape(1, -1), axis=0)
+                A, B = self.compute_A_and_B(X, K, Kinv, self.y)
+            else:
+                A, B = None, None 
+        
+        if A is not None and B is not None:
+            if bounds == 'both':
+                E = A + y*B
+                Alpha = np.zeros_like(A)
+                for i, e in enumerate(E):
+                    alpha = min((E >= e).sum(), (E<=e).sum())
+                    Alpha[i] = alpha
+                c_type = 'conformity'
+            elif bounds == 'lower':
+                Alpha = -(A + y*B)
+                c_type = 'nonconformity'
+            elif bounds=='upper':
+                Alpha = A + y*B
+                c_type = 'nonconformity'
+            else:
+                raise Exception('bounds must be one of "both", "lower", "upper"')
+
+            if smoothed:
+                p = self._calculate_p(Alpha, tau, c_type=c_type)
+            else: 
+                p = self._calculate_p(Alpha, c_type=c_type)
+        else:
+            if smoothed:
+                p = tau
+            else:
+                p = 1
+
+        return p
     
 
     def compute_smoothed_p_value(self, x, y, precomputed=None):
@@ -1113,7 +1219,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             }
             return computed
         
-        if self.X is not None:
+        if self._safe_size_check(self.X) > self.k:
 
             # Temporarily update distance matrix
             tic = time.time()
@@ -1177,8 +1283,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             upper = np.inf
             X = x.reshape(1,-1)
             D = self.distance_func(X)
-            A = None
-            B = None
+            if self._safe_size_check(self.X) > 0:
+                A, B = self.compute_A_and_B(D, self.y, self.k)
+            else:
+                A, B = None, None
         
         if return_update:
             return (lower, upper), build_precomputed(X, D, A, B)
@@ -1186,6 +1294,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             return (lower, upper)
 
 
+    # FIXME This is very wrong!!
     def compute_A_and_B(self, D, y, k):
         y = np.append(y, 0)
         n = D.shape[0] - 1 
@@ -1204,50 +1313,119 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             else:
                 A[i] = - self.agg_func(y[col])
                 B[i] = 1
+        print(A)
+        print(B)
         return A, B
     
 
-    def compute_smoothed_p_value(self, x, y, precomputed=None):
+    @staticmethod
+    def _calculate_p(Alpha, tau=None):
+        '''
+        Method to compute the smoothed p-value, given an array of nonconformity scores where the last element corresponds 
+        to the test object, and a random number tau. If tau is None, the non-smoothed p-value is returned.
+        '''
+        alpha_y = Alpha[-1]
+        if tau is not None:
+            gt = np.where(Alpha > alpha_y)[0].size
+            eq = np.where(Alpha == alpha_y)[0].size
+            p_y = (gt + tau * eq) / Alpha.size
+        else:
+            geq = np.where(Alpha >= alpha_y)[0].size
+            p_y = geq / Alpha.size
+        return p_y
+
+    def compute_p_value(self, x, y, bounds='both', precomputed=None, tau=None, smoothed=True):
         '''
         Computes the smoothed p-value of the example (x, y).
-        Smoothed p-values can be used to test the exchangeability assumption.
-        If X and XTXinv are passed, x must be the last row of X.
         '''
-
-        # Inner method to compute the p-value from NC scores
-        def calc_p(A, B, y):
-            # Nonconformity scores are A + yB = y - yhat
-            Alpha = A + y*B
-            alpha_y = Alpha[-1]
-            gt = np.where(Alpha < alpha_y)[0].shape[0]
-            eq = np.where(Alpha == alpha_y)[0].shape[0]
+        if tau is None and smoothed:
             tau = self.rnd_gen.uniform(0, 1)
-            p_y = (gt + tau * eq)/Alpha.shape[0]
-            return p_y
-        
         if precomputed is not None:
-            A = precomputed['A']
-            B = precomputed['B']
-            if A is not None and B is not None:
-                p_y = calc_p(A, B, y)
-            else:
-                X = precomputed['X']
-                if self.X is not None:
-                    assert np.allclose(x, X[-1])
-                    D = precomputed['D']
-                    A, B = self.compute_A_and_B(D, self.y, self.k)
-                    p_y = calc_p(A, B, y)
-                else:
-                    p_y = self.rnd_gen.uniform(0, 1)
+            
+            assert np.allclose(x, precomputed['X'][-1])
+            D = precomputed['D']
+            A, B = self.compute_A_and_B(D, self.y, self.k)
         else:
-            if self.X is not None:
+            if self._safe_size_check(self.X) > self.k:
                 d = self.distance_func(self.X, x)
                 D = self.update_distance_matrix(self.D, d)
                 A, B = self.compute_A_and_B(D, self.y, self.k)
-                p_y = calc_p(A, B, y)
             else:
-                p_y = self.rnd_gen.uniform(0, 1)
-        return p_y
+                X = x.reshape(1,-1)
+                D = self.distance_func(X)
+                if self._safe_size_check(self.X) > 0:
+                    self.compute_A_and_B(D, self.y, self.k)
+                else:
+                    A, B = None, None 
+        
+        if A is not None and B is not None:
+            if bounds == 'both':
+                E = A + y*B
+                Alpha = np.zeros_like(A)
+                for i, e in enumerate(E):
+                    alpha = min((E >= e).sum(), (E<=e).sum())
+                    Alpha[i] = alpha
+            elif bounds == 'lower':
+                Alpha = -(A + y*B)
+            elif bounds=='upper':
+                Alpha = A + y*B
+            else:
+                raise Exception('bounds must be one of "both", "lower", "upper"')
+
+            if smoothed:
+                p = self._calculate_p(Alpha, tau)
+            else: 
+                p = self._calculate_p(Alpha)
+        else:
+            if smoothed:
+                p = tau
+            else:
+                p = 1
+
+        return p
+    
+
+    # def compute_smoothed_p_value(self, x, y, precomputed=None):
+    #     '''
+    #     Computes the smoothed p-value of the example (x, y).
+    #     Smoothed p-values can be used to test the exchangeability assumption.
+    #     If X and XTXinv are passed, x must be the last row of X.
+    #     '''
+
+    #     # Inner method to compute the p-value from NC scores
+    #     def calc_p(A, B, y):
+    #         # Nonconformity scores are A + yB = y - yhat
+    #         Alpha = A + y*B
+    #         alpha_y = Alpha[-1]
+    #         gt = np.where(Alpha < alpha_y)[0].shape[0]
+    #         eq = np.where(Alpha == alpha_y)[0].shape[0]
+    #         tau = self.rnd_gen.uniform(0, 1)
+    #         p_y = (gt + tau * eq)/Alpha.shape[0]
+    #         return p_y
+        
+    #     if precomputed is not None:
+    #         A = precomputed['A']
+    #         B = precomputed['B']
+    #         if A is not None and B is not None:
+    #             p_y = calc_p(A, B, y)
+    #         else:
+    #             X = precomputed['X']
+    #             if self.X is not None:
+    #                 assert np.allclose(x, X[-1])
+    #                 D = precomputed['D']
+    #                 A, B = self.compute_A_and_B(D, self.y, self.k)
+    #                 p_y = calc_p(A, B, y)
+    #             else:
+    #                 p_y = self.rnd_gen.uniform(0, 1)
+    #     else:
+    #         if self.X is not None:
+    #             d = self.distance_func(self.X, x)
+    #             D = self.update_distance_matrix(self.D, d)
+    #             A, B = self.compute_A_and_B(D, self.y, self.k)
+    #             p_y = calc_p(A, B, y)
+    #         else:
+    #             p_y = self.rnd_gen.uniform(0, 1)
+    #     return p_y
     
 
 if __name__ == "__main__":

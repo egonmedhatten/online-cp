@@ -4,7 +4,6 @@ import warnings
 from scipy.optimize import minimize_scalar, minimize, Bounds
 from scipy.spatial.distance import pdist, cdist, squareform
 
-
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
 # FIXME: The p-values for all regressors should be modified. We should be able to compute the upper, lower, and combined p-value

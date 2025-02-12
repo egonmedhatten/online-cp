@@ -1,5 +1,4 @@
 import numpy as np
-from sklearn.neighbors import KernelDensity
 from scipy.integrate import quad
 from scipy.optimize import minimize
 from scipy.special import betaln
@@ -21,6 +20,9 @@ class PluginMartingale:
             - For "beta": "mle" or "moments" or "bayes"
 
         TODO: Clear up the documentation. This could be messy.
+        NOTE: It is possible to use a beta kernel for KDE. It is bounded by definition, and so, should have 
+              no truoble with bounded data.
+        TODO: Should we really have a parametric plugin? 
         '''
         self.logM = 0.0
         self.max = 1.0 # Keeps track of the maximum value so far.
@@ -109,7 +111,7 @@ class PluginMartingale:
         if self.window_size == 'adaptive':
             # FIXME DEFINITELY DO NOT WANT HARD CODED MIN SAMPLE SIZE
             window_param = np.log(1.001)
-            min_size = 150
+            min_size = self.min_sample_size
             max_size = len(self.p_values)
             return max(min_size, int(max_size*np.exp(-window_param*self.M)))
         elif self.window_size is None:

@@ -5,10 +5,28 @@ from scipy.optimize import minimize_scalar, minimize, Bounds
 from scipy.spatial.distance import pdist, cdist, squareform
 
 
-MACHINE_EPSILON = np.finfo(np.float64).eps
+MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
 # FIXME: The p-values for all regressors should be modified. We should be able to compute the upper, lower, and combined p-value
 
+class ConformalPredictionInterval:
+
+    def __init__(self, lower, upper, epsilon):
+        self.lower = lower
+        self.upper = upper
+        self.epsilon = epsilon
+
+    def __contains__(self, y):
+        return self.lower <= y <= self.upper
+    
+    def width(self):
+        return self.upper - self.lower
+    
+    def __repr__(self):
+        return repr((self.lower, self.upper))
+
+    def __str__(self):
+        return f'({self.lower}, {self.upper})'
 
 class ConformalRegressor:
     '''
@@ -24,6 +42,8 @@ class ConformalRegressor:
          say one casual and one highly confident. In pracice, this could be useful when the aim is 
          descision support. This would then have to play nice wiht everything else...
     '''
+    def _construct_Gamma(self, lower, upper, epsilon):
+        return ConformalPredictionInterval(lower, upper, epsilon)
 
     @staticmethod
     def _safe_size_check(X):
@@ -143,12 +163,12 @@ class ConformalRegressor:
 
     @staticmethod
     def err(Gamma, y):
-        return int(not(Gamma[0] <= y <= Gamma[1]))
+        return int(not(y in Gamma))
     
 
     @staticmethod
     def width(Gamma):
-        return Gamma[1] - Gamma[0]
+        return Gamma.width()
     
     def process_dataset(self, X, y, epsilon=0.1, init_train=0, return_results=False):
 
@@ -225,7 +245,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     Predict an object (output may not be exactly the same, as the dataset
     depends on the random seed):
-    >>> print("(%.2f, %.2f)" % cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both'))
+    >>> interval = cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both')
+    >>> print("(%.2f, %.2f)" % (interval.lower, interval.upper))
     (0.73, 1.23)
 
     You can of course learn a new data point online:
@@ -236,7 +257,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     We can then predict again:
 
-    >>> print("(%.2f, %.2f)" % cp.predict(np.array([2,4]), epsilon=0.1, bounds='both'))
+    >>> interval = cp.predict(np.array([2,4]), epsilon=0.1, bounds='both')
+    >>> print("(%.2f, %.2f)" % (interval.lower, interval.upper))
     (5.39, 6.33)
     '''
     # TODO: Fix gracefull error handling when the matrix is singular. It should raise an exception, but we could
@@ -396,17 +418,17 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon))} examples. Increase or add more examples')
                     if return_update:
-                        return (-np.inf, np.inf), build_precomputed(X, XTXinv, None, None)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, XTXinv, None, None)
                     else: 
-                        return (-np.inf, np.inf)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
             else: 
                 if not (epsilon >= 1/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon))} examples. Increase or add more examples')
                     if return_update:
-                        return (-np.inf, np.inf), build_precomputed(X, XTXinv, None, None)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, XTXinv, None, None)
                     else: 
-                        return (-np.inf, np.inf)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
 
             tic = time.time()
             # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
@@ -460,9 +482,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
             upper = np.inf
     
         if return_update:
-            return (lower, upper), build_precomputed(X, XTXinv, A, B)
+            return self._construct_Gamma(lower, upper, epsilon), build_precomputed(X, XTXinv, A, B)
         else:
-            return (lower, upper)
+            return self._construct_Gamma(lower, upper, epsilon)
 
     def compute_p_value(self, x, y, bounds='both', precomputed=None, tau=None, smoothed=True):
         '''
@@ -967,17 +989,17 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon))} examples. Increase or add more examples')
                     if return_update:
-                        return (-np.inf, np.inf), build_precomputed(X, K, Kinv, None, None)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, K, Kinv, None, None)
                     else: 
-                        return (-np.inf, np.inf)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
             else: 
                 if not (epsilon >= 1/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon))} examples. Increase or add more examples')
                     if return_update:
-                        return (-np.inf, np.inf), build_precomputed(X, K, Kinv, None, None)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, K, Kinv, None, None)
                     else: 
-                        return (-np.inf, np.inf)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
 
             
             tic = time.time()
@@ -1018,9 +1040,9 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             upper = np.inf
 
         if return_update:
-            return (lower, upper), build_precomputed(X, K, Kinv, A, B)
+            return self._construct_Gamma(lower, upper, epsilon), build_precomputed(X, K, Kinv, A, B)
         else:
-            return (lower, upper)
+            return self._construct_Gamma(lower, upper, epsilon)
         
 
     def compute_p_value(self, x, y, bounds='both', precomputed=None, tau=None, smoothed=True):
@@ -1239,17 +1261,17 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(2/epsilon))} examples. Increase or add more examples')
                     if return_update:
-                        return (-np.inf, np.inf), build_precomputed(X, D, None, None)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, D, None, None)
                     else: 
-                        return (-np.inf, np.inf)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
             else: 
                 if not (epsilon >= 1/n):
                     if self.warnings:
                         warnings.warn(f'Significance level epsilon is too small for training set. Need at least {int(np.ceil(1/epsilon))} examples. Increase or add more examples')
                     if return_update:
-                        return (-np.inf, np.inf), build_precomputed(X, D, None, None)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, D, None, None)
                     else: 
-                        return (-np.inf, np.inf)
+                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
             
             tic = time.time()
             A, B = self.compute_A_and_B(D, self.y, self.k)
@@ -1289,9 +1311,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 A, B = None, None
         
         if return_update:
-            return (lower, upper), build_precomputed(X, D, A, B)
+            return self._construct_Gamma(lower, upper, epsilon), build_precomputed(X, D, A, B)
         else:
-            return (lower, upper)
+            return self._construct_Gamma(lower, upper, epsilon)
 
 
     # FIXME This is very wrong!!

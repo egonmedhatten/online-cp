@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar, minimize, Bounds
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
-from online_cp.regressors import ConformalPredictionInterval
+from regressors import ConformalPredictionInterval
 
 class ConformalPredictiveSystem:
     '''

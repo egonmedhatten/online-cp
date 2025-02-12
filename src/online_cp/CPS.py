@@ -6,7 +6,9 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar, minimize, Bounds
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
-from regressors import ConformalPredictionInterval
+def get_ConformalPredictionInterval():
+    from .regressors import ConformalPredictionInterval  # Lazy import
+    return ConformalPredictionInterval
 
 class ConformalPredictiveSystem:
     '''
@@ -572,7 +574,8 @@ class ConformalPredictiveDistributionFunction:
 
         # print(f'Lower: {lower}')
         # print(f'Upper: {upper}')
-        return ConformalPredictionInterval(lower, upper, epsilon)
+        CP_int = get_ConformalPredictionInterval()
+        return CP_int(lower, upper, epsilon)
     
     def find_smallest_epsilon(self, tau, increment=0.001):
         '''

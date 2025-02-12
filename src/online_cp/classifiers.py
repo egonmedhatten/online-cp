@@ -4,6 +4,23 @@ import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 from joblib import Parallel, delayed
 
+class ConformalPredictionSet:
+
+    def __init__(self, Gamma:np.array, epsilon):
+        self.elements = Gamma
+        self.epsilon = epsilon
+
+    def __contains__(self, y):
+        return y in self.elements
+    
+    def __len__(self):
+        return self.elements.shape[0]
+    
+    def __repr__(self):
+        return repr(self.elements)
+
+    def __str__(self):
+        return str(self.elements)
 
 class ConformalClassifier:
     '''
@@ -48,7 +65,7 @@ class ConformalClassifier:
         for y in self.label_space:
             if p_values[y] > epsilon:
                 Gamma.append(y)
-        return np.array(Gamma) 
+        return ConformalPredictionSet(np.array(Gamma), epsilon)
     
 
     def err(self, Gamma, y):
@@ -59,9 +76,9 @@ class ConformalClassifier:
 
     def oe(self, Gamma, y):
         if y in Gamma:
-            oe = Gamma.shape[0] - 1
+            oe = len(Gamma) - 1
         else:
-            oe = Gamma.shape[0]
+            oe = len(Gamma)
         self.OE += oe
         return oe
     

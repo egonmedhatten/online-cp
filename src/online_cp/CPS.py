@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar, minimize, Bounds
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
+from online_cp.regressors import ConformalPredictionInterval
+
 class ConformalPredictiveSystem:
     '''
     Parent class for conformal predictive systems. Unclear if some methods are common to all, so perhaps we don't need it.
@@ -43,11 +45,11 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
     def learn_one(self, x, y, precomputed=None):
         '''
         Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
-        >>> cp = ConformalRidgeRegressor()
-        >>> cp.learn_one(np.array([1,0]), 1)
-        >>> cp.X
+        >>> cps = RidgePredictionMachine()
+        >>> cps.learn_one(np.array([1,0]), 1)
+        >>> cps.X
         array([[1, 0]])
-        >>> cp.y
+        >>> cps.y
         array([1])
         '''
         # Learn label y
@@ -109,10 +111,10 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
     def change_ridge_parameter(self, a):
         '''
         Change the ridge parameter
-        >>> cp = ConformalRidgeRegressor()
-        >>> cp.learn_one(np.array([1,0]), 1)
-        >>> cp.change_ridge_parameter(1)
-        >>> cp.a
+        >>> cps = RidgePredictionMachine()
+        >>> cps.learn_one(np.array([1,0]), 1)
+        >>> cps.change_ridge_parameter(1)
+        >>> cps.a
         1
         '''
         self.a = a
@@ -126,10 +128,10 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         Returns False if matrix is rank deficient
         NOTE In numerical linear algebra it is a bit more subtle. The condition number can tell us more.
 
-        >>> cp = ConformalRidgeRegressor(warnings=False)
-        >>> cp.check_matrix_rank(np.array([[1, 0], [1, 0]]))
+        >>> cps = RidgePredictionMachine(warnings=False)
+        >>> cps.check_matrix_rank(np.array([[1, 0], [1, 0]]))
         False
-        >>> cp.check_matrix_rank(np.array([[1, 0], [0, 1]]))
+        >>> cps.check_matrix_rank(np.array([[1, 0], [0, 1]]))
         True
         '''
         if np.linalg.matrix_rank(M) < M.shape[0]:
@@ -316,9 +318,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> X = np.array([[1], [2]])
         >>> y = np.array([1, 2])
         >>> cps.learn_initial_training_set(X, y)
-        >>> cps.learn_one(np.array([3]), 1)
+        >>> cps.learn_one(np.array([3]), 3)
         >>> cps.y
-        array([1, 2, 1])
+        array([1, 2, 3])
         >>> cps.X
         array([[1],
                [2],
@@ -570,18 +572,28 @@ class ConformalPredictiveDistributionFunction:
 
         # print(f'Lower: {lower}')
         # print(f'Upper: {upper}')
-        return lower, upper
+        return ConformalPredictionInterval(lower, upper, epsilon)
     
+    def find_smallest_epsilon(self, tau, increment=0.001):
+        '''
+        Find the smallest epsilon such that the prediction set is finite
+        '''
+        epsilon = 0
+        while True:
+            prediction_set = self.predict_set(tau=tau, epsilon=epsilon)
+            if np.isfinite(prediction_set.width()):
+                return epsilon
+            epsilon += increment  # Increment epsilon by a small amount
 
     # These methods relate to when the cpd is used to predict sets
     @staticmethod
     def err(Gamma, y):
-        return int(not(Gamma[0] <= y <= Gamma[1]))
+        return int(not(y in Gamma))
     
 
     @staticmethod
     def width(Gamma):
-        return Gamma[1] - Gamma[0]
+        return Gamma.width()
     
 
 class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
@@ -729,7 +741,7 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
     
     def plot(self, tau=None):
         if tau is None:
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(sharex=True)
             ax.step(self.Y[1:], self.L, label=r'$\Pi(y, 0)$')
             ax.step(self.Y[1:], self.U, label=r'$\Pi(y, 1)$')
             ax.fill_between(self.Y[1:], self.L, self.U, step='pre', alpha=0.5, color='green')
@@ -738,7 +750,7 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
             fig, ax = plt.subplots()
             ax.step(self.Y[1:], (1 - tau) * self.L + tau * self.U, label=r'$\Pi(y, \tau)$')
             ax.legend()
-
+        fig.tight_layout()
         plt.close(fig)  # Prevent implicit display
         return fig
 

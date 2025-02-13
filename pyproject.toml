@@ -1,6 +1,6 @@
 [project]
 name = "online-cp"
-version = "0.0.1"
+version = "0.0.6"
 authors = [
 	{ name="Johan Hallberg Szabadvary", email="johan.hallberg.szabadvary@ju.se" },
 ]
@@ -9,6 +9,8 @@ readme = "README.md"
 dependencies = [
 	'numpy',
 	'scipy',
+	'joblib >= 1.4.2',
+	'matplotlib >= 3.10.0',
 ]
 classifiers = [
 	"Development Status :: 2 - Pre-Alpha",

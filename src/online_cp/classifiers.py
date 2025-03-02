@@ -21,6 +21,9 @@ class ConformalPredictionSet:
 
     def __str__(self):
         return str(self.elements)
+    
+    def size(self):
+        return self.__len__()
 
 class ConformalClassifier:
     '''
@@ -150,8 +153,7 @@ class ConformalClassifier:
             result['Cummulative OF'] = res[:, 1]
         
         return result
-    
-    
+
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
     """

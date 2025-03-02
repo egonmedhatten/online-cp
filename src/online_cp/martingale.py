@@ -2,8 +2,19 @@ import numpy as np
 from scipy.integrate import quad
 from scipy.optimize import minimize
 from scipy.special import betaln
+from scipy.spatial import KDTree
 from scipy.stats import beta, gaussian_kde, norm
+from scipy.integrate import quad
 import warnings
+
+
+class ConfromalTestMartingale:
+    '''
+    Parent class for conformal test martingales
+    '''
+    def __init__(self):
+        pass
+
 
 class PluginMartingale:
     '''
@@ -54,13 +65,17 @@ class PluginMartingale:
                 self.kernel_method = self.params.get("kernel_method", 'reflect') # 'reflect' or 'logit'
                 if self.kernel_method == 'logit':
                     self.edge_adjustment = self.params.get("edge_adjustment", 0.0)
-            self.bandwidth = self.params.get("bandwidth", 'silverman') # 'silverman' or 'scott'
+                self.bandwidth = self.params.get("bandwidth", 'silverman') # 'silverman' or 'scott'
+            elif self.kernel == 'beta':
+                self.C = self.params.get("C", 1)
 
         elif self.method == 'beta':
             # Default is not to bet
             self.ahat = 1
             self.bhat = 1
             self.beta_method = self.params.get("beta_method", 'moment')
+            if self.window_size is not None:
+                print('Parametric beta family can not use a roling window.') # FIXME: Perhaps a user warning instead
 
             if self.beta_method == 'moment':
                 # Initialise online statistics
@@ -90,12 +105,21 @@ class PluginMartingale:
     def M(self):
         return np.exp(self.logM)
     
-    def calculate_bandwidth(self, data, bw_mehtod='silverman', sigma=None):
+    @staticmethod
+    def calculate_bandwidth_gaussian(data, bw_mehtod='silverman', sigma=None):
         if bw_mehtod == 'silverman':
             assert sigma is not None
             h = ((4 * sigma**5) / (3 * data.size))**(1/5)
         else:
             raise NotImplementedError
+        return h
+
+    # TODO: Figure out if this is the best one. There are some hints in the paper
+    # FIXME: We should use the sample mean of sqrt(X(1-X)) for the enumerator...
+    @staticmethod
+    def calculate_bandwidth_beta(data, C, sigma=None):
+        assert sigma is not None
+        h = C * (sigma * data.size)**(-2/5)
         return h
     
     @property
@@ -138,15 +162,63 @@ class PluginMartingale:
             warnings.warn(f'Exchangeability assumption likely violated: Max martingale value is {self.max}')
 
 
-    # FIXME: b_n must be set to 0 outside the unit interval, and B_n must be 0 to the left, and 1 to the right...
     def kernel_betting_function(self, p):
         if self.kernel == 'gaussian':
             gain, b_n, B_n = self.kernel_gaussian_betting_function(p)
-            self.b_n = lambda x: self.mixing_parameter * b_n(x) + (1-self.mixing_parameter)
-            self.B_n = lambda x: self.mixing_parameter * B_n(x) + (1-self.mixing_parameter)*x
-            return self.mixing_parameter * gain + (1-self.mixing_parameter)
+        elif self.kernel == 'beta':
+            gain, b_n, B_n = self.kernel_beta_betting_function(p)
         else:
             raise NotImplementedError('There is currently only support for gaussian kernel')
+        assert not np.isnan(gain)
+        self.b_n = lambda x: self.mixing_parameter * b_n(x) + (1-self.mixing_parameter)
+        self.B_n = lambda x: self.mixing_parameter * B_n(x) + (1-self.mixing_parameter)*x
+        return self.mixing_parameter * gain + (1-self.mixing_parameter)
+
+
+    def _K(self, x, b, t):
+        if 2*b <= x <= 1-2*b:
+            return beta.pdf(t, x/b, (1-x)/b)
+        elif 0 <= x < 2*b:
+            return beta.pdf(t, self._rho(x, b), (1-x)/b)
+        elif 1 - 2*b < x <= 1:
+            return beta.pdf(t, x/b, self._rho(1-x, b))
+
+    @staticmethod
+    def _rho(x, b):
+        return 2*b**2 + 2.5 - np.sqrt(4*b**4 + 6*b**2 + 2.25 - x**2 - x/b)
+
+    def kernel_beta_betting_function(self, p):
+        if len(self.p_values) < 2:
+            b_n = lambda x: beta.pdf(x, 1, 1)
+            B_n = lambda x: beta.cdf(x, 1, 1)
+            return 1, b_n, B_n
+        else:
+            data = np.array(self.p_values)[-self.calculate_window_size():]
+            
+            sigma = data.std()
+
+            # FIXME: Is this reasonable? Maybe rather something very concentrated
+            if sigma == 0:
+                'If there is no variability: do not bet at all.'
+                b_n = lambda x: beta.pdf(x, 1, 1)
+                B_n = lambda x: beta.cdf(x, 1, 1)
+                return 1, b_n, B_n
+            
+            b = self.calculate_bandwidth_beta(data=data, C=self.C, sigma=sigma)
+            # b = min(self.calculate_bandwidth_beta_dev(data=data, debug=True), 0.25)
+
+            def kernel_pdf(x):
+                '''
+                Vectorized implementation of the kernel PDF.
+                '''
+                x = np.atleast_1d(x)
+                pdf_values = np.array([self._K(xi, b, data) for xi in x])
+                mean_pdf_values = np.mean(pdf_values, axis=1) if pdf_values.ndim > 1 else np.mean(pdf_values)
+                return mean_pdf_values.item() if mean_pdf_values.size == 1 else mean_pdf_values
+            
+            kernel_cdf = lambda x: np.clip(quad(kernel_pdf, 0, x)[0], a_min=0, a_max=1) # NOTE: This is slow, but an analytic solution may not even be possible
+
+        return kernel_pdf(p), kernel_pdf, np.vectorize(kernel_cdf)
 
     def kernel_gaussian_betting_function(self, p):
 
@@ -158,10 +230,10 @@ class PluginMartingale:
             data = np.array(self.p_values)[-self.calculate_window_size():]
             
             if self.kernel_method == 'reflect':
-                # kde = gaussian_kde(data, bw_method=self.bandwidth)
-                # h = kde.factor # The bandwidth
-
-                sigma = data.std()
+                
+                # NOTE: We could either use the standard deviation of the original data, or the augmented, reflected data.
+                # sigma = data.std()
+                sigma = np.array([data, 2-data, -data]).flatten().std()
 
                 # FIXME: Is this reasonable? Maybe rather something very concentrated
                 if sigma == 0:
@@ -170,7 +242,8 @@ class PluginMartingale:
                     B_n = lambda x: beta.cdf(x, 1, 1)
                     return 1, b_n, B_n
 
-                h = self.calculate_bandwidth(data=data, bw_mehtod=self.bandwidth, sigma=sigma)
+                # NOTE: This computes bandwidth for the original data, not including the reflected points.
+                h = self.calculate_bandwidth_gaussian(data=data, bw_mehtod=self.bandwidth, sigma=sigma)
 
                 # Ensure `x` works for both scalars and arrays
                 def kernel_pdf_raw(x):
@@ -226,7 +299,7 @@ class PluginMartingale:
                     return 1, b_n, B_n
 
 
-                h = self.calculate_bandwidth(data=data, bw_mehtod=self.bandwidth, sigma=sigma)
+                h = self.calculate_bandwidth_gaussian(data=data, bw_mehtod=self.bandwidth, sigma=sigma)
 
                 def kernel_pdf_transformed(x):
                     x = np.atleast_1d(x)  # Ensure x is an array
@@ -332,6 +405,59 @@ class PluginMartingale:
         self.log_sum_1_minus_x += np.log(1 - p)
 
         return beta.pdf(p, self.ahat, self.bhat)
+    
+class SimpleJumper:
+
+    def __init__(self, J=0.01, warning_level=100, warnings=True, **kwargs):
+        self.logM = 0.0
+        self.max = 1.0 # Keeps track of the maximum value so far.
+
+        self.p_values = []
+        self.log_martingale_values = [0.0] # NOTE: It may be better not to store the initial value...
+
+        self.warning_level = warning_level
+        self.warnings = warnings # Do we raise a user warning or not, when the warning level is reached
+
+        self.J = J
+
+        self.C_epsilon = {-1: 1/3, 0: 1/3, 1: 1/3}
+        self.C = 1
+
+        self.b_epsilon = lambda u, epsilon: 1 + epsilon*(u - 1/2)
+    
+    def update_martingale_value(self, p):
+        for epsilon in [-1, 0, 1]:
+            self.C_epsilon[epsilon] = (1 - self.J)*self.C_epsilon[epsilon] + (self.J / 3)*self.C
+            self.C_epsilon[epsilon] = self.C_epsilon[epsilon] * self.b_epsilon(p, epsilon)
+        self.C = self.C_epsilon[-1] + self.C_epsilon[0] + self.C_epsilon[1]
+        self.logM = np.log(self.C)
+        self.log_martingale_values.append(self.logM)
+
+        # Betting function
+        epsilon_bar = (self.C_epsilon[1] - self.C_epsilon[-1])/self.C
+        self.b_n = lambda u: 1 + epsilon_bar*(u - 1/2)
+        self.B_n = lambda u: (epsilon_bar/2) * u**2 + (1 - epsilon_bar/2)*u
+
+        if self.M > self.max:
+            self.max = self.M
+
+        if self.max >= self.warning_level and self.warnings:
+            # TODO: Figure out how to warn only once!
+            warnings.warn(f'Exchangeability assumption likely violated: Max martingale value is {self.max}')
+    
+    # TODO: These should live in a parent class
+    @property
+    def M(self):
+        return np.exp(self.logM)
+    
+    @property
+    def martingale_values(self):
+        return np.exp(self.log_martingale_values)
+    
+    @property
+    def log10_martingale_values(self):
+        return np.log10(self.martingale_values)
+
 
 if __name__ == "__main__":
     import doctest

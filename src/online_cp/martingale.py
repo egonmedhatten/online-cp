@@ -16,7 +16,7 @@ class ConfromalTestMartingale:
         pass
 
 
-class PluginMartingale:
+class PluginMartingale(ConfromalTestMartingale):
     '''
     A conformal test martingale to test exchangeability online.
     We reject exchangeability with confidence 1-1/alpha if we ever observe M >= alpha for any alpha>0
@@ -406,7 +406,7 @@ class PluginMartingale:
 
         return beta.pdf(p, self.ahat, self.bhat)
     
-class SimpleJumper:
+class SimpleJumper(ConfromalTestMartingale):
 
     def __init__(self, J=0.01, warning_level=100, warnings=True, **kwargs):
         self.logM = 0.0

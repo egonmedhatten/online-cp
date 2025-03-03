@@ -114,8 +114,7 @@ class PluginMartingale(ConfromalTestMartingale):
             raise NotImplementedError
         return h
 
-    # TODO: Figure out if this is the best one. There are some hints in the paper
-    # FIXME: We should use the sample mean of sqrt(X(1-X)) for the enumerator...
+    # FIXME: This is not very good...
     @staticmethod
     def calculate_bandwidth_beta(data, C, sigma=None):
         assert sigma is not None
@@ -133,7 +132,6 @@ class PluginMartingale(ConfromalTestMartingale):
     # FIXME Need some calibration...
     def calculate_window_size(self):
         if self.window_size == 'adaptive':
-            # FIXME DEFINITELY DO NOT WANT HARD CODED MIN SAMPLE SIZE
             window_param = np.log(1.001)
             min_size = self.min_sample_size
             max_size = len(self.p_values)

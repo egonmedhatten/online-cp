@@ -424,6 +424,10 @@ class SimpleJumper:
         self.C = 1
 
         self.b_epsilon = lambda u, epsilon: 1 + epsilon*(u - 1/2)
+
+        self.b_n = lambda x: 1
+        self.B_n = lambda x: x
+        self.B_n_inv = lambda x: x
     
     def update_martingale_value(self, p):
         for epsilon in [-1, 0, 1]:
@@ -437,6 +441,7 @@ class SimpleJumper:
         epsilon_bar = (self.C_epsilon[1] - self.C_epsilon[-1])/self.C
         self.b_n = lambda u: 1 + epsilon_bar*(u - 1/2)
         self.B_n = lambda u: (epsilon_bar/2) * u**2 + (1 - epsilon_bar/2)*u
+        self.B_n_inv = lambda u: (epsilon_bar - 2) / (2*epsilon_bar) + np.sqrt(epsilon_bar*(8*u + epsilon_bar - 4) + 4) / (2*epsilon_bar)
 
         if self.M > self.max:
             self.max = self.M

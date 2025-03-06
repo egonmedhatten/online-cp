@@ -430,6 +430,7 @@ class SimpleJumper:
         self.B_n_inv = lambda x: x
     
     def update_martingale_value(self, p):
+        self.p_values.append(p)
         for epsilon in [-1, 0, 1]:
             self.C_epsilon[epsilon] = (1 - self.J)*self.C_epsilon[epsilon] + (self.J / 3)*self.C
             self.C_epsilon[epsilon] = self.C_epsilon[epsilon] * self.b_epsilon(p, epsilon)

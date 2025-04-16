@@ -196,10 +196,12 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         toc_update_XTXinv = time.time() - tic
 
         tic = time.time()
+
         H = X @ XTXinv @ X.T
         h = H.diagonal()
-        A = np.dot(H[-1, :-1], y) / np.sqrt(1 - h[-1])  + (y - H[:-1, :-1] @ y) / np.sqrt(1 - h[:-1])
-        B = np.sqrt(1 - h[-1]) * np.ones(n-1) + H[-1, :-1] / np.sqrt(1 - h[:-1])
+        sqrt_one_minus_h = np.sqrt(1 - h[:-1])
+        A = np.dot(H[-1, :-1], y) / np.sqrt(1 - h[-1])  + (y - H[:-1, :-1] @ y) / sqrt_one_minus_h
+        B = np.sqrt(1 - h[-1]) * np.ones(n-1) + H[-1, :-1] / sqrt_one_minus_h
         C = np.zeros(n + 1)
         C[1:-1] = A / B
         C[0] = -np.inf
@@ -216,7 +218,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         # C[-1] = np.inf
         # C.sort()
 
-        toc_compute_C = time.time()
+        toc_compute_C = time.time() - tic
 
         time_dict = {
             'Update hat matrix': toc_update_XTXinv,

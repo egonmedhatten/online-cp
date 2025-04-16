@@ -68,6 +68,7 @@ class PluginMartingale(ConfromalTestMartingale):
                 self.bandwidth = self.params.get("bandwidth", 'silverman') # 'silverman' or 'scott'
             elif self.kernel == 'beta':
                 self.C = self.params.get("C", 1)
+                self.bandwidth = self.params.get("bandwidth", 1.0)
 
         elif self.method == 'beta':
             # Default is not to bet
@@ -202,8 +203,10 @@ class PluginMartingale(ConfromalTestMartingale):
                 B_n = lambda x: beta.cdf(x, 1, 1)
                 return 1, b_n, B_n
             
-            b = self.calculate_bandwidth_beta(data=data, C=self.C, sigma=sigma)
+            # b = self.calculate_bandwidth_beta(data=data, C=self.C, sigma=sigma)
             # b = min(self.calculate_bandwidth_beta_dev(data=data, debug=True), 0.25)
+
+            b = self.bandwidth
 
             def kernel_pdf(x):
                 '''
@@ -422,8 +425,13 @@ class SimpleJumper(ConfromalTestMartingale):
         self.C = 1
 
         self.b_epsilon = lambda u, epsilon: 1 + epsilon*(u - 1/2)
+
+        self.b_n = lambda x: 1
+        self.B_n = lambda x: x
+        self.B_n_inv = lambda x: x
     
     def update_martingale_value(self, p):
+        self.p_values.append(p)
         for epsilon in [-1, 0, 1]:
             self.C_epsilon[epsilon] = (1 - self.J)*self.C_epsilon[epsilon] + (self.J / 3)*self.C
             self.C_epsilon[epsilon] = self.C_epsilon[epsilon] * self.b_epsilon(p, epsilon)
@@ -435,6 +443,7 @@ class SimpleJumper(ConfromalTestMartingale):
         epsilon_bar = (self.C_epsilon[1] - self.C_epsilon[-1])/self.C
         self.b_n = lambda u: 1 + epsilon_bar*(u - 1/2)
         self.B_n = lambda u: (epsilon_bar/2) * u**2 + (1 - epsilon_bar/2)*u
+        self.B_n_inv = lambda u: (epsilon_bar - 2) / (2*epsilon_bar) + np.sqrt(epsilon_bar*(8*u + epsilon_bar - 4) + 4) / (2*epsilon_bar)
 
         if self.M > self.max:
             self.max = self.M

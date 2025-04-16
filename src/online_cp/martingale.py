@@ -68,6 +68,7 @@ class PluginMartingale:
                 self.bandwidth = self.params.get("bandwidth", 'silverman') # 'silverman' or 'scott'
             elif self.kernel == 'beta':
                 self.C = self.params.get("C", 1)
+                self.bandwidth = self.params.get("bandwidth", 1.0)
 
         elif self.method == 'beta':
             # Default is not to bet
@@ -204,8 +205,10 @@ class PluginMartingale:
                 B_n = lambda x: beta.cdf(x, 1, 1)
                 return 1, b_n, B_n
             
-            b = self.calculate_bandwidth_beta(data=data, C=self.C, sigma=sigma)
+            # b = self.calculate_bandwidth_beta(data=data, C=self.C, sigma=sigma)
             # b = min(self.calculate_bandwidth_beta_dev(data=data, debug=True), 0.25)
+
+            b = self.bandwidth
 
             def kernel_pdf(x):
                 '''

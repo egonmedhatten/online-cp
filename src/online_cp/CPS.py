@@ -846,8 +846,15 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
         self.Y = Y
 
         self.time_dict = time_dict
-
-        self.y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
+        
+        Y_temp = Y[np.isfinite(Y)]
+        self.y_vals = np.array(
+            sorted(
+                [-np.inf, np.inf] + 
+                Y_temp.tolist() + 
+                (Y_temp + MACHINE_EPSILON(Y_temp)).tolist() + 
+                (Y_temp - MACHINE_EPSILON(Y_temp)).tolist())
+        )
         self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
         self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
 

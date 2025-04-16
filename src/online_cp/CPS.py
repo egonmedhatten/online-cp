@@ -208,6 +208,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         C[-1] = np.inf
         C.sort()
 
+
         # NOTE: Keep the loop version for a bit, if we run into problems...
         # C = np.empty(n+1)
         # for i in range(n - 1):
@@ -231,8 +232,158 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
             return cpd, build_precomputed(X, XTXinv, C)
         else:
             return cpd
+    
+
+class KernelRidgePredictionMachine(ConformalPredictiveSystem):
+    '''
+        This conformal predictive system uses the "studentised residuals as conformity measure.
+        Algorithm 7,3 in Algorithmic Learning in a Random World 2nd edition.
+    '''
+
+    def __init__(self, kernel, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None):
+
+        self.kernel = kernel
+
+        self.a = a
+        self.X = None
+        self.y = None
+        
+
+        # Should we raise warnings
+        self.warnings = warnings
+        # Do we autotune ridge prarmeter on warning
+        self.autotune = autotune
+
+        self.verbose = verbose
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+    def learn_initial_training_set(self, X, y):
+        self.X = X
+        self.y = y
+        Id = np.identity(self.X.shape[0])
+       
+        self.K = self.kernel(self.X)
+        self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        self.H = self.K @ self.Kinv
 
 
+    def _update_Kinv(self, Kinv, k, d):
+        # print(f'K: {K}')
+        # print(f'k: {k}')
+        # print(f'kappa: {kappa}')
+        return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [ -d * k.T @ Kinv, d]])
+
+
+    @staticmethod
+    def _update_K(K, k, kappa):
+        # print(f'K: {K}')
+        # print(f'k: {d}')
+        # print(f'kappa: {kappa}')
+        return np.block([[K, k], [k.T, kappa]])
+
+
+    def learn_one(self, x, y, precomputed=None):
+        '''
+        Learn a single example
+        '''
+
+        # # TEST DUMB UPDATE
+        # self.y = np.append(self.y, y)
+        # self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+        # Id = np.identity(self.X.shape[0])
+       
+        # self.K = self.kernel(self.X)
+        # self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        # self.H = self.K @ self.Kinv
+
+        x = np.atleast_2d(x)
+        # Learn label y
+        if self.y is None:
+            self.y = np.array([y])
+        else:
+            self.y = np.append(self.y, y)
+        
+        if precomputed is not None:
+            self.H = precomputed['H']
+            self.K = self._update_K(self.K, precomputed['k'], precomputed['kappa'])
+            self.Kinv = self._update_Kinv(self.Kinv, precomputed['k'], precomputed['d'])
+            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+        else:
+            if self.X is None:
+                self.X = x.reshape(1,-1)
+                Id = np.identity(self.X.shape[0])
+                self.K = self.kernel(self.X)
+                self.Kinv = np.linalg.inv(self.K + self.a * Id)
+                self.H = self.K @ self.Kinv
+            else:
+                k = self.kernel(self.X, x).reshape(-1, 1)
+                kappa = self.kernel(x, x)
+                d = 1 / (kappa + self.a - k.T @ self.Kinv @ k)
+                y = self.y
+                self.H = np.block([
+                    [
+                        self.H - self.a * d * self.Kinv @ k @ k.T @ self.Kinv, 
+                        self.a * d * self.Kinv @ k
+                    ], 
+                    [
+                        self.a * d * k.T @ self.Kinv, 
+                        d * kappa - d*k.T @ self.Kinv @ k
+                        ]
+                    ]
+                    )
+                self.K = self._update_K(self.K, k, kappa)
+                self.Kinv = self._update_Kinv(self.Kinv, k, d)
+                self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+    
+    def predict_cpd(self, x, return_update=False, save_time=False):
+        
+        def build_precomputed(H, k, kappa, d):
+            computed = {
+                'H': H,
+                'k': k,
+                'kappa': kappa,
+                'd': d,
+            } 
+            return computed
+        x = np.atleast_2d(x)        
+        # Temporarily update kernel matrix
+        k = self.kernel(self.X, x).reshape(-1, 1)
+        kappa = self.kernel(x, x)
+        d = 1 / (kappa + self.a - k.T @ self.Kinv @ k)
+        y = self.y
+        H = np.block([
+            [
+                self.H - self.a * d * self.Kinv @ k @ k.T @ self.Kinv, 
+                self.a * d * self.Kinv @ k
+             ], 
+             [
+                self.a * d * k.T @ self.Kinv, 
+                d * kappa - d*k.T @ self.Kinv @ k
+                ]
+            ]
+            )
+        
+        n = H.shape[0]
+
+        h = H.diagonal()
+        sqrt_one_minus_h = np.sqrt(1 - h[:-1])
+        A = np.dot(H[-1, :-1], y) / np.sqrt(1 - h[-1])  + (y - H[:-1, :-1] @ y) / sqrt_one_minus_h
+        B = np.sqrt(1 - h[-1]) * np.ones(n-1) + H[-1, :-1] / sqrt_one_minus_h
+
+        
+        C = np.zeros(n + 1)
+        C[1:-1] = A / B
+        C[0] = -np.inf
+        C[-1] = np.inf
+        C.sort()
+
+        time_dict = None
+        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict)
+
+        if return_update:
+            return cpd, build_precomputed(H, k, kappa, d)
+        else:
+            return cpd
 
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 

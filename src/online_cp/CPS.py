@@ -155,6 +155,9 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         def GCV(a):
             try:
                 A = self.X @ np.linalg.inv(XTX + a*self.Id) @ self.X.T
+                max_diag_H = np.max(np.diag(A))  # Maximum diagonal element of the hat matrix
+                if max_diag_H > 1:
+                    return np.inf 
                 return (1/n)*np.linalg.norm((In - A) @ self.y)**2 / ((1/n)* np.trace(In- A))**2
             except (np.linalg.LinAlgError, ZeroDivisionError):
                 return np.inf
@@ -261,11 +264,58 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         self.X = X
         self.y = y
         Id = np.identity(self.X.shape[0])
-       
         self.K = self.kernel(self.X)
-        self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        if self.autotune:
+            self._tune_ridge_parameter()
+        else:
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
         self.H = self.K @ self.Kinv
 
+    def _tune_ridge_parameter(self, a0=None):
+        '''
+        Tune ridge parameter with Generalized Cross Validation (GCV) in the kernel space.
+        '''
+        n = self.K.shape[0]
+        In = np.identity(n)
+
+        def GCV(a):
+            try:
+                A = self.K @ np.linalg.inv(self.K + a * In)
+                max_diag_H = np.max(np.diag(A))  # Maximum diagonal element of the hat matrix
+                if max_diag_H > 1:
+                    return np.inf 
+                return (1 / n) * np.linalg.norm((In - A) @ self.y) ** 2 / ((1 / n) * np.trace(In - A)) ** 2
+            except (np.linalg.LinAlgError, ZeroDivisionError):
+                return np.inf
+
+        # Initial guess
+        if a0 is None:
+            a0 = 1e-6  # Small perturbation to avoid numerical issues
+
+        # Bounds to ensure a >= 0
+        res = minimize(GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True))
+        a = res.x[0]
+
+        if self.verbose > 0:
+            print(f'New ridge parameter: {a}')
+        self.change_ridge_parameter(a)
+
+    def change_ridge_parameter(self, a):
+        '''
+        Change the ridge parameter
+        >>> cps = RidgePredictionMachine()
+        >>> cps.learn_one(np.array([1,0]), 1)
+        >>> cps.change_ridge_parameter(1)
+        >>> cps.a
+        1
+        '''
+        self.a = a
+        if self.X is not None:
+            Id = np.identity(self.X.shape[0])
+       
+            self.K = self.kernel(self.X)
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+            self.H = self.K @ self.Kinv
 
     def _update_Kinv(self, Kinv, k, d):
         # print(f'K: {K}')
@@ -375,6 +425,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         C[1:-1] = A / B
         C[0] = -np.inf
         C[-1] = np.inf
+        assert not np.isnan(C).any(), "C contains NaN values"
         C.sort()
 
         time_dict = None

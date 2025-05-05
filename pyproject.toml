@@ -20,8 +20,8 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage"    = "https://github.com/egonmedhatten/OnlineConformalPrediction"
-"Bug Tracker" = "https://github.com/egonmedhatten/OnlineConformalPrediction/issues"
+"Homepage"    = "https://github.com/egonmedhatten/online-cp"
+"Bug Tracker" = "https://github.com/egonmedhatten/online-cp/issues"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

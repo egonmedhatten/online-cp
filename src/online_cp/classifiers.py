@@ -4,6 +4,8 @@ import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 from joblib import Parallel, delayed
 
+default_epsilon = 0.1
+
 class ConformalPredictionSet:
 
     def __init__(self, Gamma:np.array, epsilon):
@@ -30,11 +32,12 @@ class ConformalClassifier:
     Parent class for classifiers
     '''
 
-    def __init__(self):
+    def __init__(self, epsilon=default_epsilon):
         self.Err = 0
         # Preferred efficiency criteria (See Protocol 3.1 ALRW)
         self.OE = 0
         self.OF = 0
+        self.epsilon = epsilon
 
 
     @staticmethod
@@ -178,8 +181,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
     # TODO Write tests
 
-    def __init__(self, k=1, label_space=np.array([-1, 1]), distance='euclidean', distance_func=None, verbose=0, rnd_state=None, n_jobs=None):
-        super().__init__()
+    def __init__(self, k=1, label_space=np.array([-1, 1]), distance='euclidean', distance_func=None, verbose=0, rnd_state=None, n_jobs=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
         self.label_space = label_space
 
         self.k = k
@@ -271,9 +274,12 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
 
-    def predict(self, x, epsilon=0.1, return_p_values=False, return_update=False, verbose=0):
+    def predict(self, x, epsilon=None, return_p_values=False, return_update=False, verbose=0):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
+
+        if epsilon is None:
+            epsilon = self.epsilon
 
         if self.y.shape[0] >= 1: 
             tic = time.time()

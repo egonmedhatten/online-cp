@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar, minimize, Bounds
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
+
+default_epsilon = 0.1
+
+
 def get_ConformalPredictionInterval():
     from .regressors import ConformalPredictionInterval  # Lazy import
     return ConformalPredictionInterval
@@ -15,10 +19,14 @@ class ConformalPredictiveSystem:
     Parent class for conformal predictive systems. Unclear if some methods are common to all, so perhaps we don't need it.
     '''
 
+    def __init__(self, epsilon=default_epsilon):
+        self.epsilon = epsilon
+
 class RidgePredictionMachine(ConformalPredictiveSystem):
     'This conformal predictive system uses the "studentised residuals as conformity measure'
 
-    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None):
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
         self.a = a
         self.X = None
         self.y = None
@@ -229,7 +237,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
             'Compute C': toc_compute_C
         }
         time_dict = time_dict if save_time else None
-        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict)
+        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict, epsilon=self.epsilon)
 
         if return_update:
             return cpd, build_precomputed(X, XTXinv, C)
@@ -243,7 +251,8 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         Algorithm 7,3 in Algorithmic Learning in a Random World 2nd edition.
     '''
 
-    def __init__(self, kernel, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None):
+    def __init__(self, kernel, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
 
         self.kernel = kernel
 
@@ -429,7 +438,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         C.sort()
 
         time_dict = None
-        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict)
+        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict, epsilon=self.epsilon)
 
         if return_update:
             return cpd, build_precomputed(H, k, kappa, d)
@@ -438,7 +447,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
 
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
-    def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=None):
+    def __init__(self, k, distance='euclidean', distance_func=None, warnings=True, verbose=0, rnd_state=None, epsilon=default_epsilon):
         '''
         Consider adding possibility to update self.k as the training set grows, e.g. by some heuristic or something.
         Two rules of thumb are quite simple:
@@ -446,6 +455,8 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             2. If the data has large variance, choose k larger. If the variance is small, choose k smaller. This is less clear, however.
         '''
         # TODO: The sorting of conformity scores is the most time consuming step. Can it be done with parallel processing to speed things up?
+        super().__init__(epsilon=epsilon)
+
         self.k = k
 
         self.distance = distance
@@ -692,7 +703,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         }
         time_dict = time_dict if save_time else None
         # Line 12
-        cpd = NearestNeighboursPredictiveDistributionFunction(L, U, Y, time_dict)
+        cpd = NearestNeighboursPredictiveDistributionFunction(L, U, Y, time_dict, epsilon=self.epsilon)
 
         if return_update:
             X = np.append(self.X, x.reshape(1, -1), axis=0)
@@ -703,10 +714,11 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
 class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
 
-    def __init__(self, verbose=0, rnd_state=None):
+    def __init__(self, verbose=0, rnd_state=None, epsilon=default_epsilon):
         '''
         The Dempster-Hill conformal predictive system uses only the labels of the examples, so the latter can be ignored.
         '''
+        super().__init__(epsilon=epsilon)
         self.y = None
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
@@ -728,7 +740,7 @@ class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
 
         time_dict = {'Sort labels': time_sort} if save_time else None
 
-        return DempsterHillConformalPredictiveDistribution(Y, time_dict)
+        return DempsterHillConformalPredictiveDistribution(Y, time_dict, epsilon=self.epsilon)
 
 
 class ConformalPredictiveDistributionFunction:
@@ -739,15 +751,21 @@ class ConformalPredictiveDistributionFunction:
     prediction set. We can take quantiles and so on.
     '''
 
+    def __init__(self, epsilon=default_epsilon):
+        self.epsilon=epsilon
+
     def quantile(self, p, tau=None):
         raise NotImplementedError('Parent class has no quantile function')
 
 
-    def predict_set(self, tau, epsilon=0.1, bounds='both', minimise_width=False):
+    def predict_set(self, tau, epsilon=None, bounds='both', minimise_width=False):
         '''
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
         '''
+        if epsilon is None:
+            epsilon = self.epsilon
+
         if minimise_width:
             if bounds != 'both':
                 raise Exception('bounds must be "both" if we are to minimise the interval width')
@@ -805,7 +823,8 @@ class ConformalPredictiveDistributionFunction:
 
 class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
 
-    def __init__(self, C, time_dict=None):
+    def __init__(self, C, time_dict=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
         self.C = C
         self.L = np.array([self.__call__(y, 0) for y in self.C])
         self.U = np.array([self.__call__(y, 1) for y in self.C])
@@ -891,7 +910,8 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
     TODO: Write tests
     '''
     # NOTE: It would be possible to pass a protection function here...
-    def __init__(self, L, U, Y, time_dict=None):
+    def __init__(self, L, U, Y, time_dict=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
         self.L = L 
         self.U = U
         self.Y = Y
@@ -971,7 +991,8 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
 
 class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributionFunction):
 
-    def __init__(self, Y, time_dict=None):
+    def __init__(self, Y, time_dict=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
         self.Y = Y
         self.time_dict = time_dict
 

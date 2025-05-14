@@ -7,6 +7,8 @@ from scipy.spatial.distance import pdist, cdist, squareform
 
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
+default_epsilon = 0.1
+
 # FIXME: The p-values for all regressors should be modified. We should be able to compute the upper, lower, and combined p-value
 
 class ConformalPredictionInterval:
@@ -33,8 +35,8 @@ class ConformalRegressor:
     Parent class for the different ridge regressors. Holds common methods
     '''
 
-    def __init__(self):
-        pass
+    def __init__(self, epsilon=default_epsilon):
+        self.epsilon = epsilon
     
 
     '''
@@ -170,7 +172,9 @@ class ConformalRegressor:
     def width(Gamma):
         return Gamma.width()
     
-    def process_dataset(self, X, y, epsilon=0.1, init_train=0, return_results=False):
+    def process_dataset(self, X, y, epsilon=None, init_train=0, return_results=False):
+        if epsilon is None:
+            epsilon = self.epsilon
 
         Err = 0
         Width = 0
@@ -245,7 +249,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     Predict an object (output may not be exactly the same, as the dataset
     depends on the random seed):
-    >>> interval = cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds='both')
+    >>> interval = cp.predict(np.array([0.5, 0.5]), bounds='both')
     >>> print("(%.2f, %.2f)" % (interval.lower, interval.upper))
     (0.73, 1.23)
 
@@ -257,18 +261,19 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     We can then predict again:
 
-    >>> interval = cp.predict(np.array([2,4]), epsilon=0.1, bounds='both')
+    >>> interval = cp.predict(np.array([2,4]), bounds='both')
     >>> print("(%.2f, %.2f)" % (interval.lower, interval.upper))
     (5.39, 6.33)
     '''
     # TODO: Fix gracefull error handling when the matrix is singular. It should raise an exception, but we could
     #       specify that it can be handled by changing the ridge parameter.
 
-    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False):
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon):
         '''
         The ridge parameter (L2 regularisation) is a.
         Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
         '''
+        super().__init__(epsilon=epsilon)
         
         self.a = a
         self.X = None
@@ -382,7 +387,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         return A, B
     
 
-    def predict(self, x, epsilon=0.1, bounds='both', return_update=False, debug_time=False):
+    def predict(self, x, epsilon=None, bounds='both', return_update=False, debug_time=False):
         """
         This function makes a prediction.
 
@@ -391,7 +396,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         -infinity and +infinity.
 
         >>> cp = ConformalRidgeRegressor()
-        >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
+        >>> cp.predict(np.array([0.506, 0.22, -0.45]), bounds='both')
         (-inf, inf)
         """
         def build_precomputed(X, XTXinv, A, B):
@@ -402,6 +407,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 'B': B,
             } 
             return computed
+
+        if epsilon is None:
+            epsilon = self.epsilon
 
         if self._safe_size_check(self.X) > 0:
 
@@ -608,12 +616,14 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
     # TODO Add doctests to methods where applicable
 
-    def __init__(self, kernel, a=0, warnings=True, verbose=0, rnd_state=None):
+    def __init__(self, kernel, a=0, warnings=True, verbose=0, rnd_state=None, epsilon=default_epsilon):
         '''
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is 
         also compatible with (most) kernels from e.g. scikit-learn.
         Custom kernels can also be passed as callable functions.
         '''
+        super().__init__(epsilon=epsilon)
+
         self.a = a
         self.X = None
         self.y = None
@@ -720,7 +730,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         return A, B
     
     
-    def predict(self, x, epsilon=0.1, bounds='both', return_update=False, debug_time=False):
+    def predict(self, x, epsilon=None, bounds='both', return_update=False, debug_time=False):
         """
         This function makes a prediction.
 
@@ -731,7 +741,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         TODO Add possibility to learn object to save time
 
         >>> cp = ConformalRidgeRegressor()
-        >>> cp.predict(np.array([0.506, 0.22, -0.45]), epsilon=0.1, bounds='both')
+        >>> cp.predict(np.array([0.506, 0.22, -0.45]), bounds='both')
         (-inf, inf)
         """
         def build_precomputed(X, K, Kinv, A, B):
@@ -743,6 +753,9 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 'B': B,
             } 
             return computed
+
+        if epsilon is None:
+            epsilon = self.epsilon
         
         if self.X is not None:
 
@@ -931,7 +944,8 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
 class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
-    def __init__(self, k, distance='euclidean', distance_func=None, aggregation_method='mean', warnings=True, verbose=0, rnd_state=None):
+    def __init__(self, k, distance='euclidean', distance_func=None, aggregation_method='mean', warnings=True, verbose=0, rnd_state=None, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
         
         self.k = k
         self.distance = distance
@@ -1009,7 +1023,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.D = precomputed['D']
     
 
-    def predict(self, x, epsilon=0.1, bounds='both', return_update=False, debug_time=False):
+    def predict(self, x, epsilon=None, bounds='both', return_update=False, debug_time=False):
 
         def build_precomputed(X, D, A, B):
             computed = {
@@ -1019,6 +1033,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 'B': B
             }
             return computed
+
+        if epsilon is None:
+            epsilon = self.epsilon
         
         if self._safe_size_check(self.X) > self.k:
 
@@ -1232,7 +1249,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 if __name__ == "__main__":
     import doctest
     import sys
-    (failures, _) = doctest.testmod()
+    (failures, _) = doctest.testmod(optionflags=doctest.REPORT_ONLY_FIRST_FAILURE) # XXX: DO NOT COMMIT ME!!!!!!!!!!!!!!!!!!!!!!
     if failures:
         sys.exit(1)
 

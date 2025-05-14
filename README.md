@@ -27,12 +27,12 @@ Import the library and create a regressor:
 
 ```py
 from online_cp import ConformalRidgeRegressor
-cp = ConformalRidgeRegressor()
+cp = ConformalRidgeRegressor(epsilon=0.1)
 ```
 
 To predict, simply do
 ```py
-cp.predict(X[0], epsilon=0.1)
+cp.predict(X[0])
 (-inf, inf)
 ```
 The output is non-informative since we have not learned anything yet. The parameter `epsilon` is the significance level.
@@ -40,12 +40,12 @@ The output is non-informative since we have not learned anything yet. The parame
 Alternative 1: Learn the dataset sequentially online, and make predictions as we go. In order to output nontrivial prediction at significance level `epsilon=0.1`, we need to have learned at least 20 examples.
 ```py
 for x, y in zip(X[-1], Y[-1]):
-    print(f'Prediction set: {cp.predict(x, epsilon=0.1)}')
+    print(f'Prediction set: {cp.predict(x)}')
     cp.learn_one(x, y)
 ```
 In the online setting, we first observe the object $x$, which is used to make a prediction, only then to observe the label $y$. The output will be ```(inf, inf)``` for the first 19 predictions, after which we will typically see meaningful prediction sets. The snippet above learned all but the last example. To predict it, do (your output may not be exactly the same, as the dataset depends on the random seed).
 ```py
-cp.predict(X[-1], epsilon=0.1)
+cp.predict(X[-1])
 (0.029643344144500712, 0.34909922671253196)
 ```
 The prediction set is the closed interval whose boundaries are indicated by the output.
@@ -54,7 +54,7 @@ Alternative 2: Learn an initial training set offline, and predict e.g. only the 
 ```py
 cp = ConformalRidgeRegressor()
 cp.learn_initial_training_set(X[:-1], Y[:-1])
-cp.predict(X[-1], epsilon=0.1)
+cp.predict(X[-1])
 (0.8748194061248175, 1.3357383729107446)
 ```
 Furhter examples can be found in the notebooks, e.g. [`example.ipynb`](example.ipynb). Current functionality includes

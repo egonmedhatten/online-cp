@@ -371,6 +371,7 @@ class WinklerScore(EfficiencyCriterion):
         Returns:
         float: WinklerScore value.
         """
+        epsilon = Gamma.epsilon
         self.n += 1
         try:
             assert Gamma.upper < np.inf

@@ -12,3 +12,4 @@ src/oncp.egg-info/
 src/online_cp.egg-info/
 *.sh
 work_in_progress/
+plots/

@@ -114,7 +114,8 @@ class GaussianKDE(BettingStrategy):
             cdf = lambda x: beta.cdf(x, 1, 1)
         else:
             data = np.array(p_values)[-self.calculate_window_size(p_values):]
-            sigma = np.array([data, 2 - data, -data]).flatten().std()
+            # sigma = np.array([data, 2 - data, -data]).flatten().std()
+            sigma = np.array(data).std()
             if sigma == 0:
                 # If there is no variability: do not bet at all.
                 pdf = lambda x: beta.pdf(x, 1, 1)

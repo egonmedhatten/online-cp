@@ -118,6 +118,29 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                     rank_deficient = not(self.check_matrix_rank(self.XTXinv))
 
 
+    def fit(self, X, y):
+        '''
+        Compatibility layer over learn_initial_training_set and learn_one.
+        >>> cps = RidgePredictionMachine()
+        >>> cps.fit(np.array([1,0]), 1)
+        >>> cps.X
+        array([[1, 0]])
+        >>> cps.y
+        array([1])
+        '''
+        try: # check for iterability
+            _ = iter(y)
+        except TypeError: # not iterable
+            self.learn_one(X,y)
+        else: # iterable
+            # use learn_initial_training_set or learn_one accordingly
+            if self.y is None:
+                self.learn_initial_training_set(self, X, y)
+            else:
+                for x1, y1 in zip(X, y):
+                    self.learn_one(x1,y1)
+
+
     def change_ridge_parameter(self, a):
         '''
         Change the ridge parameter

@@ -370,6 +370,55 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 if self.warnings:
                     rank_deficient = not(self.check_matrix_rank(self.XTXinv))
 
+    def fit(self, X, y):
+        '''
+        Let's create a dataset with noisy evaluations of the function f(x1,x2) = x1+x2:
+
+        >>> import numpy as np
+        >>> np.random.seed(31337) # only needed for doctests
+        >>> N = 30
+        >>> X = np.random.uniform(0, 1, (N, 2))
+        >>> y = X.sum(axis=1) + np.random.normal(0, 0.1, N)
+
+        Import the library and create a regressor:
+
+        >>> cp = ConformalRidgeRegressor()
+
+        Learn the whole dataset:
+
+        >>> cp.fit(X, y)
+
+        TODO: error above, somehow X or y are being unpacked along the way?
+
+        Predict an object (output may not be exactly the same, as the dataset
+        depends on the random seed):
+        >>> interval = cp.predict(np.array([0.5, 0.5]), bounds='both')
+        >>> print("(%.2f, %.2f)" % (interval.lower, interval.upper))
+        (0.73, 1.23)
+
+        You can of course learn a new data point online:
+
+        >>> cp.fit(np.array([0.5, 0.5]), 1.0)
+
+        The prediction set is the closed interval whose boundaries are indicated by the output.
+
+        We can then predict again:
+
+        >>> interval = cp.predict(np.array([2,4]), bounds='both')
+        >>> print("(%.2f, %.2f)" % (interval.lower, interval.upper))
+        (5.39, 6.33)
+        '''
+        try: # check for iterability
+            _ = iter(y)
+        except TypeError: # not iterable
+            self.learn_one(X,y)
+        else: # iterable
+            # use learn_initial_training_set or learn_one accordingly
+            if self.y is None:
+                self.learn_initial_training_set(self, X, y) # ERROR: implicit unpacking?
+            else:
+                for x1, y1 in zip(X, y):
+                    self.learn_one(x1,y1)
 
     
     def compute_A_and_B(self, X, XTXinv, y):

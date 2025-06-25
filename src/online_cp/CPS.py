@@ -22,6 +22,10 @@ class ConformalPredictiveSystem:
     def __init__(self, epsilon=default_epsilon):
         self.epsilon = epsilon
 
+    def learn_many(self, X, y):
+        for x1, y1 in zip(X, y):
+            self.learn_one(x1,y1)
+
 class RidgePredictionMachine(ConformalPredictiveSystem):
     'This conformal predictive system uses the "studentised residuals as conformity measure'
 

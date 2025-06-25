@@ -172,6 +172,12 @@ class ConformalRegressor:
     def width(Gamma):
         return Gamma.width()
     
+
+    def learn_many(self, X, y):
+        for x1, y1 in zip(X, y):
+            self.learn_one(x1,y1)
+
+    
     def process_dataset(self, X, y, epsilon=None, init_train=0, return_results=False):
         if epsilon is None:
             epsilon = self.epsilon

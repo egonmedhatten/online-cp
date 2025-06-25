@@ -96,6 +96,10 @@ class ConformalClassifier:
                 of += p
         self.OF += of
         return of
+    
+    def learn_many(self, X, y):
+        for x1, y1 in zip(X, y):
+            self.learn_one(x1,y1)
 
     # TEST
     def process_dataset(self, X, y, epsilon=0.1, init_train=0, return_results=False):

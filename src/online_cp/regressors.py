@@ -378,7 +378,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
 
     
-    def compute_A_and_B(self, X, XTXinv, y):
+    def compute_A_and_B_OLD(self, X, XTXinv, y):
         n = X.shape[0]
         # Hat matrix (This block is the time consuming one...)
         H = X @ XTXinv @ X.T
@@ -390,6 +390,38 @@ class ConformalRidgeRegressor(ConformalRegressor):
             A = A / np.sqrt(1 - h)
             B = B / np.sqrt(1 - h)
         # Nonconformity scores are A + yB = y - yhat
+        return A, B
+    
+    def compute_A_and_B(self, X, XTXinv, y):
+        """
+        Efficient and correct computation of A and B for conformal ridge regression.
+        X: (n, d) augmented matrix (last row is test object)
+        XTXinv: (d, d) inverse of X.T @ X + a*I for augmented X
+        y: (n-1,) training labels (no test label)
+        """
+        y_ext = np.append(y, 0)  # y with test point (last row) as 0
+
+        # Compute beta using the augmented X and y_ext (just like the old code)
+        beta = XTXinv @ X.T @ y_ext  # (d, d) @ (d, n) @ (n,) -> (d,)
+
+        # Fitted values for all points (including test)
+        y_hat = X @ beta  # (n, d) @ (d,) -> (n,)
+
+        # Compute hat matrix diagonal for all points using XTXinv (augmented)
+        H_diag = np.sum(X @ XTXinv * X, axis=1)  # (n,)
+
+        # Compute last column of H efficiently
+        h_col = X @ XTXinv @ X[-1]  # (n, d) @ (d,) -> (n,)
+
+        # A and B for each point
+        A = y_ext - y_hat
+        B = -h_col
+        B[-1] += 1  # e_{-1}[-1] = 1
+
+        if self.studentised:
+            A = A / np.sqrt(1 - H_diag + 1e-12)
+            B = B / np.sqrt(1 - H_diag + 1e-12)
+
         return A, B
     
 
@@ -1255,7 +1287,51 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 if __name__ == "__main__":
     import doctest
     import sys
+
     (failures, _) = doctest.testmod(optionflags=doctest.REPORT_ONLY_FIRST_FAILURE) # XXX: DO NOT COMMIT ME!!!!!!!!!!!!!!!!!!!!!!
     if failures:
         sys.exit(1)
 
+        
+
+    def test_equivalence_of_A_and_B():
+        """
+        Test that compute_A_and_B_OLD and compute_A_and_B return (almost) identical results.
+        Test on the California Housing dataset, rather than synthetic data.
+        """
+        # np.random.seed(42)
+        # n, d = 10, 3
+        # X = np.random.randn(n, d)
+        # y = np.random.randn(n-1)
+
+        # Load California housing dataset
+        from sklearn.datasets import fetch_california_housing
+        data = fetch_california_housing()
+        X = np.array(data.data)
+        y = np.array(data.target)
+        a=0
+
+        # Create a dummy regressor instance
+        cp = ConformalRidgeRegressor(a=a)
+        cp.learn_initial_training_set(X=X[:-1], y=y[:-1])
+
+        x = X[-1]
+        X_internal = np.append(cp.X, x.reshape(1, -1), axis=0)
+        XTXinv_internal = cp.XTXinv - (cp.XTXinv @ np.outer(x, x) @ cp.XTXinv) / (1 + x.T @ cp.XTXinv @ x)
+
+        # OLD
+        A_old, B_old = cp.compute_A_and_B_OLD(X_internal, XTXinv_internal, cp.y)
+        # NEW
+        A_new, B_new = cp.compute_A_and_B(X_internal, XTXinv_internal, cp.y)
+
+        print("A_old:", A_old)
+        print("A_new:", A_new)
+        print("B_old:", B_old)
+        print("B_new:", B_new)
+
+        assert np.allclose(A_old, A_new, atol=1e-8), "A vectors differ!"
+        assert np.allclose(B_old, B_new, atol=1e-8), "B vectors differ!"
+        print("Test passed: compute_A_and_B_OLD and compute_A_and_B are equivalent.")
+
+    # Uncomment to run the test
+    test_equivalence_of_A_and_B()

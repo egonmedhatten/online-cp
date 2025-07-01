@@ -899,10 +899,14 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
             ax.step(self.C, self.L, label=r'$\Pi(y, 0)$')
             ax.step(self.C, self.U, label=r'$\Pi(y, 1)$')
             ax.fill_between(self.C, self.L, self.U, step='pre', alpha=0.5, color='green')
+            ax.set_ylabel('cumulative probability')
+            ax.set_xlabel(r'$y$')
             ax.legend()
         else: 
             fig, ax = plt.subplots()
             ax.step(self.C, (1 - tau) * self.L + tau * self.U, label=r'$\Pi(y, \tau)$')
+            ax.set_ylabel('cumulative probability')
+            ax.set_xlabel(r'$y$')
             ax.legend()
 
         plt.close(fig)  # Prevent implicit display

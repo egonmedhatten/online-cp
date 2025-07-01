@@ -189,7 +189,7 @@ class Evaluation:
         num_rows = int(np.ceil(num_criteria / num_cols))
 
         # Adaptive figure size
-        fig, axs = plt.subplots(num_rows, num_cols, figsize=(5 * num_cols, 3 * num_rows), squeeze=False, sharex=True)
+        fig, axs = plt.subplots(num_rows, num_cols, figsize=(5 * num_cols, 3 * num_rows), squeeze=False, sharex=False)
 
         # Flatten axs for easy indexing if it's multidimensional
         axs = axs.flatten()
@@ -197,7 +197,9 @@ class Evaluation:
         for i, (criterion, values) in enumerate(self.results.items()):
             cs = np.where(np.isinf(values), np.nan, np.cumsum(values))
             axs[i].plot(cs)
-            axs[i].set_title(criterion)
+            # axs[i].set_title(criterion)
+            axs[i].set_xlabel('Number of examples')
+            axs[i].set_ylabel(criterion)
 
         # Hide any unused subplots
         for j in range(i + 1, len(axs)):

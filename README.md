@@ -1,5 +1,8 @@
 # online-cp -- Online Conformal Prediction
 
+[![online-cp's Build Status][build-status]][build-log]
+[![online-cp on PyPI][pypi-version]][online-cp-on-pypi]
+
 This project is an implementation of Online Conformal Prediction.
 
 For now, take a look at [`example.ipynb`][] to see how to use the library.
@@ -7,7 +10,7 @@ For now, take a look at [`example.ipynb`][] to see how to use the library.
 
 ## Quick start
 
-The `online-cp` package is [available on PyPI][], to install just:
+The `online-cp` package is [available on PyPI][online-cp-on-pypi], to install just:
 
 ```bash
 pip install online-cp
@@ -77,4 +80,7 @@ Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a 
 
 
 [`example.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/example.ipynb
-[available on PyPI]: https://pypi.org/project/online-cp/
+[online-cp-on-pypi]: https://pypi.org/project/online-cp/
+[pypi-version]: https://img.shields.io/pypi/v/black
+[build-log]:    https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml
+[build-status]: https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg

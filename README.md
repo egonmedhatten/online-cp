@@ -2,7 +2,7 @@
 
 This project is an implementation of Online Conformal Prediction.
 
-For now, take a look at [`example.ipynb`](example.ipynb) to see how to use the library.
+For now, take a look at [`example.ipynb`] to see how to use the library.
 
 
 ## Quick start
@@ -63,7 +63,7 @@ cp.predict(X[-1])
 (0.8748194061248175, 1.3357383729107446)
 ```
 
-Furhter examples can be found in the notebooks, e.g. [`example.ipynb`](example.ipynb). Current functionality includes
+Furhter examples can be found in the notebooks, e.g. [`example.ipynb`]. Current functionality includes
 * Conformal regression
 * Conformal classification
 * Testing exchangeability through conformal test martignales
@@ -76,4 +76,5 @@ The main reference for Conformal Prediction is the book
 Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a Random World (2nd ed). Springer Nature, 2022.
 
 
+[`example.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/example.ipynb
 [available on PyPI]: https://pypi.org/project/online-cp/

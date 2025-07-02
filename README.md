@@ -72,7 +72,13 @@ Furhter examples can be found in the notebooks, e.g. [`example.ipynb`][]. Curren
 * Testing exchangeability through conformal test martignales
 
 
-# References
+## Links
+
+* [online-cp on GitHub][online-cp-on-github]
+* [online-cp on PyPI][online-cp-on-pypi]
+
+
+## References
 
 The main reference for Conformal Prediction is the book
 
@@ -81,6 +87,7 @@ Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a 
 
 [`example.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/example.ipynb
 [online-cp-on-pypi]: https://pypi.org/project/online-cp/
+[online-cp-on-github]: https://github.com/egonmedhatten/online-cp
 [pypi-version]: https://img.shields.io/pypi/v/online-cp
 [build-log]:    https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml
 [build-status]: https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg

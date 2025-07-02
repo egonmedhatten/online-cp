@@ -81,6 +81,6 @@ Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a 
 
 [`example.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/example.ipynb
 [online-cp-on-pypi]: https://pypi.org/project/online-cp/
-[pypi-version]: https://img.shields.io/pypi/v/black
+[pypi-version]: https://img.shields.io/pypi/v/online-cp
 [build-log]:    https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml
 [build-status]: https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg

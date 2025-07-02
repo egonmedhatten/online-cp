@@ -1,6 +1,6 @@
 [project]
 name = "online-cp"
-version = "0.1.0"
+version = "0.1.1"
 authors = [
 	{ name="Johan Hallberg Szabadvary", email="johan.hallberg.szabadvary@ju.se" },
 ]

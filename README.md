@@ -13,7 +13,7 @@ The `online-cp` package is [available on PyPI][], to install just:
 pip install online-cp
 ```
 
-Let's create a dataset with noisy evaluations of the function $f(x_1, x_2) = x_1 + x_2$.
+Let's create a dataset with noisy evaluations of the function _f(x₁, x₂) = x₁ + x₂_.
 
 ```py
 import numpy as np
@@ -45,7 +45,7 @@ for x, y in zip(X[-1], Y[-1]):
     cp.learn_one(x, y)
 ```
 
-In the online setting, we first observe the object $x$, which is used to make a prediction, only then to observe the label $y$. The output will be `(inf, inf)` for the first 19 predictions, after which we will typically see meaningful prediction sets. The snippet above learned all but the last example. To predict it, do (your output may not be exactly the same, as the dataset depends on the random seed).
+In the online setting, we first observe the object _x_, which is used to make a prediction, only then to observe the label _y_. The output will be `(inf, inf)` for the first 19 predictions, after which we will typically see meaningful prediction sets. The snippet above learned all but the last example. To predict it, do (your output may not be exactly the same, as the dataset depends on the random seed).
 
 ```py
 cp.predict(X[-1])

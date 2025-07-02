@@ -2,12 +2,12 @@
 
 This project is an implementation of Online Conformal Prediction.
 
-For now, take a look at [`example.ipynb`] to see how to use the library.
+For now, take a look at [`example.ipynb`][] to see how to use the library.
 
 
 ## Quick start
 
-The `online-cp` package is [available on PyPI], to install just:
+The `online-cp` package is [available on PyPI][], to install just:
 
 ```bash
 pip install online-cp
@@ -63,7 +63,7 @@ cp.predict(X[-1])
 (0.8748194061248175, 1.3357383729107446)
 ```
 
-Furhter examples can be found in the notebooks, e.g. [`example.ipynb`]. Current functionality includes
+Furhter examples can be found in the notebooks, e.g. [`example.ipynb`][]. Current functionality includes
 * Conformal regression
 * Conformal classification
 * Testing exchangeability through conformal test martignales

@@ -814,6 +814,18 @@ class ConformalPredictiveDistributionFunction:
                 return epsilon
             epsilon += increment  # Increment epsilon by a small amount
 
+    def conformal_expectation(self, tau, f, delta=1e-12):
+        '''
+        The conformal expectation of the function f with respect to a cpd is defined in https://www.alrw.net/articles/19.pdf.
+        If f is a utility function, the conformal expectation can be used for decision-making.
+        If f is the identity function, the conformal expectation acts like the expectation of the predictive distribution.
+        However, it is important to note that it is not formally an expected value, since the total mass of the measure 
+        defined by the cpd Q is less than one. It is in fact n/(n+1), where n is the number of training examples.
+        '''
+        deltaQ = np.array([self.__call__(y + delta, tau) - self.__call__(y - delta, tau) for y in self.Y])
+        c_exp= np.array([f(y) for y in self.Y[deltaQ != 0]]) @ deltaQ[deltaQ != 0]
+        return c_exp
+
     # These methods relate to when the cpd is used to predict sets
     @staticmethod
     def err(Gamma, y):
@@ -896,15 +908,15 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
     def plot(self, tau=None):
         if tau is None:
             fig, ax = plt.subplots()
-            ax.step(self.C, self.L, label=r'$\Pi(y, 0)$')
-            ax.step(self.C, self.U, label=r'$\Pi(y, 1)$')
+            ax.step(self.C, self.L, label=r'$\Pi(y, 0)$', where='pre')
+            ax.step(self.C, self.U, label=r'$\Pi(y, 1)$', where='pre')
             ax.fill_between(self.C, self.L, self.U, step='pre', alpha=0.5, color='green')
             ax.set_ylabel('cumulative probability')
             ax.set_xlabel(r'$y$')
             ax.legend()
         else: 
             fig, ax = plt.subplots()
-            ax.step(self.C, (1 - tau) * self.L + tau * self.U, label=r'$\Pi(y, \tau)$')
+            ax.step(self.C, (1 - tau) * self.L + tau * self.U, label=r'$\Pi(y, \tau)$', where='pre')
             ax.set_ylabel('cumulative probability')
             ax.set_xlabel(r'$y$')
             ax.legend()

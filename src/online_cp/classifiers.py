@@ -3,6 +3,7 @@ import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 from joblib import Parallel, delayed
+from river.forest import AMFClassifier
 
 default_epsilon = 0.1
 
@@ -356,11 +357,66 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             else:
                 return Gamma
 
-class ConformalMondrianForest:
+class ConformalMondrianForest(ConformalClassifier):
     '''
     TODO: Build a conformalised Mondrian forest, using the aggregated mondrian forest implemented in River.
     '''
+
+    def __init__(
+            self, 
+            n_estimators: int = 10,
+            label_space=np.array([-1, 1]), 
+            step: float = 1,
+            use_aggregation: bool = True, 
+            dirichlet: float = 0.5, 
+            split_pure: bool = False,
+            verbose=0, 
+            rnd_state=None, 
+            n_jobs=None, 
+            epsilon=default_epsilon):
+        
+        super().__init__(epsilon=epsilon)
+        self.label_space = label_space
+
+        self.AMF = AMFClassifier(
+            n_estimators=n_estimators, 
+            step=step, 
+            use_aggregation=use_aggregation, 
+            dirichlet=dirichlet, 
+            split_pure=split_pure, 
+            seed=rnd_state
+        )
+
+        self.y = np.empty(0)
+        self.X = None
+
+        self.verbose = verbose
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+        self.n_jobs = n_jobs
+
+    def learn_one(self, x, y, D=None):
+        # Learn label y
+        self.y = np.append(self.y, y)
+        # Learn object
+        if self.X is None:
+            self.X = x.reshape(1,-1)
+        else:
+            self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+
+        self.AMF.learn_one(
+            x={f'x{i}': x for i, x in enumerate(x)},
+            y=y
+        )
     
+    def predict(self, x, epsilon=None, return_p_values=False, verbose=0):
+        p_values = {}
+        tau = self.rnd_gen.uniform(0, 1)
+
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        # TODO: Continue from here
     
 if __name__ == "__main__":
     import doctest

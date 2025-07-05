@@ -355,7 +355,11 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 return Gamma, p_values
             else:
                 return Gamma
-        
+
+class ConformalMondrianForest:
+    '''
+    TODO: Build a conformalised Mondrian forest, using the aggregated mondrian forest implemented in River.
+    '''
     
     
 if __name__ == "__main__":

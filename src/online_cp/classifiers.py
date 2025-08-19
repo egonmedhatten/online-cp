@@ -3,8 +3,6 @@ import time
 import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 from joblib import Parallel, delayed
-from river.forest import AMFClassifier
-from copy import deepcopy
 
 default_epsilon = 0.1
 

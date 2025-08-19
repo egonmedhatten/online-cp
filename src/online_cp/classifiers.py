@@ -4,6 +4,7 @@ import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 from joblib import Parallel, delayed
 from river.forest import AMFClassifier
+from copy import deepcopy
 
 default_epsilon = 0.1
 
@@ -357,35 +358,46 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             else:
                 return Gamma
 
-class ConformalMondrianForest(ConformalClassifier):
+
+class ConformalClassifierWrapper(ConformalClassifier):
     '''
-    TODO: Build a conformalised Mondrian forest, using the aggregated mondrian forest implemented in River.
+    The following scikit-learn classifiers should in priciple be compatible (they have a predict_proba method):
+    AdaBoostClassifier
+    BaggingClassifier
+    BernoulliNB
+    CalibratedClassifierCV
+    CategoricalNB
+    ComplementNB
+    DecisionTreeClassifier
+    DummyClassifier
+    ExtraTreeClassifier
+    ExtraTreesClassifier
+    GaussianNB
+    GaussianProcessClassifier
+    GradientBoostingClassifier
+    HistGradientBoostingClassifier
+    KNeighborsClassifier
+    LabelPropagation
+    LabelSpreading
+    LinearDiscriminantAnalysis
+    LogisticRegression
+    LogisticRegressionCV
+    MLPClassifier
+    MultinomialNB
+    NearestCentroid
+    QuadraticDiscriminantAnalysis
+    RadiusNeighborsClassifier
+    RandomForestClassifier
     '''
 
-    def __init__(
-            self, 
-            n_estimators: int = 10,
-            label_space=np.array([-1, 1]), 
-            step: float = 1,
-            use_aggregation: bool = True, 
-            dirichlet: float = 0.5, 
-            split_pure: bool = False,
-            verbose=0, 
-            rnd_state=None, 
-            n_jobs=None, 
-            epsilon=default_epsilon):
-        
-        super().__init__(epsilon=epsilon)
+    def __init__(self, learner, label_space=np.array([-1, 1]), epsilon=default_epsilon, verbose=0, rnd_state=None, n_jobs=None):
+        super().__init__(epsilon)
+
+        assert hasattr(learner, 'predict_proba')
+
+        self.learner = learner
+
         self.label_space = label_space
-
-        self.AMF = AMFClassifier(
-            n_estimators=n_estimators, 
-            step=step, 
-            use_aggregation=use_aggregation, 
-            dirichlet=dirichlet, 
-            split_pure=split_pure, 
-            seed=rnd_state
-        )
 
         self.y = np.empty(0)
         self.X = None
@@ -404,20 +416,53 @@ class ConformalMondrianForest(ConformalClassifier):
         else:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
-        self.AMF.learn_one(
-            x={f'x{i}': x for i, x in enumerate(x)},
-            y=y
-        )
-    
     def predict(self, x, epsilon=None, return_p_values=False, verbose=0):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
         if epsilon is None:
-            epsilon = self.epsilon
+            epsilon = self.epsilon       
 
-        # TODO: Continue from here
+        # TODO: Fix parallellisation
+
+        # TODO: Some models have minimum requirements for the training set.
+        # if self.y.shape[0] >= 1:
+        try:
+            X = np.append(self.X, x.reshape(1, -1), axis=0)
+            # Label loop
+            for y in self.label_space:
+                Y = np.append(self.y, y)
+                self.learner.fit(X, Y)
+
+                Prob = self.learner.predict_proba(X)
+                if Prob.shape[1] < self.label_space.size:
+                    zeros_to_add = self.label_space.size - Prob.shape[1]
+                    Prob = np.hstack([Prob, np.zeros((Prob.shape[0], zeros_to_add))])
+
+                Alpha = Prob[np.arange(len(Y)), Y.astype('int')] 
+                p_values[y] = self._compute_p_value(Alpha, tau, 'conformity')
+            Gamma = self._compute_Gamma(p_values, epsilon)
+        # else:
+        except ValueError:
+            for label in self.label_space:
+                Alpha = np.array([np.inf])
+                p_values[label] = self._compute_p_value(Alpha, tau, 'conformity')
+            Gamma = self._compute_Gamma(p_values, epsilon)
+        
+        if return_p_values:
+            return Gamma, p_values
+        else:
+            return Gamma
+
+class ConformalSupportVectorMachine(ConformalClassifier):
+    # The Lagrange multipliers can be used as nonconformity measure. 
+    # TODO: Figure out how to use sklearn's SVM
+    # TODO: Check the caveat in ALRW
+    # TODO: Implement
+    def __init__(self, epsilon=default_epsilon):
+        super().__init__(epsilon)
     
+        
 if __name__ == "__main__":
     import doctest
     import sys

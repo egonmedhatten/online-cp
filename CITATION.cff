@@ -1,0 +1,48 @@
+# See https://citation-file-format.github.io/ for documentation
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite the paper below."
+title: "online-cp"
+authors:
+  - family-names: "Hallberg Szabadváry"
+    given-names: "Johan"
+  - family-names: "Löfström"
+    given-names: "Tuwe"
+  - family-names: "Matela"
+    given-names: "Rudy"
+repository-code: "https://github.com/egonmedhatten/online-cp"
+version: "0.1.0"
+date-released: 2025-09-15
+
+# This section points to the academic paper as the preferred citation
+preferred-citation:
+  type: conference-paper
+  title: "online-cp: a Python Package for Online Conformal Prediction, Conformal Predictive Systems and Conformal Test Martingales"
+  authors:
+  - family-names: "Hallberg Szabadváry"
+    given-names: "Johan"
+  - family-names: "Löfström"
+    given-names: "Tuwe"
+  - family-names: "Matela"
+    given-names: "Rudy"
+  collection-title: "Proceedings of the Fourteenth Symposium on Conformal and Probabilistic Prediction with Applications"
+  editors:
+  - family-names: "Nguyen"
+    given-names: "Khuong An"
+  - family-names: "Luo"
+    given-names: "Zhiyuan"
+  - family-names: "Papadopoulos"
+    given-names: "Harris"
+  - family-names: "Löfström"
+    given-names: "Tuwe"
+  - family-names: "Carlsson"
+    given-names: "Lars"
+  - family-names: "Boström"
+    given-names: "Henrik"
+  publisher:
+    name: "PMLR"
+  series: "Proceedings of Machine Learning Research"
+  volume: 266
+  pages: "595-614"
+  year: 2025
+  month: 9
+  url: "https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html"

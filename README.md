@@ -91,3 +91,32 @@ Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a 
 [pypi-version]: https://img.shields.io/pypi/v/online-cp
 [build-log]:    https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml
 [build-status]: https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg
+
+## 📄 Citing `online-cp`
+
+If you use `online-cp` in your work, please cite the following paper. It helps support the ongoing development of this package.
+
+### BibTeX
+
+For users of LaTeX and bibliography managers, please use this BibTeX entry:
+
+```bibtex
+@InProceedings{pmlr-v266-hallberg-szabadvary25a,
+  title = 	 {online-cp: a Python Package for Online Conformal Prediction, Conformal Predictive Systems and Conformal Test Martingales},
+  author =       {Hallberg Szabadv\'{a}ry, Johan and L\"{o}fstr\"{o}m, Tuwe and Matela, Rudy},
+  booktitle = 	 {Proceedings of the Fourteenth Symposium on Conformal and Probabilistic Prediction with Applications},
+  pages = 	 {595--614},
+  year = 	 {2025},
+  editor = 	 {Nguyen, Khuong An and Luo, Zhiyuan and Papadopoulos, Harris and L\"ofstr\"om, Tuwe and Carlsson, Lars and Bostr\"om, Henrik},
+  volume = 	 {266},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {10--12 Sep},
+  publisher =    {PMLR},
+  pdf = 	 {[https://raw.githubusercontent.com/mlresearch/v266/main/assets/hallberg-szabadvary25a/hallberg-szabadvary25a.pdf](https://raw.githubusercontent.com/mlresearch/v266/main/assets/hallberg-szabadvary25a/hallberg-szabadvary25a.pdf)},
+  url = 	 {[https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html](https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html)}
+}
+```
+
+### Formatted Citation (APA Style)
+
+Hallberg Szabadváry, J., Löfström, T., & Matela, R. (2025). online-cp: a Python Package for Online Conformal Prediction, Conformal Predictive Systems and Conformal Test Martingales. In K. A. Nguyen, Z. Luo, H. Papadopoulos, T. Löfström, L. Carlsson, & H. Boström (Eds.), *Proceedings of the Fourteenth Symposium on Conformal and Probabilistic Prediction with Applications* (Vol. 266, pp. 595–614). PMLR. https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html

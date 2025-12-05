@@ -7,7 +7,9 @@
 
 set -e
 
-for module in src/online_cp/*.py
+export PYTHONPATH=src
+
+for module in src/online_cp/*.py tests/*.py
 do
 	[ "$module" == src/online_cp/__init__.py ] && continue
 	echo python $module

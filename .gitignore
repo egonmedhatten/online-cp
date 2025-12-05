@@ -13,3 +13,5 @@ src/online_cp.egg-info/
 *.sh
 work_in_progress/
 plots/
+*.pdf
+paper/

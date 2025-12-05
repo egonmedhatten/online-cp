@@ -62,7 +62,7 @@ class Evaluation:
         self.metrics[name] = metric_class()
         self.results[name] = []
 
-    def update(self, y, Gamma=None, p_values=None, cpd=None, raise_errors=True):
+    def update(self, y, Gamma=None, p_values=None, cpd=None, raise_errors=True, epsilon=None):
         """
         Update the metrics with new data.
 
@@ -84,7 +84,10 @@ class Evaluation:
                             continue
 
                     if isinstance(metric, WinklerScore):
-                        result = metric._update(Gamma, y, Gamma.epsilon)  # Correct arguments for WinklerScore
+                        if epsilon is None:
+                            result = metric._update(Gamma, y, Gamma.epsilon)  # Correct arguments for WinklerScore
+                        else:
+                            result = metric._update(Gamma, y, epsilon)  # Correct arguments for WinklerScore
                     elif isinstance(metric, Width):
                         result = metric._update(Gamma) # Correct arguments for Width
                     else:

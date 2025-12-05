@@ -814,7 +814,7 @@ class ConformalPredictiveDistributionFunction:
                 return epsilon
             epsilon += increment  # Increment epsilon by a small amount
 
-    def conformal_expectation(self, tau, f, delta=1e-12):
+    def conformal_expectation(self, tau, f=lambda y: y, delta=1e-12):
         '''
         The conformal expectation of the function f with respect to a cpd is defined in https://www.alrw.net/articles/19.pdf.
         If f is a utility function, the conformal expectation can be used for decision-making.

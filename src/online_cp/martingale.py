@@ -1,9 +1,18 @@
+# TODO
+# * Remove online update of statistics in the parametric models. It is better to have the possibility to use a window
+# * Remove B_n^{-1} whenever it appears. If a user wants that, they will have to invert numerically. It is really only relevant for protection.
+# * Tune the COEFFICIENTS in the adaptive rule
+# * COnsider adding plotting functions for the ParticleFilter and ExpertAggregation (as in the notebook)
+
 import numpy as np
 from scipy.integrate import quad
-from scipy.optimize import minimize
-from scipy.special import betaln
-from scipy.stats import beta, norm
+from scipy.optimize import minimize, minimize_scalar
+from scipy.special import betaln, gamma, gammaln, logsumexp
+from scipy.stats import beta, norm, uniform
 import warnings
+
+# TODO:
+# Add a betting strategy based on the beta kernel density estimation package beta-kde
 
 
 class BettingStrategy:
@@ -41,165 +50,137 @@ class BettingStrategy:
 class GaussianKDE(BettingStrategy):
     """
     Implements a Gaussian Kernel Density Estimation (KDE) betting strategy.
+    This version includes a 'growth_factor' to control the frequency of
+    computationally expensive bandwidth re-tuning.
 
     Attributes:
-        bandwidth (str or float): Bandwidth selection method or fixed value.
+        bandwidth (str or float): Bandwidth selection method ('silverman', 'lcv', or a float).
         window_size (str or int): Window size for adaptive KDE.
+        growth_factor (float): The sample size must increase by this factor to trigger a
+                               new bandwidth calculation. A factor of 1.0 means tuning every time.
     """
 
-    def __init__(self, bandwidth='silverman', window_size=None, min_sample_size=100, mixing_exponent=1):
-        """
-        Initializes the GaussianKDE class.
-
-        Args:
-            bandwidth (str or float): Bandwidth selection method or fixed value.
-            window_size (str or int): Window size for adaptive KDE.
-            min_sample_size (int): Minimum number of samples required before full betting.
-            mixing_exponent (float): Exponent controlling the mixing parameter's growth.
-        """
+    def __init__(self, bandwidth='silverman', window_size=None, min_sample_size=100, mixing_exponent=1, max_iter=20, bw_min=0.001, bw_max=0.5, growth_factor=1.1):
         super().__init__(min_sample_size, mixing_exponent)
         self.bandwidth = bandwidth
         self.window_size = window_size
+        self.max_iter = max_iter
+        self.bw_min = bw_min
+        self.bw_max = bw_max
+        self.growth_factor = growth_factor
 
-    def calculate_bandwidth(self, data, sigma=None):
-        """
-        Calculates the bandwidth for KDE.
+        self.current_bw = None
+        self.n_last_update = 0  # To track sample size at last bandwidth update
 
-        Args:
-            data (np.ndarray): Data points.
-            sigma (float): Standard deviation of the data.
+    def _kernel_pdf_reflect(self, x, data, h):
+        """Helper to compute the reflected kernel PDF for a given dataset and bandwidth."""
+        x = np.atleast_1d(x)
+        pdf_orig = np.mean(norm.pdf(x[:, None], loc=data, scale=h), axis=1)
+        pdf_neg = np.mean(norm.pdf(x[:, None], loc=-data, scale=h), axis=1)
+        pdf_two = np.mean(norm.pdf(x[:, None], loc=2-data, scale=h), axis=1)
+        pdf_values = pdf_orig + pdf_neg + pdf_two
+        return pdf_values.item() if pdf_values.size == 1 else pdf_values
 
-        Returns:
-            float: Bandwidth value.
-        """
-        if self.bandwidth == 'silverman':
-            assert sigma is not None
-            h = ((4 * sigma**5) / (3 * data.size))**(1/5)
-        else:
-            h = self.bandwidth
-        return h
+    def _kernel_cdf_reflect(self, x, data, h):
+        """Helper to compute the reflected kernel CDF for a given dataset and bandwidth."""
+        x = np.atleast_1d(x)
+        cdf_orig = np.mean(norm.cdf(x[:, None], loc=data, scale=h), axis=1)
+        cdf_neg = np.mean(norm.cdf(x[:, None], loc=-data, scale=h), axis=1)
+        cdf_two = np.mean(norm.cdf(x[:, None], loc=2-data, scale=h), axis=1)
+        cdf_values = cdf_orig + cdf_neg + cdf_two - 1
+        return cdf_values.item() if cdf_values.size == 1 else cdf_values
     
-    def calculate_window_size(self, p_values):
+    def _likelihood_lcv_bw(self, data):
         """
-        Calculates the window size for adaptive KDE.
-
-        Args:
-            p_values (list): List of p-values.
-
-        Returns:
-            int: Window size.
+        Finds the optimal bandwidth by optimizing the Likelihood Cross-Validation (LCV) score.
+        This version pre-calculates distance matrices for efficiency.
         """
-        if self.window_size == 'adaptive':
-            window_param = np.log(1.001)
-            min_size = self.min_sample_size
-            max_size = len(p_values)
-            return max(min_size, int(max_size * np.exp(-window_param * self.M)))
-        elif self.window_size is None:
-            return 0
+        n = len(data)
+        data_col = data[:, np.newaxis]
+        diff_orig = data_col - data
+        diff_neg = data_col + data
+        diff_two = data_col - (2 - data)
+
+        def objective_func(h):
+            """The negative LCV log-likelihood score function, to be minimized."""
+            epsilon = 1e-10
+            kernel_matrix_orig = norm.pdf(diff_orig / h)
+            kernel_matrix_neg = norm.pdf(diff_neg / h)
+            kernel_matrix_two = norm.pdf(diff_two / h)
+            total_kernel_matrix = kernel_matrix_orig + kernel_matrix_neg + kernel_matrix_two
+            np.fill_diagonal(total_kernel_matrix, 0)
+            loo_pdfs = np.sum(total_kernel_matrix, axis=1) / ((n - 1) * h)
+            loo_log_likelihood = np.sum(np.log(loo_pdfs + epsilon))
+            return -loo_log_likelihood
+
+        if n < self.min_sample_size or self.current_bw is None:
+            result = minimize_scalar(objective_func, bounds=(self.bw_min, self.bw_max), method='bounded', options={'maxiter': self.max_iter})
         else:
-            return self.window_size
+            search_bounds = (max(self.current_bw * 0.8, self.bw_min), min(self.current_bw * 1.2, self.bw_max))
+            result = minimize_scalar(objective_func, bounds=search_bounds, method='bounded', options={'maxiter': self.max_iter})
+        
+        return result
 
     def update_betting_function(self, p_values):
         """
         Updates the betting function based on the provided p-values.
-
-        Args:
-            p_values (list): List of p-values.
-
-        Returns:
-            tuple: Updated betting functions (b_n, B_n).
         """
-        if len(p_values) < 2:  # Too little information to bet
+        if len(p_values) < 2:
             pdf = lambda x: beta.pdf(x, 1, 1)
             cdf = lambda x: beta.cdf(x, 1, 1)
         else:
             data = np.array(p_values)[-self.calculate_window_size(p_values):]
-            # sigma = np.array([data, 2 - data, -data]).flatten().std()
-            sigma = np.array(data).std()
-            if sigma == 0:
-                # If there is no variability: do not bet at all.
+            if data.std() < 1e-6:
                 pdf = lambda x: beta.pdf(x, 1, 1)
                 cdf = lambda x: beta.cdf(x, 1, 1)
             else:
-                h = self.calculate_bandwidth(data=data, sigma=sigma)
-
-                def kernel_pdf_raw(x):
-                    """
-                    Computes the raw kernel PDF.
-
-                    Args:
-                        x (np.ndarray): Input values.
-
-                    Returns:
-                        np.ndarray or float: PDF values.
-                    """
-                    x = np.atleast_1d(x)
-                    pdf_values = np.mean(norm.pdf(x[:, None], loc=data, scale=h * sigma), axis=1)
-                    if pdf_values.size == 1:
-                        return pdf_values.item()
-                    return pdf_values
-
-                def kernel_cdf_raw(x):
-                    """
-                    Computes the raw kernel CDF.
-
-                    Args:
-                        x (np.ndarray): Input values.
-
-                    Returns:
-                        np.ndarray or float: CDF values.
-                    """
-                    x = np.atleast_1d(x)
-                    cdf_values = np.mean(norm.cdf(x[:, None], loc=data, scale=h * sigma), axis=1)
-                    if cdf_values.size == 1:
-                        return cdf_values.item()
-                    return cdf_values
-
-                def kernel_pdf_reflect(x):
-                    """
-                    Computes the reflected kernel PDF.
-
-                    Args:
-                        x (np.ndarray): Input values.
-
-                    Returns:
-                        np.ndarray or float: Reflected PDF values.
-                    """
-                    x = np.atleast_1d(x)
-                    pdf_reflect_values = kernel_pdf_raw(x) + kernel_pdf_raw(-x) + kernel_pdf_raw(2 - x)
-                    if np.isscalar(pdf_reflect_values):
-                        return pdf_reflect_values
-                    return pdf_reflect_values
-
-                def kernel_cdf_reflect(x):
-                    """
-                    Computes the reflected kernel CDF.
-
-                    Args:
-                        x (np.ndarray): Input values.
-
-                    Returns:
-                        np.ndarray or float: Reflected CDF values.
-                    """
-                    x = np.atleast_1d(x)
-                    cdf_reflect_values = kernel_cdf_raw(x) - kernel_cdf_raw(-x) + 1 - kernel_cdf_raw(2 - x)
-                    if np.isscalar(cdf_reflect_values):
-                        return cdf_reflect_values
-                    return cdf_reflect_values
-                
-                pdf = kernel_pdf_reflect
-                cdf = kernel_cdf_reflect
+                h = self.calculate_bandwidth(data)
+                self.current_bw = h
+                pdf = lambda x: self._kernel_pdf_reflect(x, data, h)
+                cdf = lambda x: self._kernel_cdf_reflect(x, data, h)
         
-        # Cautious betting until min_sample_size is reached
         b_n = lambda x: self.mixing_parameter * pdf(x) + (1 - self.mixing_parameter)
         B_n = lambda x: self.mixing_parameter * cdf(x) + (1 - self.mixing_parameter) * x
-        
         self.update_mixing_parameter(len(p_values))
-
+        
         return b_n, B_n
+    
+    def calculate_bandwidth(self, data):
+        """
+        Calculates the bandwidth, using the growth_factor to decide when to run the expensive optimization.
+        """
+        n = data.size
+        
+        if self.bandwidth == 'silverman':
+            sigma = np.std(data)
+            h = 0.9 * sigma * (n**(-0.2))
+        
+        elif self.bandwidth == 'lcv':
+            # Determine if a recalculation is needed based on growth factor
+            should_recalculate = (self.current_bw is None) or \
+                                 (n < self.min_sample_size) or \
+                                 (n >= self.n_last_update * self.growth_factor)
+            
+            if should_recalculate and n > 1:
+                self.opt_result = self._likelihood_lcv_bw(data)
+                h = self.opt_result.x
+                self.n_last_update = n
+            else:
+                h = self.current_bw
+        
+        else: # Fixed bandwidth
+            h = float(self.bandwidth)
+        return h
 
+    def calculate_window_size(self, p_values):
+        if self.window_size is None:
+            return len(p_values)
+        else:
+            return self.window_size
 
+    
 class BetaMoments(BettingStrategy):
+    # TODO: Remove online update of statistics, and add possibility of sliding window
     """
     Implements a betting strategy based on Beta distribution moments.
 
@@ -226,7 +207,7 @@ class BetaMoments(BettingStrategy):
         self.ahat = 1.0
         self.bhat = 1.0
 
-    def update_betting_function(self, p):
+    def update_betting_function(self, p_values):
         """
         Updates the betting function based on the provided p-value.
 
@@ -236,6 +217,7 @@ class BetaMoments(BettingStrategy):
         Returns:
             tuple: Updated betting functions (b_n, B_n).
         """
+        p = p_values[-1]
         if self.n < 2:
             self.ahat = 1.0
             self.bhat = 1.0
@@ -262,8 +244,8 @@ class BetaMoments(BettingStrategy):
 
         return b_n, B_n
 
-
 class BetaMLE(BettingStrategy):
+    # TODO: Remove online update of statistics, and add possibility of sliding window
     """
     Implements a betting strategy based on Maximum Likelihood Estimation (MLE) for Beta distribution parameters.
 
@@ -290,7 +272,7 @@ class BetaMLE(BettingStrategy):
         self.ahat = 1.0
         self.bhat = 1.0
 
-    def update_betting_function(self, p):
+    def update_betting_function(self, p_values):
         """
         Updates the betting function based on the provided p-value.
 
@@ -300,6 +282,7 @@ class BetaMLE(BettingStrategy):
         Returns:
             tuple: Updated betting functions (b_n, B_n).
         """
+        p = p_values[-1]
         def negative_log_likelihood(params):
             alpha, beta = params
             if alpha <= 0 or beta <= 0:
@@ -332,8 +315,248 @@ class BetaMLE(BettingStrategy):
         self.update_mixing_parameter(self.n)
 
         return b_n, B_n
+    
+class ParticleFilterStrategy(BettingStrategy):
+    """
+    A betting strategy based on a particle filter, modified to be fully
+    reproducible by accepting a seed for its random number generator.
+    """
+    # MODIFIED: Added a 'seed' argument
+    def __init__(self, num_particles=1000, process_noise_std=0.05, vol_noise_std=0.01, 
+                 min_sample_size=100, mixing_exponent=1.0, seed=None):
+        
+        super().__init__(min_sample_size, mixing_exponent)
+        self.N = num_particles
+        self.adaptive_noise = (process_noise_std == 'auto')
+        
+        # MODIFIED: Create a private random number generator from the seed
+        self.rng = np.random.default_rng(seed)
+
+        if self.adaptive_noise:
+            self.dim_x = 3
+            self.vol_noise_std = vol_noise_std
+            # MODIFIED: Use the private rng object
+            self.particles = self.rng.standard_normal((self.N, 3)) * 0.1
+            self.particles[:, 2] = np.log(0.05) + self.rng.standard_normal(self.N) * 0.1
+        else:
+            self.dim_x = 2
+            self.Q = np.eye(2) * (process_noise_std ** 2)
+            # MODIFIED: Use the private rng object
+            self.particles = self.rng.standard_normal((self.N, 2)) * 0.1
+
+        self.weights = np.ones(self.N) / self.N
+        self.sigma_history = []
+        self.alpha_history = []
+        self.beta_history = []
 
 
+    def _predict(self):
+        """Propagates particles according to the motion model."""
+        if self.adaptive_noise:
+            # MODIFIED: Use the private rng object
+            vol_noise = self.rng.standard_normal(self.N) * self.vol_noise_std
+            self.particles[:, 2] += vol_noise
+            
+            current_sigmas = np.exp(self.particles[:, 2])
+            # MODIFIED: Use the private rng object
+            main_noise = self.rng.standard_normal((self.N, 2)) * current_sigmas[:, np.newaxis]
+            self.particles[:, :2] += main_noise
+            self.sigma_history.append(np.median(current_sigmas))
+        else:
+            # MODIFIED: Use the private rng object
+            noise = self.rng.multivariate_normal(mean=np.zeros(2), cov=self.Q, size=self.N)
+            self.particles += noise
+
+    def _update(self, p_obs):
+        """Calculates particle weights based on the likelihood of p_obs."""
+        p_obs_clipped = np.clip(p_obs, 1e-9, 1 - 1e-9)
+        alpha, beta_param = np.exp(self.particles[:, 0]), np.exp(self.particles[:, 1])
+        likelihood = beta.pdf(p_obs_clipped, a=alpha, b=beta_param) + 1e-9
+        
+        if np.sum(likelihood) > 0:
+            self.weights = likelihood / np.sum(likelihood)
+        else:
+            self.weights.fill(1.0 / self.N)
+
+    def _resample(self):
+        """Resamples particles using a reproducible systematic resampling."""
+        # MODIFIED: Pass the private rng object to the resampling function
+        indices = self.systematic_resample(self.weights, self.rng)
+        self.particles = self.particles[indices]
+        self.weights.fill(1.0 / self.N)
+
+    # NOTE: This was lifted from filterpy, with the addition of passing a range to the function
+    @staticmethod
+    def systematic_resample(weights, rng):
+        """ Performs the systemic resampling algorithm used by particle filters.
+
+        This algorithm separates the sample space into N divisions. A single random
+        offset is used to to choose where to sample from for all divisions. This
+        guarantees that every sample is exactly 1/N apart.
+
+        Parameters
+        ----------
+        weights : list-like of float
+            list of weights as floats
+
+        Returns
+        -------
+
+        indexes : ndarray of ints
+            array of indexes into the weights defining the resample. i.e. the
+            index of the zeroth resample is indexes[0], etc.
+        """
+        N = len(weights)
+
+        # make N subdivisions, and choose positions with a consistent random offset
+        positions = (rng.random() + np.arange(N)) / N
+
+        indexes = np.zeros(N, 'i')
+        cumulative_sum = np.cumsum(weights)
+        i, j = 0, 0
+        while i < N:
+            if positions[i] < cumulative_sum[j]:
+                indexes[i] = j
+                i += 1
+            else:
+                j += 1
+        return indexes
+
+    def update_betting_function(self, p_values):
+        """Updates the filter and returns the predictive functions for the next step."""
+        if not p_values: 
+             return (lambda x: 1.0), (lambda x: x)
+        p = p_values[-1]
+        self._predict()
+        self._update(p)
+        self._resample()
+
+        alphas = np.exp(self.particles[:, 0])
+        betas = np.exp(self.particles[:, 1])
+
+        self.alpha_history.append(np.percentile(alphas, [50, 2.5, 97.5]))
+        self.beta_history.append(np.percentile(betas, [50, 2.5, 97.5]))
+        
+        def learned_pdf(x): return np.mean(beta.pdf(x, a=alphas, b=betas))
+        def learned_cdf(x): return np.mean(beta.cdf(x, a=alphas, b=betas))
+        
+        self.update_mixing_parameter(len(p_values))
+
+        def b_n(x): return self.mixing_parameter * learned_pdf(x) + (1 - self.mixing_parameter) * 1.0
+        def B_n(x): return self.mixing_parameter * learned_cdf(x) + (1 - self.mixing_parameter) * x
+
+        return b_n, B_n
+
+class FixedStrategy(BettingStrategy):
+    """
+    A strategy that uses a fixed, unchanging betting function from a
+    provided distribution object.
+    """
+    def __init__(self, distribution=None, min_sample_size=20, max_mixing_parameter=1.0):
+        """
+        Initializes the FixedStrategy.
+        
+        Args:
+            distribution: An object with .pdf() and .cdf() methods (e.g., from scipy.stats).
+                          Defaults to a uniform distribution if None.
+            max_mixing_parameter (float): The maximum confidence in the base_pdf.
+                                          Set < 1.0 for permanent cautiousness.
+        """
+        super().__init__(min_sample_size=min_sample_size)
+        if distribution is None:
+            self.distribution = uniform()
+        else:
+            self.distribution = distribution
+            
+        self.max_mixing_parameter = max_mixing_parameter
+        self.base_pdf = self.distribution.pdf
+        self.base_cdf = self.distribution.cdf
+
+    def update_betting_function(self, p_values):
+        # This strategy's base distribution is fixed, but we apply cautious mixing.
+        self.update_mixing_parameter(len(p_values))
+        
+        # Cap the mixing parameter to enforce permanent caution.
+        current_mix = min(self.mixing_parameter, self.max_mixing_parameter)
+        
+        def b_n(x):
+            return current_mix * self.base_pdf(x) + (1 - current_mix) * 1.0
+        def B_n(x):
+            return current_mix * self.base_cdf(x) + (1 - current_mix) * x
+            
+        return b_n, B_n
+    
+class ExpertAggregationStrategy(BettingStrategy):
+    """
+    An aggregation strategy using an adaptive Exponentially Weighted Average forecaster.
+    
+    This version implements the Variable Share algorithm, uses log-domain updates
+    for stability, and logs the weight history for analysis.
+    """
+    def __init__(self, experts, learning_rate=0.1, base_alpha=0.01):
+        super().__init__(min_sample_size=0)
+        self.experts = experts
+        self.num_experts = len(experts)
+        self.learning_rate = learning_rate
+        self.base_alpha = base_alpha
+        
+        self.log_weights = np.zeros(self.num_experts)
+        
+        # RESTORED: Initialize the list to store weight history
+        self.expert_weights_history = []
+        
+        self.expert_pdfs = [lambda x: 1.0 for _ in self.experts]
+        self.expert_cdfs = [lambda x: x for _ in self.experts]
+        
+        # Prime the experts and log the initial uniform weights
+        self.update_betting_function([])
+
+    def get_current_weights(self):
+        """Calculates current linear weights from log-weights."""
+        lse = logsumexp(self.log_weights)
+        return np.exp(self.log_weights - lse)
+
+    def update_betting_function(self, p_values):
+        if not p_values:
+            # Initialization case: just prime the experts
+            for i, expert in enumerate(self.experts):
+                self.expert_pdfs[i], self.expert_cdfs[i] = expert.update_betting_function(p_values)
+        else:
+            # Main update logic for t > 0
+            previous_weights = self.get_current_weights()
+            p = p_values[-1]
+            
+            gains = np.array([pdf(p) for pdf in self.expert_pdfs])
+            
+            master_prediction = np.dot(previous_weights, gains)
+            loss = 1.0 - np.clip(master_prediction / self.num_experts, 0, 1)
+            alpha_t = self.base_alpha * loss
+
+            log_gains = np.log(gains)# + 1e-12)
+            self.log_weights += self.learning_rate * log_gains
+            
+            intermediate_weights = self.get_current_weights()
+            final_weights = (1 - alpha_t) * intermediate_weights + alpha_t / self.num_experts
+            final_weights /= np.sum(final_weights)
+            
+            self.log_weights = np.log(final_weights)# + 1e-12)
+            
+            for i, expert in enumerate(self.experts):
+                self.expert_pdfs[i], self.expert_cdfs[i] = expert.update_betting_function(p_values)
+
+        # Get the final weights for this step and log them
+        final_weights_for_next_step = self.get_current_weights()
+        
+        # RESTORED: Log the final weights for this step
+        self.expert_weights_history.append(final_weights_for_next_step.copy())
+        
+        # Create aggregate functions for the NEXT prediction
+        def next_agg_pdf(x): return np.dot(final_weights_for_next_step, [pdf(x) for pdf in self.expert_pdfs])
+        def next_agg_cdf(x): return np.dot(final_weights_for_next_step, [cdf(x) for cdf in self.expert_cdfs])
+
+        return next_agg_pdf, next_agg_cdf
+    
+# MARTINGALES
 class ConformalTestMartingale:
     """
     Parent class for conformal test martingales.
@@ -394,7 +617,7 @@ class ConformalTestMartingale:
         Returns:
             list: Log10 martingale values.
         """
-        return np.log10(self.martingale_values)
+        return [logM / np.log(10) for logM in self.log_martingale_values] # np.log10(self.martingale_values)
     
     def check_warning(self):
         """
@@ -446,10 +669,7 @@ class PluginMartingale(ConformalTestMartingale):
         self.log_martingale_values.append(self.logM)
         self.p_values.append(p)
         
-        if isinstance(self.betting_strategy, GaussianKDE):
-            self.b_n, self.B_n = self.betting_strategy.update_betting_function(self.p_values)
-        else:
-            self.b_n, self.B_n = self.betting_strategy.update_betting_function(p)
+        self.b_n, self.B_n = self.betting_strategy.update_betting_function(self.p_values)
         
         if self.M > self.max:
             self.max = self.M
@@ -511,6 +731,29 @@ class SimpleJumper(ConformalTestMartingale):
 
         self.check_warning()
 
+class CompositeJumper(ConformalTestMartingale):
+
+    def __init__(self, J=[10**(-4), 10**(-3), 10**(-2), 10**(-1), 1], warnings=True, warning_level=100):
+        super().__init__(warnings, warning_level)
+        self.J = J
+        self.Jumpers = {j: SimpleJumper(J=j, warnings=False) for j in self.J}
+
+    def update_martingale_value(self, p):
+        self.p_values.append(p)
+        # Update individual jumpers
+        for m in self.Jumpers.values():
+            m.update_martingale_value(p) # NOTE: There will be a memory bloat here, as each Jumper keeps its own list of p-values.
+        
+        self.logM = np.log(np.mean([m.M for m in self.Jumpers.values()]))
+        self.log_martingale_values.append(self.logM)
+        
+        self.b_n = lambda u: np.mean([m.b_n(u) for m in self.Jumpers.values()])
+        self.B_n = lambda u: np.mean([m.b_n(u) for m in self.Jumpers.values()])
+
+        if self.M > self.max:
+            self.max = self.M
+
+        self.check_warning()
         
 if __name__ == "__main__":
     import doctest

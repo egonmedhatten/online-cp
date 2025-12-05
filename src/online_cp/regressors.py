@@ -13,7 +13,7 @@ default_epsilon = 0.1
 
 class ConformalPredictionInterval:
 
-    def __init__(self, lower, upper, epsilon):
+    def __init__(self, lower, upper, epsilon=default_epsilon):
         self.lower = lower
         self.upper = upper
         self.epsilon = epsilon
@@ -29,6 +29,11 @@ class ConformalPredictionInterval:
 
     def __str__(self):
         return f'({self.lower}, {self.upper})'
+
+    def __eq__(self, other):
+        return self.lower == other.lower and \
+               self.upper == other.upper and \
+               self.epsilon == other.epsilon
 
 class ConformalRegressor:
     '''

@@ -19,5 +19,5 @@ jobs:
         run: ./scripts/run-modules
       - run: ./scripts/run-notebooks
       - run: validate-pyproject pyproject.toml
-      # TODO: run: pytest once tests are added
+      - run: pytest
       - run: scripts/run-coverage

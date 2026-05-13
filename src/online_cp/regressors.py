@@ -4,6 +4,13 @@ import warnings
 from scipy.optimize import minimize_scalar, minimize, Bounds
 from scipy.spatial.distance import pdist, cdist, squareform
 
+__all__ = [
+    'ConformalRidgeRegressor',
+    'KernelConformalRidgeRegressor',
+    'ConformalLassoRegressor',
+    'ConformalPredictionInterval',
+]
+
 
 MACHINE_EPSILON = lambda x: np.abs(x) * np.finfo(np.float64).eps
 
@@ -605,6 +612,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
         def GCV(a):
             try:
                 A = self.X @ np.linalg.inv(XTX + a*self.Id) @ self.X.T
+                max_diag_H = np.max(np.diag(A))
+                if max_diag_H > 1:
+                    return np.inf
                 return (1/n)*np.linalg.norm((In - A) @ self.y)**2 / ((1/n)* np.trace(In- A))**2
             except (np.linalg.LinAlgError, ZeroDivisionError):
                 return np.inf
@@ -978,6 +988,626 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             else:
                 p_y = self.rnd_gen.uniform(0, 1)
         return p_y
+
+
+# ===========================================================================
+# Conformalised Lasso Regressor
+# ===========================================================================
+
+def _soft_threshold(z, lam):
+    """Soft-thresholding operator for Lasso coordinate descent."""
+    return np.sign(z) * np.maximum(np.abs(z) - lam, 0.0)
+
+
+def _solve_lasso(X, y, lam, rho=0.0, max_iter=1000, tol=1e-6, warm_start=None):
+    """
+    Solve the elastic net problem via coordinate descent:
+        min_{beta} (1/2) ||y - X beta||^2 + lam * ||beta||_1 + (rho/2) * ||beta||_2^2
+
+    When rho=0 this is pure Lasso.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n, p)
+    y : ndarray of shape (n,)
+    lam : float, L1 regularization parameter
+    rho : float, L2 regularization parameter (default 0.0)
+    max_iter : int
+    tol : float, convergence tolerance
+    warm_start : ndarray of shape (p,) or None
+
+    Returns
+    -------
+    beta : ndarray of shape (p,)
+    """
+    n, p = X.shape
+    if warm_start is not None:
+        beta = warm_start.copy()
+    else:
+        beta = np.zeros(p)
+    
+    # Precompute X^T X diagonal and X^T y
+    # For coordinate descent: update_j = X_j^T (y - X beta + X_j beta_j) 
+    # We use the "naive" update which is simple and correct.
+    # Column norms squared (for normalization)
+    col_norms_sq = np.sum(X ** 2, axis=0)  # (p,)
+    
+    for iteration in range(max_iter):
+        beta_old = beta.copy()
+        residual = y - X @ beta
+        
+        for j in range(p):
+            if col_norms_sq[j] == 0:
+                continue
+            # Partial residual including j-th component
+            residual += X[:, j] * beta[j]
+            # Unconstrained update
+            rho_j = X[:, j] @ residual
+            # Soft threshold
+            beta[j] = _soft_threshold(rho_j, lam) / (col_norms_sq[j] + rho)
+            # Update residual
+            residual -= X[:, j] * beta[j]
+        
+        # Check convergence
+        if np.max(np.abs(beta - beta_old)) < tol:
+            break
+    
+    return beta
+
+
+class ConformalLassoRegressor(ConformalRegressor):
+    """
+    Conformal prediction with Lasso/elastic net using the piecewise linear
+    homotopy from Lei & Fithian. Computes exact conformal prediction sets
+    without grid search by tracing how residuals evolve as the test label varies.
+
+    When rho=0 (default), this is pure Lasso. When rho>0, this solves the
+    elastic net: min (1/2)||y - Xβ||² + lam||β||₁ + (rho/2)||β||₂²
+
+    Parameters
+    ----------
+    lam : float
+        L1 regularization parameter (lambda). Must be non-negative.
+    rho : float
+        L2 regularization parameter (default 0.0). When rho=0, pure Lasso.
+    epsilon : float
+        Significance level for prediction sets (default 0.1).
+    autotune : bool
+        If True, tune lambda via K-fold cross-validation in learn_initial_training_set.
+    n_folds : int
+        Number of CV folds for autotuning (default 5).
+    search_range_factor : float
+        Factor to extend the y search range beyond [y_min, y_max] (default 0.25).
+    max_homotopy_steps : int
+        Maximum number of homotopy breakpoints to trace per direction (default 1000).
+    verbose : int
+        Verbosity level.
+    warnings : bool
+        Whether to emit warnings.
+    rnd_state : int or None
+        Random seed.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> np.random.seed(42)
+    >>> N = 50
+    >>> X = np.random.normal(size=(N, 10))
+    >>> beta_true = np.array([3, 1.5, 0, 0, 2, 0, 0, 0, 0, 0])
+    >>> y = X @ beta_true + np.random.normal(scale=0.5, size=N)
+    >>> cp = ConformalLassoRegressor(lam=0.5)
+    >>> cp.learn_initial_training_set(X[:30], y[:30])
+    >>> interval = cp.predict(X[30], epsilon=0.1)
+    >>> y[30] in interval
+    True
+    """
+
+    def __init__(self, lam=1.0, rho=0.0, epsilon=default_epsilon, autotune=False, n_folds=5,
+                 search_range_factor=0.25, max_homotopy_steps=1000,
+                 verbose=0, warnings=True, rnd_state=None):
+        super().__init__(epsilon=epsilon)
+        self.lam = lam
+        self.rho = rho
+        self.autotune = autotune
+        self.n_folds = n_folds
+        self.search_range_factor = search_range_factor
+        self.max_homotopy_steps = max_homotopy_steps
+        self.verbose = verbose
+        self.warnings = warnings
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+        self.X = None
+        self.y = None
+        self.beta = None      # Current Lasso solution
+        self.Sigma = None     # X^T X / n (sample covariance)
+
+    def learn_initial_training_set(self, X, y):
+        """Fit initial Lasso on the training data."""
+        self.X = X.copy()
+        self.y = y.copy()
+        n, p = X.shape
+        self.Sigma = X.T @ X / n
+
+        if self.autotune:
+            self._tune_lambda()
+        
+        self.beta = _solve_lasso(self.X, self.y, self.lam, rho=self.rho)
+
+    def _tune_lambda(self):
+        """Tune lambda via K-fold cross-validation."""
+        n = self.X.shape[0]
+        indices = np.arange(n)
+        self.rnd_gen.shuffle(indices)
+        folds = np.array_split(indices, self.n_folds)
+        
+        # Lambda grid: geometric sequence
+        lam_max = np.max(np.abs(self.X.T @ self.y)) / n
+        lam_grid = np.geomspace(lam_max, lam_max * 1e-3, num=50)
+        
+        best_lam = self.lam
+        best_mse = np.inf
+        
+        for lam in lam_grid:
+            mse = 0.0
+            for k in range(self.n_folds):
+                val_idx = folds[k]
+                train_idx = np.concatenate([folds[j] for j in range(self.n_folds) if j != k])
+                X_tr, y_tr = self.X[train_idx], self.y[train_idx]
+                X_val, y_val = self.X[val_idx], self.y[val_idx]
+                beta_k = _solve_lasso(X_tr, y_tr, lam, rho=self.rho)
+                mse += np.mean((y_val - X_val @ beta_k) ** 2)
+            mse /= self.n_folds
+            if mse < best_mse:
+                best_mse = mse
+                best_lam = lam
+        
+        self.lam = best_lam
+        if self.verbose > 0:
+            print(f'Tuned lambda: {self.lam:.6f} (CV MSE: {best_mse:.4f})')
+
+    def learn_one(self, x, y, precomputed=None):
+        """
+        Learn a new data point. Updates the training set and refits Lasso.
+        
+        If precomputed is provided (from predict with return_update=True),
+        uses the cached Lasso solution to avoid refitting.
+        """
+        x = np.atleast_1d(x).ravel()
+        
+        # Update training set
+        if self.X is None:
+            self.X = x.reshape(1, -1)
+            self.y = np.array([y])
+        else:
+            self.X = np.vstack([self.X, x.reshape(1, -1)])
+            self.y = np.append(self.y, y)
+        
+        # Update sample covariance incrementally: Sigma_new = (n*Sigma_old + x x^T) / (n+1)
+        n = self.X.shape[0]
+        self.Sigma = ((n - 1) * self.Sigma + np.outer(x, x)) / n
+        
+        if precomputed is not None and precomputed.get('beta') is not None:
+            self.beta = precomputed['beta']
+        else:
+            # Refit from scratch (warm-started from current beta)
+            self.beta = _solve_lasso(self.X, self.y, self.lam, rho=self.rho, warm_start=self.beta)
+
+    def predict(self, x, epsilon=None, return_update=False):
+        """
+        Compute the conformal prediction set at x using the homotopy algorithm.
+
+        Returns a ConformalPredictionInterval (if the set is a single interval)
+        or a list of (lower, upper) tuples otherwise.
+        """
+        if epsilon is None:
+            epsilon = self.epsilon
+        
+        x = np.atleast_1d(x).ravel()
+        n = self.X.shape[0]
+        
+        if n < 2:
+            result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+            if return_update:
+                return result, {'beta': None}
+            return result
+        
+        # y_{n+1}(0) = x_{n+1}^T beta_hat — the "neutral" label
+        y0 = x @ self.beta
+        
+        # Compute search range
+        y_range = self.y.max() - self.y.min()
+        if y_range == 0:
+            y_range = 1.0
+        t_max = (self.y.max() - y0) + self.search_range_factor * y_range
+        t_min = (self.y.min() - y0) - self.search_range_factor * y_range
+        
+        # Run homotopy in both directions
+        intervals_pos = self._run_homotopy(x, direction=+1, t_bound=t_max)
+        intervals_neg = self._run_homotopy(x, direction=-1, t_bound=t_min)
+        
+        # Merge intervals (shift from t-space to y-space)
+        all_intervals = []
+        for (a, b) in intervals_neg:
+            all_intervals.append((y0 + a, y0 + b))
+        # Add t=0 point
+        # Check if t=0 is in the prediction set
+        if self._t_in_prediction_set(x, 0.0, epsilon):
+            all_intervals.append((y0, y0))
+        for (a, b) in intervals_pos:
+            all_intervals.append((y0 + a, y0 + b))
+        
+        # Merge overlapping/adjacent intervals
+        merged = self._merge_intervals(all_intervals)
+        
+        if not merged:
+            result = self._construct_Gamma(np.nan, np.nan, epsilon)
+        elif len(merged) == 1:
+            result = self._construct_Gamma(merged[0][0], merged[0][1], epsilon)
+        else:
+            # Return the smallest enclosing interval (conservative)
+            result = self._construct_Gamma(merged[0][0], merged[-1][1], epsilon)
+        
+        # Build precomputed for learn_one
+        precomputed_dict = None
+        if return_update:
+            precomputed_dict = {'beta': None}  # Will be set if we can extract from homotopy
+        
+        if return_update:
+            return result, precomputed_dict
+        return result
+
+    def compute_p_value(self, x, y, smoothed=True, tau=None):
+        """
+        Compute the conformal p-value for (x, y) given current training set.
+        """
+        x = np.atleast_1d(x).ravel()
+        n = self.X.shape[0]
+        
+        if tau is None and smoothed:
+            tau = self.rnd_gen.uniform()
+        
+        # Augment training set with (x, y)
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        y_aug = np.append(self.y, y)
+        
+        # Fit Lasso on augmented data
+        beta_aug = _solve_lasso(X_aug, y_aug, self.lam, rho=self.rho, warm_start=self.beta)
+        
+        # Compute residuals
+        residuals = np.abs(y_aug - X_aug @ beta_aug)
+        
+        # p-value: fraction of residuals >= residual of test point
+        r_test = residuals[-1]
+        if smoothed and tau is not None:
+            gt = np.sum(residuals > r_test)
+            eq = np.sum(residuals == r_test)
+            p = (gt + tau * eq) / len(residuals)
+        else:
+            geq = np.sum(residuals >= r_test)
+            p = geq / len(residuals)
+        
+        return p
+
+    def _t_in_prediction_set(self, x_new, t, epsilon):
+        """Check if a specific t value puts y_{n+1}(t) in the prediction set."""
+        n = self.X.shape[0]
+        threshold = int(np.ceil((n + 1) * (1 - epsilon)))
+        
+        # Augment
+        X_aug = np.vstack([self.X, x_new.reshape(1, -1)])
+        y_aug = np.append(self.y, x_new @ self.beta + t)
+        
+        # Fit Lasso
+        beta_t = _solve_lasso(X_aug, y_aug, self.lam, rho=self.rho, warm_start=self.beta)
+        
+        # Residuals
+        abs_res = np.abs(y_aug - X_aug @ beta_t)
+        
+        # Rank of |r_{n+1}| (how many are <= it, in increasing order)
+        rank = np.sum(abs_res <= abs_res[-1])
+        return rank <= threshold
+
+    def _run_homotopy(self, x_new, direction, t_bound):
+        """
+        Run the piecewise linear homotopy in one direction.
+        
+        Returns a list of (t_start, t_end) intervals that are IN the prediction set.
+        """
+        n = self.X.shape[0]
+        p = self.X.shape[1]
+        lam = self.lam
+        epsilon = self.epsilon
+        threshold = int(np.ceil((n + 1) * (1 - epsilon)))
+        
+        # sign of direction
+        sign = 1 if direction > 0 else -1
+        t_bound_abs = abs(t_bound)
+        
+        # Initial state
+        beta_k = self.beta.copy()
+        J_k = np.where(np.abs(beta_k) > 1e-12)[0]  # active set
+        signs_k = np.sign(beta_k[J_k])  # signs on active set
+        
+        # Dual variable on inactive set: v = X^T(y - X*beta) evaluated at t=0
+        # At t=0 the augmented data is (X; x_new) with label y_{n+1}=x_new^T beta
+        # The augmented problem's subgradient:
+        # v_j = sum_i (y_i - x_i^T beta) x_{i,j} + (y_{n+1}(0) - x_new^T beta) * x_new_j
+        # But y_{n+1}(0) = x_new^T beta, so the second term is 0
+        # v = X^T (y - X beta) = X^T r (initial residuals)
+        residuals = self.y - self.X @ beta_k
+        v_full = self.X.T @ residuals  # subgradient (not including test point contribution at t=0)
+        # Note: for the augmented problem at t=0, the n+1-th contribution is 0
+        
+        J_c_k = np.setdiff1d(np.arange(p), J_k)  # inactive set
+        v_inactive = v_full[J_c_k]
+        
+        # Residuals at t=0 for training points
+        r_train = residuals.copy()  # r_i(0) = y_i - x_i^T beta for i=1..n
+        r_test = 0.0  # r_{n+1}(0) = y_{n+1}(0) - x_new^T beta(0) = 0
+        
+        # The Sigma hat used in the paper: (1/n) X^T X 
+        # But actually the formula uses sum_{i=1}^{n+1} x_i x_i^T = n*Sigma + x_new*x_new^T
+        # Let's define Sigma_aug = X^T X + x_new x_new^T (unnormalized)
+        XtX = self.X.T @ self.X  # n * Sigma
+        XtX_aug = XtX + np.outer(x_new, x_new)  # sum_{i=1}^{n+1} x_i x_i^T
+        
+        t_accumulated = 0.0
+        intervals_in_set = []
+        
+        for step in range(self.max_homotopy_steps):
+            if t_accumulated >= t_bound_abs:
+                break
+            
+            # Compute eta(k) and gamma(k)
+            # eta(k) = (Sigma_aug_{J_k})^{-1} x_{n+1,J_k} / (1 + x_{n+1,J_k}^T (Sigma_aug_{J_k})^{-1} x_{n+1,J_k})
+            # But the paper uses n^{-1} * Sigma_hat = (1/n) sum x_i x_i^T, so Sigma_hat_{J_k} = XtX_aug[J_k][:,J_k]/n?
+            # Actually re-reading: the paper defines Sigma_hat = (1/n) sum_{i=1}^n x_i x_i^T
+            # And the formula has (sum_{i=1}^{n+1} x_{i,J} x_{i,J}^T)^{-1} = (n Sigma_hat_J + x_{n+1,J} x_{n+1,J}^T)^{-1}
+            # which equals XtX_aug[J,J]^{-1}
+            
+            if len(J_k) == 0:
+                # All variables inactive — beta(t) = 0 for all t in this piece
+                # r_{n+1}(t) grows linearly with slope 1 (since eta=0)
+                # This piece extends until some dual variable hits +/-lambda
+                if len(J_c_k) == 0:
+                    break
+                # gamma(k) = x_{n+1,J_c} (since J is empty, no correction term)
+                gamma_k = sign * x_new[J_c_k]
+                
+                # Breakpoint: dual variable hits boundary
+                dt_dual = np.full(len(J_c_k), np.inf)
+                for idx, j in enumerate(J_c_k):
+                    g = gamma_k[idx]
+                    if g > 1e-15:
+                        dt_dual[idx] = (lam - sign * v_inactive[idx]) / g
+                    elif g < -1e-15:
+                        dt_dual[idx] = (-lam - sign * v_inactive[idx]) / g
+                dt_dual = np.where(dt_dual > 1e-12, dt_dual, np.inf)
+                
+                dt_k = np.min(dt_dual)
+                dt_k = min(dt_k, t_bound_abs - t_accumulated)
+                
+                # In this piece: r_i(t) = r_train_i (constant), r_{n+1}(t) = sign*t (grows)
+                # Find sub-intervals in prediction set
+                sub_intervals = self._find_intervals_in_piece(
+                    r_train, r_test,
+                    slopes_train=np.zeros(n),
+                    slope_test=sign * 1.0,
+                    dt_k=dt_k, t_accumulated=t_accumulated,
+                    sign=sign, threshold=threshold, n=n
+                )
+                intervals_in_set.extend(sub_intervals)
+                
+                # Advance
+                t_accumulated += dt_k
+                r_test += sign * 1.0 * dt_k
+                v_inactive += gamma_k * dt_k
+                
+                # Update active set
+                if dt_k < t_bound_abs - t_accumulated + 1e-12:
+                    entering = J_c_k[np.argmin(dt_dual)]
+                    J_k = np.append(J_k, entering)
+                    signs_k = np.append(signs_k, np.sign(v_inactive[np.argmin(dt_dual)]))
+                    J_c_k = np.setdiff1d(np.arange(p), J_k)
+                    v_inactive = v_full[J_c_k]  # will be recomputed below
+                continue
+            
+            # Normal case: |J_k| > 0
+            Sigma_J = XtX_aug[np.ix_(J_k, J_k)] + self.rho * np.eye(len(J_k))
+            x_J = x_new[J_k]
+            
+            try:
+                Sigma_J_inv = np.linalg.inv(Sigma_J)
+            except np.linalg.LinAlgError:
+                # Singular — cannot continue homotopy
+                break
+            
+            Sigma_J_inv_x = Sigma_J_inv @ x_J
+            denom = 1.0 + x_J @ Sigma_J_inv_x
+            
+            if abs(denom) < 1e-14:
+                break
+            
+            eta_k = sign * Sigma_J_inv_x / denom  # slope of beta_{J_k}(t) w.r.t. |t|
+            
+            # gamma(k) for inactive variables
+            if len(J_c_k) > 0:
+                Sigma_JcJ = XtX_aug[np.ix_(J_c_k, J_k)]
+                gamma_k = sign * (x_new[J_c_k] - Sigma_JcJ @ Sigma_J_inv_x) / denom
+            else:
+                gamma_k = np.array([])
+            
+            # Slopes of residuals:
+            # r_i(t) = r_i(t_k) - x_{i,J_k}^T eta(k) * delta_t  for training points
+            # r_{n+1}(t) = r_{n+1}(t_k) + (1 - x_{n+1,J}^T eta(k)/sign) * sign * delta_t
+            # Actually: r_{n+1}(t) slope = sign * (1/(1 + x_J^T Sigma_J_inv x_J)) = sign / denom
+            slopes_train = -(self.X[:, J_k] @ eta_k)  # (n,) — dr_i/d(delta_t)
+            slope_test = sign / denom  # dr_{n+1}/d(delta_t)
+            
+            # Find breakpoint t_{k+1}
+            # Primal: beta_j(t_k) + eta_j(k) * dt = 0 for j in J_k
+            beta_J = beta_k[J_k]
+            dt_primal = np.full(len(J_k), np.inf)
+            for idx in range(len(J_k)):
+                if abs(eta_k[idx]) > 1e-15:
+                    dt = -beta_J[idx] / eta_k[idx]
+                    if dt > 1e-12:
+                        dt_primal[idx] = dt
+            
+            # Dual: |v_j(t_k) + gamma_j * dt| = lambda for j in J_c
+            dt_dual = np.full(len(J_c_k), np.inf)
+            for idx in range(len(J_c_k)):
+                g = gamma_k[idx]
+                v_j = v_inactive[idx]
+                if abs(g) > 1e-15:
+                    # v_j + g*dt = +lambda or -lambda
+                    dt1 = (lam - v_j) / g
+                    dt2 = (-lam - v_j) / g
+                    candidates = []
+                    if dt1 > 1e-12:
+                        candidates.append(dt1)
+                    if dt2 > 1e-12:
+                        candidates.append(dt2)
+                    if candidates:
+                        dt_dual[idx] = min(candidates)
+            
+            dt_k = min(
+                np.min(dt_primal) if len(dt_primal) > 0 else np.inf,
+                np.min(dt_dual) if len(dt_dual) > 0 else np.inf,
+            )
+            dt_k = min(dt_k, t_bound_abs - t_accumulated)
+            
+            if dt_k <= 0 or not np.isfinite(dt_k):
+                break
+            
+            # Find sub-intervals in this piece that are in the prediction set
+            sub_intervals = self._find_intervals_in_piece(
+                r_train, r_test,
+                slopes_train=slopes_train,
+                slope_test=slope_test,
+                dt_k=dt_k, t_accumulated=t_accumulated,
+                sign=sign, threshold=threshold, n=n
+            )
+            intervals_in_set.extend(sub_intervals)
+            
+            # Advance state
+            beta_k[J_k] += eta_k * dt_k
+            r_train += slopes_train * dt_k
+            r_test += slope_test * dt_k
+            if len(J_c_k) > 0:
+                v_inactive += gamma_k * dt_k
+            t_accumulated += dt_k
+            
+            # Update active set based on what hit the boundary
+            min_primal = np.min(dt_primal) if len(dt_primal) > 0 else np.inf
+            min_dual = np.min(dt_dual) if len(dt_dual) > 0 else np.inf
+            
+            if dt_k >= t_bound_abs - (t_accumulated - dt_k):
+                break  # Reached search boundary
+            
+            if min_primal <= min_dual:
+                # A variable leaves the active set
+                leaving_idx = np.argmin(dt_primal)
+                leaving_var = J_k[leaving_idx]
+                beta_k[leaving_var] = 0.0
+                J_k = np.delete(J_k, leaving_idx)
+                signs_k = np.delete(signs_k, leaving_idx)
+            else:
+                # A variable enters the active set
+                entering_idx = np.argmin(dt_dual)
+                entering_var = J_c_k[entering_idx]
+                entering_sign = np.sign(v_inactive[entering_idx])
+                J_k = np.append(J_k, entering_var)
+                signs_k = np.append(signs_k, entering_sign)
+            
+            J_c_k = np.setdiff1d(np.arange(p), J_k)
+            # Recompute v_inactive for new inactive set
+            # v = X_aug^T * r_aug where r_aug includes test point
+            # Since we track r_train and r_test:
+            v_full = self.X.T @ r_train + x_new * r_test
+            v_inactive = v_full[J_c_k]
+        
+        return intervals_in_set
+
+    def _find_intervals_in_piece(self, r_train, r_test, slopes_train, slope_test,
+                                  dt_k, t_accumulated, sign, threshold, n):
+        """
+        Within one homotopy piece of length dt_k, find sub-intervals where
+        |r_{n+1}(t)| has rank <= threshold among all |r_i(t)|.
+        
+        Residuals are linear in delta_t (local parameter within the piece):
+            r_i(delta) = r_train[i] + slopes_train[i] * delta   for i=0..n-1
+            r_{n+1}(delta) = r_test + slope_test * delta
+        
+        Returns intervals in GLOBAL t-space (t_accumulated + sign*delta mapped to t).
+        """
+        # Find all crossing points where |r_i(delta)| = |r_{n+1}(delta)| for some i
+        crossings = []
+        
+        for i in range(n):
+            # |r_i(d)| = |r_{n+1}(d)|
+            # Case 1: r_i(d) = r_{n+1}(d)  => (r_train[i] - r_test) + (slopes_train[i] - slope_test)*d = 0
+            # Case 2: r_i(d) = -r_{n+1}(d) => (r_train[i] + r_test) + (slopes_train[i] + slope_test)*d = 0
+            # Case 3: -r_i(d) = r_{n+1}(d) => -(r_train[i] + r_test) - (slopes_train[i] + slope_test)*d = 0
+            #        same as case 2
+            # Case 4: -r_i(d) = -r_{n+1}(d) => same as case 1
+            
+            # So we need: r_i(d) = +/- r_{n+1}(d)
+            for s in [1, -1]:
+                a = (r_train[i] - s * r_test)
+                b = (slopes_train[i] - s * slope_test)
+                if abs(b) > 1e-15:
+                    d = -a / b
+                    if -1e-12 < d < dt_k + 1e-12:
+                        d = np.clip(d, 0, dt_k)
+                        crossings.append(d)
+        
+        # Add endpoints
+        crossings = [0.0] + sorted(set(crossings)) + [dt_k]
+        
+        # For each sub-interval, check rank at midpoint
+        result_intervals = []
+        for idx in range(len(crossings) - 1):
+            d_start = crossings[idx]
+            d_end = crossings[idx + 1]
+            if d_end - d_start < 1e-14:
+                continue
+            d_mid = (d_start + d_end) / 2
+            
+            # Compute residuals at midpoint
+            r_i_mid = r_train + slopes_train * d_mid
+            r_test_mid = r_test + slope_test * d_mid
+            
+            abs_r_i = np.abs(r_i_mid)
+            abs_r_test = np.abs(r_test_mid)
+            
+            # Rank: number of |r_j| <= |r_{n+1}| (including n+1 itself)
+            rank = np.sum(abs_r_i <= abs_r_test) + 1  # +1 for itself
+            
+            if rank <= threshold:
+                # This sub-interval is in the prediction set
+                # Map to global t-space
+                t_start = sign * (t_accumulated + d_start)
+                t_end = sign * (t_accumulated + d_end)
+                if t_start > t_end:
+                    t_start, t_end = t_end, t_start
+                result_intervals.append((t_start, t_end))
+        
+        return result_intervals
+
+    @staticmethod
+    def _merge_intervals(intervals):
+        """Merge overlapping or adjacent intervals."""
+        if not intervals:
+            return []
+        sorted_intervals = sorted(intervals, key=lambda x: x[0])
+        merged = [sorted_intervals[0]]
+        for (a, b) in sorted_intervals[1:]:
+            if a <= merged[-1][1] + 1e-12:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        return merged
 
 
 if __name__ == "__main__":

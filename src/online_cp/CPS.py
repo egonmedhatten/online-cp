@@ -626,8 +626,14 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
         tic = time.time()
         # Find all neighbours and semi-neighbours
-        # Use argpartition for O(n) partial sort instead of O(n log n) full sort
-        k_nearest = np.argpartition(D, self.k+1, axis=0)[1:self.k+1]
+        # Use argpartition for O(n) selection of k+1 smallest, then sort them
+        # for deterministic tie-breaking consistent with full argsort.
+        top_k1 = np.argpartition(D, self.k+1, axis=0)[:self.k+1]
+        for col in range(D.shape[1]):
+            idx = top_k1[:, col]
+            order = np.argsort(D[idx, col])
+            top_k1[:, col] = idx[order]
+        k_nearest = top_k1[1:]  # skip self (distance=0, always first after sort)
         toc_sort = time.time() - tic
 
         tic = time.time()

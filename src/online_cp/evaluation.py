@@ -2,6 +2,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+__all__ = [
+    'Evaluation',
+    'Err',
+    'OE',
+    'OF',
+    'Width',
+    'WinklerScore',
+    'CRPS',
+]
+
 # NOTE: Below are some efficiency criteria, some of which are proper scoring rules.
 #       What I have to do now, is to create one or more Evaluation classes, which, in their
 #       construction create metric classes, and keeps track of the statistics as we go on.

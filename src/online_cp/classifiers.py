@@ -4,6 +4,11 @@ import warnings
 from scipy.spatial.distance import pdist, cdist, squareform
 from joblib import Parallel, delayed
 
+__all__ = [
+    'ConformalNearestNeighboursClassifier',
+    'ConformalPredictionSet',
+]
+
 default_epsilon = 0.1
 
 class ConformalPredictionSet:

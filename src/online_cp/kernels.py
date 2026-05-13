@@ -1,6 +1,14 @@
 import numpy as np
 from scipy.spatial.distance import pdist, cdist, squareform
 
+__all__ = [
+    'GaussianKernel',
+    'LinearKernel',
+    'PolynomialKernel',
+    'PeriodicKernel',
+    'LinearCombinationKernel',
+]
+
 class Kernel:
 
     def __call__(self, x):

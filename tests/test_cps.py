@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from online_cp.CPS import (
     RidgePredictionMachine,
+    KernelRidgePredictionMachine,
     NearestNeighboursPredictionMachine,
     DempsterHillConformalPredictiveSystem,
 )
@@ -154,3 +155,117 @@ class TestDempsterHillConformalPredictiveSystem:
         cps.learn_one(4.0)
         assert len(cps.y) == 4
         assert cps.y[-1] == 4.0
+
+
+from online_cp.kernels import GaussianKernel
+
+
+@pytest.fixture
+def kernel_cps_dataset():
+    rng = np.random.default_rng(2024)
+    N = 80
+    X = rng.normal(size=(N, 3))
+    beta = np.array([2, 1, 0.5])
+    Y = X @ beta + rng.normal(scale=1, size=N)
+    return X, Y
+
+
+class TestKernelRidgePredictionMachine:
+    def test_cpd_monotone_in_tau(self, kernel_cps_dataset):
+        """CPD(y, tau=0) <= CPD(y, tau=1) for all y."""
+        X, Y = kernel_cps_dataset
+        kernel = GaussianKernel(sigma=1.0)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps.learn_initial_training_set(X[:15], Y[:15])
+
+        cpd = cps.predict_cpd(X[15])
+        y_test = np.linspace(-5, 5, 50)
+        for y in y_test:
+            assert cpd(y, tau=0) <= cpd(y, tau=1) + 1e-12
+
+    def test_cpd_bounded_zero_one(self, kernel_cps_dataset):
+        """CPD values should be in [0, 1]."""
+        X, Y = kernel_cps_dataset
+        kernel = GaussianKernel(sigma=1.0)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps.learn_initial_training_set(X[:15], Y[:15])
+
+        cpd = cps.predict_cpd(X[15])
+        y_test = np.linspace(-10, 10, 100)
+        for y in y_test:
+            val = cpd(y, tau=0.5)
+            assert -1e-10 <= val <= 1 + 1e-10
+
+    def test_coverage(self, kernel_cps_dataset):
+        """Prediction sets should have valid coverage."""
+        X, Y = kernel_cps_dataset
+        epsilon = 0.1
+        kernel = GaussianKernel(sigma=1.0)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False, epsilon=epsilon)
+        cps.learn_initial_training_set(X[:15], Y[:15])
+
+        rng = np.random.default_rng(42)
+        covered = 0
+        n_test = 40
+        for i in range(15, 15 + n_test):
+            tau = rng.uniform()
+            cpd, precomputed = cps.predict_cpd(X[i], return_update=True)
+            Gamma = cpd.predict_set(tau=tau, epsilon=epsilon)
+            covered += int(Y[i] in Gamma)
+            cps.learn_one(X[i], Y[i], precomputed=precomputed)
+
+        coverage = covered / n_test
+        assert coverage >= (1 - epsilon) - 0.15
+
+    def test_learn_one_with_precomputed(self, kernel_cps_dataset):
+        """Learning with precomputed should give same state as without."""
+        X, Y = kernel_cps_dataset
+        kernel = GaussianKernel(sigma=1.0)
+
+        # With precomputed
+        cps1 = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps1.learn_initial_training_set(X[:15], Y[:15])
+        _, precomputed = cps1.predict_cpd(X[15], return_update=True)
+        cps1.learn_one(X[15], Y[15], precomputed=precomputed)
+
+        # Without precomputed
+        cps2 = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps2.learn_initial_training_set(X[:15], Y[:15])
+        cps2.learn_one(X[15], Y[15])
+
+        assert np.allclose(cps1.h_diag, cps2.h_diag, atol=1e-10)
+        assert np.allclose(cps1.Hy, cps2.Hy, atol=1e-10)
+        assert np.allclose(cps1.Kinv, cps2.Kinv, atol=1e-10)
+        assert np.allclose(cps1.y, cps2.y)
+
+    def test_learn_one_from_empty(self):
+        """Can learn points one by one starting from empty."""
+        kernel = GaussianKernel(sigma=1.0)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+
+        rng = np.random.default_rng(0)
+        for i in range(5):
+            x = rng.normal(size=(1, 2))
+            y = float(rng.normal())
+            cps.learn_one(x, y)
+
+        assert cps.X.shape == (5, 2)
+        assert len(cps.y) == 5
+        assert len(cps.h_diag) == 5
+        assert len(cps.Hy) == 5
+
+    def test_predict_after_learn_from_empty(self):
+        """Can predict after learning from empty."""
+        kernel = GaussianKernel(sigma=1.0)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+
+        rng = np.random.default_rng(1)
+        for i in range(10):
+            x = rng.normal(size=(1, 2))
+            y = float(rng.normal())
+            cps.learn_one(x, y)
+
+        x_test = rng.normal(size=(1, 2))
+        cpd = cps.predict_cpd(x_test)
+        # CPD should be valid
+        assert 0 <= cpd(0.0, tau=0.5) <= 1

@@ -5,3 +5,4 @@ dist/
 *.egg-info/
 notebooks/*.html
 notebooks/*.pdf
+papers/

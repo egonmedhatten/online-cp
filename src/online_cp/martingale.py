@@ -5,16 +5,38 @@ from scipy.stats import beta, norm, uniform
 from scipy.integrate import quad
 import warnings
 
+__all__ = [
+    'PluginMartingale',
+    'SimpleJumper',
+    'CompositeJumper',
+    'OnionMartingale',
+    'SimpleMixtureMartingale',
+    'BetaKernel',
+    'GaussianKDE',
+    'BetaMoments',
+    'BetaMLE',
+    'ParticleFilterStrategy',
+    'FixedStrategy',
+    'ExpertAggregationStrategy',
+]
+
 # Handle optional dependency for BetaKDE
 try:
     from beta_kde import BetaKDE
 except ImportError:
-    # Mock for testing purposes if not installed
     class BetaKDE:
-        def __init__(self, bandwidth='beta-reference'): pass
+        _warned = False
+        def __init__(self, bandwidth='beta-reference'):
+            if not BetaKDE._warned:
+                warnings.warn(
+                    "beta_kde package not installed. BetaKernel strategy will "
+                    "use uniform density (no betting power). Install with: "
+                    "pip install beta_kde",
+                    stacklevel=2,
+                )
+                BetaKDE._warned = True
         def fit(self, data, compute_normalization=True): pass
-        def pdf(self, x, normalized=True): 
-            # Return uniform density as mock
+        def pdf(self, x, normalized=True):
             return np.ones_like(x) if np.ndim(x) > 0 else 1.0
 
 # TODO

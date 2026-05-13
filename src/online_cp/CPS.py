@@ -367,7 +367,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
             # h_diag_new[:-1] = h_diag_old - a_d * v^2
             # h_diag_new[-1] = 1 - a_d  (= d*kappa - d*k^T v = d*(kappa - k^T Kinv k))
             v_flat = v.ravel()
-            new_h_last = float(d_val * kappa - d_val * (k.T @ v))
+            new_h_last = (d_val * kappa - d_val * (k.T @ v)).item()
             self.h_diag = np.append(self.h_diag - a_d * v_flat**2, new_h_last)
 
             # Hy_new[:-1] = Hy_old - a_d * v * (v^T @ y_old) + a_d * v * y_new
@@ -396,7 +396,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
             else:
                 k = self.kernel(self.X, x).reshape(-1, 1)
                 kappa = self.kernel(x, x)
-                d_val = float(1 / (kappa + self.a - k.T @ self.Kinv @ k))
+                d_val = (1 / (kappa + self.a - k.T @ self.Kinv @ k)).item()
                 a_d = self.a * d_val
 
                 # Compute v = Kinv @ k
@@ -404,7 +404,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
                 v_flat = v.ravel()
 
                 # Incremental update of h_diag and Hy
-                new_h_last = float(d_val * kappa - d_val * (k.T @ v))
+                new_h_last = (d_val * kappa - d_val * (k.T @ v)).item()
                 self.h_diag = np.append(self.h_diag - a_d * v_flat**2, new_h_last)
 
                 y_old = self.y[:-1]
@@ -432,7 +432,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         # Temporarily update kernel matrix
         k = self.kernel(self.X, x).reshape(-1, 1)
         kappa = self.kernel(x, x)
-        d_val = float(1 / (kappa + self.a - k.T @ self.Kinv @ k))
+        d_val = (1 / (kappa + self.a - k.T @ self.Kinv @ k)).item()
         a_d = self.a * d_val
         y = self.y
 
@@ -443,7 +443,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         # Efficient O(n) computation — avoid forming full (n+1)×(n+1) hat matrix.
         # H_new diagonal: h_diag_new[:-1] = h_diag_old - a_d * v^2, h_new[-1] = d*kappa - d*k^T*v
         h_train = self.h_diag - a_d * v_flat**2
-        h_last = float(d_val * kappa - d_val * (k.T @ v))
+        h_last = (d_val * kappa - d_val * (k.T @ v)).item()
         
         # H_new last row (= last col by symmetry): H[-1, :-1] = a_d * v^T
         h_last_row = a_d * v_flat

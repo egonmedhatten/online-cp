@@ -6,6 +6,7 @@ from joblib import Parallel, delayed
 
 __all__ = [
     'ConformalNearestNeighboursClassifier',
+    'ConformalSupportVectorMachine',
     'ConformalPredictionSet',
 ]
 
@@ -458,14 +459,378 @@ class ConformalClassifierWrapper(ConformalClassifier):
             return Gamma
 
 class ConformalSupportVectorMachine(ConformalClassifier):
-    # The Lagrange multipliers can be used as nonconformity measure. 
-    # TODO: Figure out how to use sklearn's SVM
-    # TODO: Check the caveat in ALRW
-    # TODO: Implement
-    def __init__(self, epsilon=default_epsilon):
-        super().__init__(epsilon)
+    """
+    Conformal classifier using the Support Vector Machine with Lagrange
+    multiplier nonconformity measure (ALRW Ch. 3).
+
+    For each candidate label, one-vs-rest binarization is applied and the
+    SVM dual is solved on the augmented training set. The Lagrange multiplier
+    alpha_i is the nonconformity score for example i: alpha_i = 0 means well
+    inside the margin (conforming), alpha_i = C means on the margin boundary
+    or misclassified (maximally nonconforming).
+
+    Supports multi-class classification via one-vs-rest decomposition.
+    The Gram matrix is label-independent and reused across all candidate labels.
+
+    Parameters
+    ----------
+    kernel : Kernel, callable, or str
+        - An online_cp.kernels.Kernel instance (native).
+        - A callable f(X, Y) -> (n, m) Gram matrix (sklearn-style).
+        - A string: 'linear', 'rbf', 'poly'.
+    C : float
+        Regularization parameter (upper bound on alpha_i). Default 1.0.
+    label_space : array-like
+        The set of possible labels. Supports any number of classes.
+        Default [-1, 1].
+    sigma : float
+        Bandwidth for RBF kernel when kernel='rbf'. Default 1.0.
+    degree : int
+        Degree for polynomial kernel when kernel='poly'. Default 3.
+    coef0 : float
+        Constant for polynomial kernel. Default 1.0.
+    smo_tol : float
+        Tolerance for SMO convergence. Default 1e-3.
+    smo_max_iter : int
+        Maximum SMO iterations. Default 1000.
+    epsilon : float
+        Significance level. Default 0.1.
+    rnd_state : int or None
+        Random seed.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> np.random.seed(42)
+    >>> X = np.vstack([np.random.normal(loc=-1, size=(20, 2)),
+    ...               np.random.normal(loc=1, size=(20, 2))])
+    >>> y = np.array([-1]*20 + [1]*20)
+    >>> svm = ConformalSupportVectorMachine(kernel='rbf', sigma=1.0, C=10.0)
+    >>> svm.learn_initial_training_set(X[:30], y[:30])
+    >>> Gamma = svm.predict(X[30])
+    >>> y[30] in Gamma
+    True
+    """
+
+    def __init__(self, kernel='rbf', C=1.0, label_space=np.array([-1, 1]),
+                 sigma=1.0, degree=3, coef0=1.0,
+                 smo_tol=1e-3, smo_max_iter=1000,
+                 epsilon=default_epsilon, rnd_state=None):
+        super().__init__(epsilon=epsilon)
+        self.C = C
+        self.label_space = label_space
+        self.sigma = sigma
+        self.degree = degree
+        self.coef0 = coef0
+        self.smo_tol = smo_tol
+        self.smo_max_iter = smo_max_iter
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+        self.X = None
+        self.y = np.empty(0)
+        self.K = None  # Cached Gram matrix
+
+        # Resolve kernel
+        self._kernel = self._resolve_kernel(kernel)
+
+    def _resolve_kernel(self, kernel):
+        """Resolve kernel specification into a callable with our interface."""
+        try:
+            from online_cp.kernels import Kernel, GaussianKernel, LinearKernel, PolynomialKernel
+        except ModuleNotFoundError:
+            from kernels import Kernel, GaussianKernel, LinearKernel, PolynomialKernel
+
+        if isinstance(kernel, Kernel):
+            return kernel
+        elif isinstance(kernel, str):
+            if kernel == 'linear':
+                return LinearKernel()
+            elif kernel == 'rbf':
+                return GaussianKernel(sigma=self.sigma)
+            elif kernel == 'poly':
+                return PolynomialKernel(d=self.degree, c=self.coef0)
+            else:
+                raise ValueError(f"Unknown kernel string: '{kernel}'. "
+                                 f"Use 'linear', 'rbf', or 'poly'.")
+        elif callable(kernel):
+            # Wrap sklearn-style callable: f(X, Y) -> matrix
+            return _SklearnKernelAdapter(kernel)
+        else:
+            raise TypeError(f"kernel must be a Kernel instance, callable, or string, "
+                            f"got {type(kernel)}")
+
+    def _compute_gram(self, X):
+        """Compute full Gram matrix."""
+        return self._kernel(X)
+
+    def _compute_kernel_row(self, X, x):
+        """Compute kernel between all rows of X and a single point x."""
+        return self._kernel(X, x).ravel()
+
+    def learn_initial_training_set(self, X, y):
+        """Store training data and precompute Gram matrix."""
+        self.X = X.copy()
+        self.y = y.copy().astype(float)
+        self.K = self._compute_gram(X)
+
+    def learn_one(self, x, y):
+        """Learn a new example, updating stored data and Gram matrix."""
+        x = np.atleast_1d(x).ravel()
+        if self.X is None:
+            self.X = x.reshape(1, -1)
+            self.y = np.array([y], dtype=float)
+            self.K = self._compute_gram(self.X)
+        else:
+            # Compute new kernel row
+            k_row = self._compute_kernel_row(self.X, x)
+            kappa = self._kernel(x.reshape(1, -1)).item() if self._kernel(x.reshape(1, -1)).ndim > 0 else self._kernel(x.reshape(1, -1))
+            # Extend Gram matrix
+            n = self.K.shape[0]
+            K_new = np.empty((n + 1, n + 1))
+            K_new[:n, :n] = self.K
+            K_new[:n, n] = k_row
+            K_new[n, :n] = k_row
+            K_new[n, n] = kappa
+            self.K = K_new
+            self.X = np.vstack([self.X, x.reshape(1, -1)])
+            self.y = np.append(self.y, float(y))
+
+    def predict(self, x, epsilon=None, return_p_values=False):
+        """
+        Predict the conformal prediction set for object x.
+
+        For each candidate label, augment the training set with (x, label),
+        solve the SVM dual, and use alpha_i as nonconformity scores.
+        """
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        x = np.atleast_1d(x).ravel()
+        tau = self.rnd_gen.uniform()
+        p_values = {}
+
+        if self.X is None or self.y.shape[0] == 0:
+            # No training data — predict all labels
+            for label in self.label_space:
+                p_values[label] = 1.0
+            Gamma = self._compute_Gamma(p_values, epsilon)
+            if return_p_values:
+                return Gamma, p_values
+            return Gamma
+
+        # Compute kernel row between training set and test point
+        k_row = self._compute_kernel_row(self.X, x)
+        kappa = self._kernel(x.reshape(1, -1))
+        if np.ndim(kappa) > 0:
+            kappa = kappa.item()
+
+        # Build augmented Gram matrix (n+1 x n+1)
+        n = self.K.shape[0]
+        K_aug = np.empty((n + 1, n + 1))
+        K_aug[:n, :n] = self.K
+        K_aug[:n, n] = k_row
+        K_aug[n, :n] = k_row
+        K_aug[n, n] = kappa
+
+        # For each candidate label, solve SVM and compute p-value
+        for label in self.label_space:
+            y_aug = np.append(self.y, float(label))
+
+            # Binarize: one-vs-rest (label -> +1, everything else -> -1)
+            y_binary = np.where(y_aug == label, 1.0, -1.0)
+
+            # Solve SVM dual (no warm start: solutions differ greatly across labels)
+            alpha, _ = _smo_solve(
+                K_aug, y_binary, self.C,
+                tol=self.smo_tol, max_iter=self.smo_max_iter
+            )
+
+            # NCM = alpha_i (nonconformity: larger alpha = more nonconforming)
+            p_values[label] = self._compute_p_value(
+                alpha, tau, 'nonconformity'
+            )
+
+        Gamma = self._compute_Gamma(p_values, epsilon)
+
+        if return_p_values:
+            return Gamma, p_values
+        return Gamma
+
+    def compute_p_value(self, x, y):
+        """Compute the conformal p-value for (x, y) given current training set."""
+        x = np.atleast_1d(x).ravel()
+        tau = self.rnd_gen.uniform()
+
+        if self.X is None or self.y.shape[0] == 0:
+            return 1.0
+
+        # Build augmented Gram matrix
+        k_row = self._compute_kernel_row(self.X, x)
+        kappa = self._kernel(x.reshape(1, -1))
+        if np.ndim(kappa) > 0:
+            kappa = kappa.item()
+
+        n = self.K.shape[0]
+        K_aug = np.empty((n + 1, n + 1))
+        K_aug[:n, :n] = self.K
+        K_aug[:n, n] = k_row
+        K_aug[n, :n] = k_row
+        K_aug[n, n] = kappa
+
+        y_aug = np.append(self.y, float(y))
+
+        # Binarize: one-vs-rest (label -> +1, everything else -> -1)
+        y_binary = np.where(y_aug == y, 1.0, -1.0)
+
+        alpha, _ = _smo_solve(K_aug, y_binary, self.C,
+                              tol=self.smo_tol, max_iter=self.smo_max_iter)
+
+        return self._compute_p_value(alpha, tau, 'nonconformity')
+
+
+class _SklearnKernelAdapter:
+    """Adapter to make sklearn-style kernel callables work with our interface."""
+
+    def __init__(self, kernel_func):
+        self.kernel_func = kernel_func
+
+    def __call__(self, X, y=None):
+        X = np.atleast_2d(X)
+        if y is None:
+            return self.kernel_func(X, X)
+        else:
+            Y = np.atleast_2d(y)
+            K = self.kernel_func(X, Y)
+            return K.ravel()
+
+
+def _smo_solve(K, y, C, tol=1e-3, max_iter=1000, warm_start=None):
+    """
+    Solve the SVM dual QP via Sequential Minimal Optimization (SMO).
+
+    max_alpha  sum(alpha) - 0.5 * alpha^T (y y^T * K) alpha
+    s.t.       0 <= alpha_i <= C,  sum(alpha_i * y_i) = 0
+
+    Parameters
+    ----------
+    K : ndarray (n, n), precomputed Gram matrix
+    y : ndarray (n,), labels in {-1, +1}
+    C : float, upper bound on alpha
+    tol : float, KKT violation tolerance
+    max_iter : int
+    warm_start : ndarray (n,) or None, initial alpha values
+
+    Returns
+    -------
+    alpha : ndarray (n,)
+    b : float, bias term
+    """
+    n = len(y)
+    if warm_start is not None and len(warm_start) == n:
+        alpha = warm_start.copy()
+        # Ensure feasibility
+        alpha = np.clip(alpha, 0, C)
+    else:
+        alpha = np.zeros(n)
+
+    # f_cache: f_i = sum_j alpha_j y_j K_{ij} - y_i  (negated gradient component)
+    # Actually the decision function value: f(x_i) = sum_j alpha_j y_j K_{ij} + b
+    # For KKT checking we use E_i = f(x_i) - y_i
+    # f(x_i) = (alpha * y) @ K[:, i] + b, but we track without b for simplicity
+    # and compute b at the end.
+
+    # Precompute Q = y_i * y_j * K_{ij}
+    # E_i = sum_j alpha_j y_j K_{ij} - y_i (without bias, we'll account for it)
     
-        
+    # Use the simplified approach: track E_i = f(x_i) - y_i
+    # where f(x_i) = sum_j (alpha_j * y_j * K[j,i]) + b
+    # Start with b=0
+    b = 0.0
+    E = np.zeros(n)
+    for i in range(n):
+        E[i] = (alpha * y) @ K[:, i] + b - y[i]
+
+    for iteration in range(max_iter):
+        num_changed = 0
+
+        for i in range(n):
+            # Check KKT conditions for alpha[i]
+            r_i = E[i] * y[i]  # = y_i * (f(x_i) - y_i) = y_i*f(x_i) - 1
+
+            if (r_i < -tol and alpha[i] < C) or (r_i > tol and alpha[i] > 0):
+                # Select j: maximum |E_i - E_j|
+                j = _select_j(i, E, n)
+
+                # Save old alphas
+                alpha_i_old = alpha[i]
+                alpha_j_old = alpha[j]
+
+                # Compute bounds
+                if y[i] != y[j]:
+                    L = max(0.0, alpha[j] - alpha[i])
+                    H = min(C, C + alpha[j] - alpha[i])
+                else:
+                    L = max(0.0, alpha[i] + alpha[j] - C)
+                    H = min(C, alpha[i] + alpha[j])
+
+                if L >= H:
+                    continue
+
+                # Compute eta
+                eta = 2.0 * K[i, j] - K[i, i] - K[j, j]
+                if eta >= 0:
+                    continue
+
+                # Update alpha[j]
+                alpha[j] -= y[j] * (E[i] - E[j]) / eta
+                alpha[j] = np.clip(alpha[j], L, H)
+
+                if abs(alpha[j] - alpha_j_old) < 1e-8:
+                    continue
+
+                # Update alpha[i]
+                alpha[i] += y[i] * y[j] * (alpha_j_old - alpha[j])
+
+                # Update bias
+                b1 = b - E[i] - y[i] * (alpha[i] - alpha_i_old) * K[i, i] \
+                     - y[j] * (alpha[j] - alpha_j_old) * K[i, j]
+                b2 = b - E[j] - y[i] * (alpha[i] - alpha_i_old) * K[i, j] \
+                     - y[j] * (alpha[j] - alpha_j_old) * K[j, j]
+
+                if 0 < alpha[i] < C:
+                    b = b1
+                elif 0 < alpha[j] < C:
+                    b = b2
+                else:
+                    b = (b1 + b2) / 2.0
+
+                # Update E cache
+                for k in range(n):
+                    E[k] = (alpha * y) @ K[:, k] + b - y[k]
+
+                num_changed += 1
+
+        if num_changed == 0:
+            break
+
+    return alpha, b
+
+
+def _select_j(i, E, n):
+    """Select the second index j that maximizes |E_i - E_j|."""
+    E_i = E[i]
+    max_delta = -1.0
+    j = 0
+    for k in range(n):
+        if k == i:
+            continue
+        delta = abs(E_i - E[k])
+        if delta > max_delta:
+            max_delta = delta
+            j = k
+    return j
+
+
 if __name__ == "__main__":
     import doctest
     import sys

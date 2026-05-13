@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from online_cp.regressors import ConformalRidgeRegressor, KernelConformalRidgeRegressor, ConformalLassoRegressor
-from online_cp.classifiers import ConformalNearestNeighboursClassifier
+from online_cp.classifiers import ConformalNearestNeighboursClassifier, ConformalSupportVectorMachine
 from online_cp.martingale import (
     PluginMartingale,
     SimpleJumper,

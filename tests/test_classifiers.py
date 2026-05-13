@@ -1,5 +1,5 @@
 import numpy as np
-import pytest
+
 from online_cp.classifiers import ConformalNearestNeighboursClassifier
 
 
@@ -21,9 +21,7 @@ class TestConformalNearestNeighboursClassifier:
         X, y = classification_dataset
         label_space = np.unique(y)
         epsilon = 0.2
-        cp = ConformalNearestNeighboursClassifier(
-            k=3, label_space=label_space, rnd_state=1, epsilon=epsilon
-        )
+        cp = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=1, epsilon=epsilon)
 
         n_init = 10
         cp.learn_initial_training_set(X[:n_init], y[:n_init])
@@ -61,9 +59,7 @@ class TestConformalNearestNeighboursClassifier:
         """After sufficient training, prediction sets should not be empty at low epsilon."""
         X, y = classification_dataset
         label_space = np.unique(y)
-        cp = ConformalNearestNeighboursClassifier(
-            k=3, label_space=label_space, rnd_state=2, epsilon=0.01
-        )
+        cp = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=2, epsilon=0.01)
         cp.learn_initial_training_set(X[:50], y[:50])
 
         for obj in X[50:60]:
@@ -79,9 +75,7 @@ class TestConformalNearestNeighboursClassifier:
     def test_process_dataset(self, classification_dataset):
         X, y = classification_dataset
         label_space = np.unique(y)
-        cp = ConformalNearestNeighboursClassifier(
-            k=3, label_space=label_space, rnd_state=3
-        )
+        cp = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=3)
         result = cp.process_dataset(X, y, epsilon=0.2, init_train=20, return_results=True)
-        assert 'Efficiency' in result
-        assert result['Efficiency']['Average error'] <= 0.3
+        assert "Efficiency" in result
+        assert result["Efficiency"]["Average error"] <= 0.3

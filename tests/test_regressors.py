@@ -1,7 +1,7 @@
 import numpy as np
-import pytest
-from online_cp.regressors import ConformalRidgeRegressor, KernelConformalRidgeRegressor
+
 from online_cp.kernels import GaussianKernel
+from online_cp.regressors import ConformalRidgeRegressor, KernelConformalRidgeRegressor
 
 
 class TestConformalRidgeRegressor:
@@ -82,7 +82,7 @@ class TestConformalRidgeRegressor:
     def test_minimum_training_set(self):
         cp = ConformalRidgeRegressor()
         assert cp.minimum_training_set(0.1) == 20
-        assert cp.minimum_training_set(0.1, 'upper') == 10
+        assert cp.minimum_training_set(0.1, "upper") == 10
         assert cp.minimum_training_set(0.05) == 40
 
     def test_compute_p_value_in_unit_interval(self, linear_dataset):
@@ -108,8 +108,8 @@ class TestConformalRidgeRegressor:
         X, y = linear_dataset
         cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
         result = cp.process_dataset(X, y, epsilon=0.1, init_train=20, return_results=True)
-        assert 'Efficiency' in result
-        assert result['Efficiency']['Average error'] <= 0.15
+        assert "Efficiency" in result
+        assert result["Efficiency"]["Average error"] <= 0.15
 
 
 class TestKernelConformalRidgeRegressor:
@@ -124,7 +124,7 @@ class TestKernelConformalRidgeRegressor:
 
         covered = 0
         n_test = min(80, len(y) - n_init)  # limit for speed
-        for obj, lab in zip(X[n_init:n_init + n_test], y[n_init:n_init + n_test]):
+        for obj, lab in zip(X[n_init : n_init + n_test], y[n_init : n_init + n_test]):
             Gamma = cp.predict(obj)
             covered += int(lab in Gamma)
             cp.learn_one(obj, lab)

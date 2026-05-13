@@ -1,22 +1,26 @@
-# This file should contain the code to keep track of evaluation metrics
-import numpy as np
+"""Evaluation metrics for conformal predictors.
+
+Provides efficiency criteria (Err, OE, OF, Width, Winkler score, CRPS) and
+an :class:`Evaluation` class that tracks multiple metrics online.
+"""
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 __all__ = [
-    'Evaluation',
-    'Err',
-    'OE',
-    'OF',
-    'Width',
-    'WinklerScore',
-    'CRPS',
+    "Evaluation",
+    "Err",
+    "OE",
+    "OF",
+    "Width",
+    "WinklerScore",
+    "CRPS",
 ]
 
 # NOTE: Below are some efficiency criteria, some of which are proper scoring rules.
 #       What I have to do now, is to create one or more Evaluation classes, which, in their
 #       construction create metric classes, and keeps track of the statistics as we go on.
 
-import numpy as np
 
 # This is a bit messy...
 class Evaluation:
@@ -86,7 +90,12 @@ class Evaluation:
         """
         for name, metric in self.metrics.items():
             try:
-                if isinstance(metric, OE) or isinstance(metric, Err) or isinstance(metric, Width) or isinstance(metric, WinklerScore):
+                if (
+                    isinstance(metric, OE)
+                    or isinstance(metric, Err)
+                    or isinstance(metric, Width)
+                    or isinstance(metric, WinklerScore)
+                ):
                     if Gamma is None:
                         if raise_errors:
                             raise ValueError(f"Gamma (gamma_val) is required for {name}.")
@@ -99,23 +108,23 @@ class Evaluation:
                         else:
                             result = metric._update(Gamma, y, epsilon)  # Correct arguments for WinklerScore
                     elif isinstance(metric, Width):
-                        result = metric._update(Gamma) # Correct arguments for Width
+                        result = metric._update(Gamma)  # Correct arguments for Width
                     else:
-                        result = metric._update(y, Gamma)      # Correct arguments for OE, Err
+                        result = metric._update(y, Gamma)  # Correct arguments for OE, Err
                 elif isinstance(metric, OF):
                     if p_values is None:
                         if raise_errors:
                             raise ValueError(f"Probability values (p_vals) are required for {name}.")
                         else:
                             continue
-                    result = metric._update(p_values, y)           # Correct arguments for OF
+                    result = metric._update(p_values, y)  # Correct arguments for OF
                 elif isinstance(metric, CRPS):
                     if cpd is None:
                         if raise_errors:
                             raise ValueError(f"CPD (cpd) is required for {name}.")
                         else:
                             continue
-                    result = metric._update(cpd, y)              # Correct arguments for CRPS
+                    result = metric._update(cpd, y)  # Correct arguments for CRPS
                 else:
                     raise ValueError(f"Unknown metric type: {type(metric)}")
 
@@ -127,7 +136,7 @@ class Evaluation:
                 else:
                     print(f"Warning: Skipping metric '{name}': {e}")
         self.n += 1
-        
+
     def summarize(self):
         """
         Summarize the results of the metrics.
@@ -145,7 +154,7 @@ class Evaluation:
                 "last": results[-1] if results else None,
             }
         return summary
-    
+
     def cumulative(self, criterion):
         """
         Calculate the cumulative sum of a criterion.
@@ -157,7 +166,7 @@ class Evaluation:
         np.ndarray: Cumulative sum of the criterion.
         """
         return np.cumsum(self.results[criterion])
-    
+
     def __getattr__(self, name):  # Called when an attribute is not found
         """
         Get a metric by name.
@@ -173,7 +182,7 @@ class Evaluation:
         else:
             raise AttributeError(f"Metric '{name}' not found in results.")
 
-    def __dir__(self): #For autocompletion
+    def __dir__(self):  # For autocompletion
         """
         List all available metrics.
 
@@ -181,8 +190,7 @@ class Evaluation:
         list: List of metric names.
         """
         return list(self.metrics.keys())
-    
-    
+
     # FIXME: I want to have x tics on the x-axis, but the same x-axis for all plots
     def plot_cumulative_results(self, max_cols=2, title=None):
         """
@@ -196,7 +204,7 @@ class Evaluation:
         matplotlib.figure.Figure: Figure object of the plot.
         """
         num_criteria = len(self.results)
-        
+
         # Determine grid size
         num_cols = min(max_cols, num_criteria)  # Limit columns
         num_rows = int(np.ceil(num_criteria / num_cols))
@@ -211,7 +219,7 @@ class Evaluation:
             cs = np.where(np.isinf(values), np.nan, np.cumsum(values))
             axs[i].plot(cs)
             # axs[i].set_title(criterion)
-            axs[i].set_xlabel('Number of examples')
+            axs[i].set_xlabel("Number of examples")
             axs[i].set_ylabel(criterion)
 
         # Hide any unused subplots
@@ -246,12 +254,14 @@ class EfficiencyCriterion:
         """
         return self.value / self.n
 
+
 class OE(EfficiencyCriterion):
     """
     Observed excess (OE) is the number of incorrect labels included in the prediction set Gamma.
     Thus, it depends on the significance level varepsilon.
     OE is a conditionally proper efficiency criterion (see Algorithmic Learning in a Random World 2nd edition).
     """
+
     def __init__(self):
         """
         Initialize the OE class.
@@ -276,12 +286,14 @@ class OE(EfficiencyCriterion):
             oe = len(Gamma)
         self.value += oe
         return oe
-    
+
+
 class OF(EfficiencyCriterion):
     """
     Observed fuzzyness (OF) is the sum of incorrect p-values. Thus, it is independent of the significance level varepsilon.
     OF is a conditionally proper efficiency criterion (see Algorithmic Learning in a Random World 2nd edition).
     """
+
     def __init__(self):
         """
         Initialize the OF class.
@@ -306,7 +318,8 @@ class OF(EfficiencyCriterion):
                 of += p
         self.value += of
         return of
-    
+
+
 class Err(EfficiencyCriterion):
     """
     Err evaluates whether the true label is included in the prediction set Gamma.
@@ -330,24 +343,25 @@ class Err(EfficiencyCriterion):
         int: Updated Err value.
         """
         self.n += 1
-        if not type(Gamma) == tuple:
-            err = int(not(y in Gamma))
-        else:       
-            err = int(not(y in Gamma))
+        if not isinstance(Gamma, tuple):
+            err = int(y not in Gamma)
+        else:
+            err = int(y not in Gamma)
         self.value += err
         return err
 
-    
+
 class Width(EfficiencyCriterion):
     """
     The width of the prediciton interval Gamma.
     """
+
     def __init__(self):
         """
         Initialize the Width class.
         """
         super().__init__()
-    
+
     def _update(self, Gamma):
         """
         Update the Width metric with new data.
@@ -362,7 +376,8 @@ class Width(EfficiencyCriterion):
         w = Gamma.width()
         self.value += w
         return w
-    
+
+
 class WinklerScore(EfficiencyCriterion):
     """
     The Winkler interval score (or just interval score) is a proper scoring rule for evaluation interval forecasts.
@@ -399,21 +414,22 @@ class WinklerScore(EfficiencyCriterion):
         u = Gamma.upper
         base_score = u - l
         penalty = 0
-        
+
         if y < l:
             penalty = (2 / epsilon) * (l - y)
         elif y > u:
             penalty = (2 / epsilon) * (y - u)
-        
+
         ws = base_score + penalty
 
         self.value += ws
         return ws
-    
+
+
 class CRPS(EfficiencyCriterion):
     """
     Continuous ranked probability score (CRPS) is a proper scoring rule for evaluating predictive distributions.
-    In the case of conformal predictive distributions, the definition does not work, as the integral will not 
+    In the case of conformal predictive distributions, the definition does not work, as the integral will not
     converge. To address this, we have pieced together a confergent integral by integrating the lower distribution
     when x <= y, and the upper when x > y.
     """
@@ -435,21 +451,30 @@ class CRPS(EfficiencyCriterion):
         Returns:
         float: CRPS value.
         """
-        '''
-        NOTE: This implementation is a bith shaky, really. I integrate the lower distribution for x <= y, 
+        """
+        NOTE: This implementation is a bith shaky, really. I integrate the lower distribution for x <= y,
               and the upper for x > y, to ensure convergence. It is possible that this is not proper.
-        '''
+        """
         self.n += 1
-        func_ad_hoc = lambda x: (cpd(x, 0) - int(y <= x))**2 if x <= y else (cpd(x, 1) - int(y <= x))**2
 
-        crps = np.trapz([func_ad_hoc(x) for x in cpd.y_vals[1:-1]], cpd.y_vals[1:-1]) # NOTE: Perhaps not the best integrator
+        def func_ad_hoc(x):
+            if x <= y:
+                return (cpd(x, 0) - int(y <= x)) ** 2
+            else:
+                return (cpd(x, 1) - int(y <= x)) ** 2
+
+        crps = np.trapz(
+            [func_ad_hoc(x) for x in cpd.y_vals[1:-1]], cpd.y_vals[1:-1]
+        )  # NOTE: Perhaps not the best integrator
 
         self.value += crps
         return crps
-    
+
+
 if __name__ == "__main__":
     import doctest
     import sys
+
     (failures, _) = doctest.testmod()
     if failures:
         sys.exit(1)

@@ -66,10 +66,10 @@ cp.predict(X[-1])
 (0.8748194061248175, 1.3357383729107446)
 ```
 
-Furhter examples can be found in the notebooks, e.g. [`example.ipynb`][]. Current functionality includes
+Further examples can be found in the notebooks, e.g. [`example.ipynb`][]. Current functionality includes
 * Conformal regression
 * Conformal classification
-* Testing exchangeability through conformal test martignales
+* Testing exchangeability through conformal test martingales
 
 
 ## Links

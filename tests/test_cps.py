@@ -1,11 +1,13 @@
 import numpy as np
 import pytest
+
 from online_cp.CPS import (
-    RidgePredictionMachine,
+    DempsterHillConformalPredictiveSystem,
     KernelRidgePredictionMachine,
     NearestNeighboursPredictionMachine,
-    DempsterHillConformalPredictiveSystem,
+    RidgePredictionMachine,
 )
+from online_cp.kernels import GaussianKernel
 
 
 @pytest.fixture
@@ -114,7 +116,7 @@ class TestNearestNeighboursPredictionMachine:
         cps = NearestNeighboursPredictionMachine(k=3)
         X = np.array([[1.0], [2.0], [3.0]])
         y = np.array([1.0, 1.0, 2.0])  # Duplicate labels
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, Exception)):
             cps.learn_initial_training_set(X, y)
 
 
@@ -155,9 +157,6 @@ class TestDempsterHillConformalPredictiveSystem:
         cps.learn_one(4.0)
         assert len(cps.y) == 4
         assert cps.y[-1] == 4.0
-
-
-from online_cp.kernels import GaussianKernel
 
 
 @pytest.fixture
@@ -244,7 +243,7 @@ class TestKernelRidgePredictionMachine:
         cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
 
         rng = np.random.default_rng(0)
-        for i in range(5):
+        for _i in range(5):
             x = rng.normal(size=(1, 2))
             y = float(rng.normal())
             cps.learn_one(x, y)
@@ -260,7 +259,7 @@ class TestKernelRidgePredictionMachine:
         cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
 
         rng = np.random.default_rng(1)
-        for i in range(10):
+        for _i in range(10):
             x = rng.normal(size=(1, 2))
             y = float(rng.normal())
             cps.learn_one(x, y)

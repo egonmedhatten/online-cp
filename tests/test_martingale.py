@@ -1,24 +1,20 @@
 import numpy as np
 import pytest
-from copy import deepcopy
-from scipy.integrate import quad
+from scipy.stats import uniform
 
 from online_cp.martingale import (
-    SimpleJumper,
-    CompositeJumper,
-    PluginMartingale,
-    OnionMartingale,
-    SimpleMixtureMartingale,
-    BetaMoments,
     BetaMLE,
-    GaussianKDE,
-    BetaKernel,
-    FixedStrategy,
+    BetaMoments,
+    CompositeJumper,
     ExpertAggregationStrategy,
+    FixedStrategy,
+    GaussianKDE,
+    OnionMartingale,
     ParticleFilterStrategy,
+    PluginMartingale,
+    SimpleJumper,
+    SimpleMixtureMartingale,
 )
-from scipy.stats import uniform, norm
-
 
 # ─── Base martingale properties ───────────────────────────────────────────────
 
@@ -26,33 +22,42 @@ from scipy.stats import uniform, norm
 class TestMartingaleBaseProperties:
     """Properties that hold for any ConformalTestMartingale subclass."""
 
-    @pytest.mark.parametrize("MartingaleClass,kwargs", [
-        (SimpleJumper, {"warnings": False}),
-        (CompositeJumper, {"warnings": False}),
-        (SimpleMixtureMartingale, {"warnings": False}),
-    ])
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {"warnings": False}),
+            (CompositeJumper, {"warnings": False}),
+            (SimpleMixtureMartingale, {"warnings": False}),
+        ],
+    )
     def test_starts_at_one(self, MartingaleClass, kwargs):
         m = MartingaleClass(**kwargs)
         assert m.logM == 0.0
         assert np.isclose(m.M, 1.0)
         assert m.log_martingale_values == [0.0]
 
-    @pytest.mark.parametrize("MartingaleClass,kwargs", [
-        (SimpleJumper, {"warnings": False}),
-        (CompositeJumper, {"warnings": False}),
-        (SimpleMixtureMartingale, {"warnings": False}),
-    ])
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {"warnings": False}),
+            (CompositeJumper, {"warnings": False}),
+            (SimpleMixtureMartingale, {"warnings": False}),
+        ],
+    )
     def test_M_equals_exp_logM(self, MartingaleClass, kwargs, uniform_p_values):
         m = MartingaleClass(**kwargs)
         for p in uniform_p_values[:50]:
             m.update_martingale_value(p)
         assert np.isclose(m.M, np.exp(m.logM))
 
-    @pytest.mark.parametrize("MartingaleClass,kwargs", [
-        (SimpleJumper, {"warnings": False}),
-        (CompositeJumper, {"warnings": False}),
-        (SimpleMixtureMartingale, {"warnings": False}),
-    ])
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {"warnings": False}),
+            (CompositeJumper, {"warnings": False}),
+            (SimpleMixtureMartingale, {"warnings": False}),
+        ],
+    )
     def test_max_geq_current(self, MartingaleClass, kwargs, uniform_p_values):
         m = MartingaleClass(**kwargs)
         for p in uniform_p_values[:50]:
@@ -259,11 +264,14 @@ class TestSimpleMixtureMartingale:
 
 
 class TestBettingStrategies:
-    @pytest.mark.parametrize("StrategyClass,kwargs", [
-        (BetaMoments, {"min_sample_size": 10}),
-        (BetaMLE, {"min_sample_size": 10}),
-        (GaussianKDE, {"min_sample_size": 10, "bandwidth": "silverman"}),
-    ])
+    @pytest.mark.parametrize(
+        "StrategyClass,kwargs",
+        [
+            (BetaMoments, {"min_sample_size": 10}),
+            (BetaMLE, {"min_sample_size": 10}),
+            (GaussianKDE, {"min_sample_size": 10, "bandwidth": "silverman"}),
+        ],
+    )
     def test_returns_callables(self, StrategyClass, kwargs):
         strategy = StrategyClass(**kwargs)
         pvals = [0.1, 0.2, 0.3, 0.4, 0.5]
@@ -272,11 +280,14 @@ class TestBettingStrategies:
         assert callable(b_n)
         assert callable(B_n)
 
-    @pytest.mark.parametrize("StrategyClass,kwargs", [
-        (BetaMoments, {"min_sample_size": 5}),
-        (BetaMLE, {"min_sample_size": 5}),
-        (GaussianKDE, {"min_sample_size": 5, "bandwidth": "silverman"}),
-    ])
+    @pytest.mark.parametrize(
+        "StrategyClass,kwargs",
+        [
+            (BetaMoments, {"min_sample_size": 5}),
+            (BetaMLE, {"min_sample_size": 5}),
+            (GaussianKDE, {"min_sample_size": 5, "bandwidth": "silverman"}),
+        ],
+    )
     def test_b_n_nonnegative(self, StrategyClass, kwargs):
         strategy = StrategyClass(**kwargs)
         pvals = [0.1, 0.2, 0.3, 0.15, 0.25, 0.05]
@@ -285,11 +296,14 @@ class TestBettingStrategies:
         for x in xs:
             assert b_n(x) >= -1e-10, f"b_n({x}) = {b_n(x)} is negative"
 
-    @pytest.mark.parametrize("StrategyClass,kwargs", [
-        (BetaMoments, {"min_sample_size": 5}),
-        (BetaMLE, {"min_sample_size": 5}),
-        (GaussianKDE, {"min_sample_size": 5, "bandwidth": "silverman"}),
-    ])
+    @pytest.mark.parametrize(
+        "StrategyClass,kwargs",
+        [
+            (BetaMoments, {"min_sample_size": 5}),
+            (BetaMLE, {"min_sample_size": 5}),
+            (GaussianKDE, {"min_sample_size": 5, "bandwidth": "silverman"}),
+        ],
+    )
     def test_B_n_boundaries(self, StrategyClass, kwargs):
         strategy = StrategyClass(**kwargs)
         pvals = [0.1, 0.2, 0.3, 0.15, 0.25, 0.05]
@@ -335,7 +349,7 @@ class TestExpertAggregationStrategy:
         rng = np.random.default_rng(0)
         pvals = rng.beta(0.5, 2, size=50).tolist()
         for i in range(len(pvals)):
-            agg.update_betting_function(pvals[:i + 1])
+            agg.update_betting_function(pvals[: i + 1])
 
         w = agg.get_current_weights()
         assert w[0] > w[1], f"Expected expert_good to have higher weight: {w}"

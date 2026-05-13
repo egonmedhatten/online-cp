@@ -1,6 +1,8 @@
 """Tests for ConformalLassoRegressor."""
+
 import numpy as np
 import pytest
+
 from online_cp.regressors import ConformalLassoRegressor, _solve_lasso
 
 
@@ -63,8 +65,8 @@ class TestConformalLassoRegressor:
         cp = ConformalLassoRegressor(lam=0.5)
         cp.learn_initial_training_set(X[:30], y[:30])
         interval = cp.predict(X[30])
-        assert hasattr(interval, 'lower')
-        assert hasattr(interval, 'upper')
+        assert hasattr(interval, "lower")
+        assert hasattr(interval, "upper")
         assert interval.lower <= interval.upper or np.isnan(interval.lower)
 
     def test_learn_one_updates_state(self, sparse_data):
@@ -84,7 +86,7 @@ class TestConformalLassoRegressor:
         assert isinstance(result, tuple)
         assert len(result) == 2
         interval, precomputed = result
-        assert hasattr(interval, 'lower')
+        assert hasattr(interval, "lower")
         assert isinstance(precomputed, dict)
 
     def test_compute_p_value_valid(self, sparse_data):
@@ -118,7 +120,7 @@ class TestConformalLassoRegressor:
         epsilon = 0.2
         cp = ConformalLassoRegressor(lam=0.5, epsilon=epsilon, rnd_state=7)
         cp.learn_initial_training_set(X[:20], y[:20])
-        
+
         covered = 0
         total = 0
         for i in range(20, 55):
@@ -127,7 +129,7 @@ class TestConformalLassoRegressor:
                 covered += 1
             total += 1
             cp.learn_one(X[i], y[i])
-        
+
         coverage = covered / total
         # With epsilon=0.2, expect ~80% coverage; allow slack for small sample
         assert coverage >= 0.5, f"Coverage too low: {coverage:.2f}"
@@ -137,8 +139,8 @@ class TestConformalLassoRegressor:
         X, y, _ = sparse_data
         cp = ConformalLassoRegressor(lam=0.5, epsilon=0.2)
         result = cp.process_dataset(X, y, init_train=20)
-        assert 'Efficiency' in result
-        assert result['Efficiency']['Average error'] <= 0.5
+        assert "Efficiency" in result
+        assert result["Efficiency"]["Average error"] <= 0.5
 
     def test_autotune(self, sparse_data):
         X, y, _ = sparse_data
@@ -156,7 +158,7 @@ class TestConformalLassoRegressor:
         cp = ConformalLassoRegressor(lam=0.1)
         cp.learn_initial_training_set(X[:3], y[:3])
         interval = cp.predict(X[3])
-        assert hasattr(interval, 'lower')
+        assert hasattr(interval, "lower")
 
     def test_matches_brute_force(self):
         """
@@ -168,16 +170,16 @@ class TestConformalLassoRegressor:
         X = rng.normal(size=(n, p))
         beta_true = np.array([2.0, -1.0, 0, 0, 1.5])
         y = X @ beta_true + rng.normal(scale=0.3, size=n)
-        
+
         cp = ConformalLassoRegressor(lam=0.3, epsilon=0.1, rnd_state=0)
         cp.learn_initial_training_set(X[:15], y[:15])
-        
+
         x_test = X[15]
         y_test = y[15]
-        
+
         # Homotopy
         interval = cp.predict(x_test, epsilon=0.1)
-        
+
         # Brute force: compute p-value on a grid and find where p >= epsilon
         grid = np.linspace(y_test - 3, y_test + 3, 200)
         in_set_bf = []
@@ -185,7 +187,7 @@ class TestConformalLassoRegressor:
             p = cp.compute_p_value(x_test, y_trial, smoothed=False)
             if p >= 0.1:
                 in_set_bf.append(y_trial)
-        
+
         # True label should be in both
         p_true = cp.compute_p_value(x_test, y_test, smoothed=False)
         if p_true >= 0.1:
@@ -202,15 +204,19 @@ class TestElasticNet:
     def correlated_data(self):
         """Generate data with correlated features (where elastic net shines)."""
         rng = np.random.default_rng(55)
-        n, p = 60, 10
+        n = 60
         # Correlated features
         Z = rng.normal(size=(n, 3))
-        X = np.column_stack([
-            Z[:, 0], Z[:, 0] + 0.1 * rng.normal(size=n),  # correlated pair
-            Z[:, 1], Z[:, 1] + 0.1 * rng.normal(size=n),  # correlated pair
-            Z[:, 2],
-            rng.normal(size=(n, 5)),  # noise features
-        ])
+        X = np.column_stack(
+            [
+                Z[:, 0],
+                Z[:, 0] + 0.1 * rng.normal(size=n),  # correlated pair
+                Z[:, 1],
+                Z[:, 1] + 0.1 * rng.normal(size=n),  # correlated pair
+                Z[:, 2],
+                rng.normal(size=(n, 5)),  # noise features
+            ]
+        )
         beta_true = np.array([1.5, 1.5, 1.0, 1.0, 2.0, 0, 0, 0, 0, 0])
         y = X @ beta_true + rng.normal(scale=0.5, size=n)
         return X, y, beta_true
@@ -248,8 +254,8 @@ class TestElasticNet:
         cp = ConformalLassoRegressor(lam=0.5, rho=1.0)
         cp.learn_initial_training_set(X[:30], y[:30])
         interval = cp.predict(X[30])
-        assert hasattr(interval, 'lower')
-        assert hasattr(interval, 'upper')
+        assert hasattr(interval, "lower")
+        assert hasattr(interval, "upper")
         assert interval.lower <= interval.upper or np.isnan(interval.lower)
 
     def test_compute_p_value_with_rho(self, correlated_data):

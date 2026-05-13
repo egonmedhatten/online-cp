@@ -1,32 +1,106 @@
 #!/usr/bin/env python
+"""online-cp: Online Conformal Prediction.
 
-from online_cp.regressors import ConformalRidgeRegressor, KernelConformalRidgeRegressor, ConformalLassoRegressor
-from online_cp.classifiers import ConformalNearestNeighboursClassifier, ConformalSupportVectorMachine
-from online_cp.martingale import (
-    PluginMartingale,
-    SimpleJumper,
-    CompositeJumper,
-    OnionMartingale,
-    SimpleMixtureMartingale,
-    BetaKernel,
-    GaussianKDE,
-    BetaMoments,
-    BetaMLE,
-    ParticleFilterStrategy,
-    FixedStrategy,
-    ExpertAggregationStrategy,
+Provides conformal regressors, classifiers, conformal predictive systems,
+conformal test martingales, and evaluation metrics.
+"""
+
+from online_cp.classifiers import (
+    ConformalNearestNeighboursClassifier as ConformalNearestNeighboursClassifier,
+)
+from online_cp.classifiers import (
+    ConformalSupportVectorMachine as ConformalSupportVectorMachine,
 )
 from online_cp.CPS import (
-    RidgePredictionMachine,
-    KernelRidgePredictionMachine,
-    NearestNeighboursPredictionMachine,
-    DempsterHillConformalPredictiveSystem,
+    DempsterHillConformalPredictiveSystem as DempsterHillConformalPredictiveSystem,
+)
+from online_cp.CPS import (
+    KernelRidgePredictionMachine as KernelRidgePredictionMachine,
+)
+from online_cp.CPS import (
+    NearestNeighboursPredictionMachine as NearestNeighboursPredictionMachine,
+)
+from online_cp.CPS import (
+    RidgePredictionMachine as RidgePredictionMachine,
+)
+from online_cp.evaluation import (
+    CRPS as CRPS,
+)
+from online_cp.evaluation import (
+    OE as OE,
+)
+from online_cp.evaluation import (
+    OF as OF,
+)
+from online_cp.evaluation import (
+    Err as Err,
+)
+from online_cp.evaluation import (
+    Evaluation as Evaluation,
+)
+from online_cp.evaluation import (
+    Width as Width,
+)
+from online_cp.evaluation import (
+    WinklerScore as WinklerScore,
 )
 from online_cp.kernels import (
-    GaussianKernel,
-    LinearKernel,
-    PolynomialKernel,
-    PeriodicKernel,
-    LinearCombinationKernel,
+    GaussianKernel as GaussianKernel,
 )
-from online_cp.evaluation import Evaluation, Err, OE, OF, WinklerScore, Width, CRPS
+from online_cp.kernels import (
+    LinearCombinationKernel as LinearCombinationKernel,
+)
+from online_cp.kernels import (
+    LinearKernel as LinearKernel,
+)
+from online_cp.kernels import (
+    PeriodicKernel as PeriodicKernel,
+)
+from online_cp.kernels import (
+    PolynomialKernel as PolynomialKernel,
+)
+from online_cp.martingale import (
+    BetaKernel as BetaKernel,
+)
+from online_cp.martingale import (
+    BetaMLE as BetaMLE,
+)
+from online_cp.martingale import (
+    BetaMoments as BetaMoments,
+)
+from online_cp.martingale import (
+    CompositeJumper as CompositeJumper,
+)
+from online_cp.martingale import (
+    ExpertAggregationStrategy as ExpertAggregationStrategy,
+)
+from online_cp.martingale import (
+    FixedStrategy as FixedStrategy,
+)
+from online_cp.martingale import (
+    GaussianKDE as GaussianKDE,
+)
+from online_cp.martingale import (
+    OnionMartingale as OnionMartingale,
+)
+from online_cp.martingale import (
+    ParticleFilterStrategy as ParticleFilterStrategy,
+)
+from online_cp.martingale import (
+    PluginMartingale as PluginMartingale,
+)
+from online_cp.martingale import (
+    SimpleJumper as SimpleJumper,
+)
+from online_cp.martingale import (
+    SimpleMixtureMartingale as SimpleMixtureMartingale,
+)
+from online_cp.regressors import (
+    ConformalLassoRegressor as ConformalLassoRegressor,
+)
+from online_cp.regressors import (
+    ConformalRidgeRegressor as ConformalRidgeRegressor,
+)
+from online_cp.regressors import (
+    KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
+)

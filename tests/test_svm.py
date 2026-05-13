@@ -2,11 +2,12 @@
 
 import numpy as np
 import pytest
-from online_cp.classifiers import ConformalSupportVectorMachine, _smo_solve
-from online_cp.kernels import GaussianKernel, LinearKernel, PolynomialKernel
 
+from online_cp.classifiers import ConformalSupportVectorMachine, _smo_solve
+from online_cp.kernels import GaussianKernel, LinearKernel
 
 # --- SMO solver tests ---
+
 
 class TestSMOSolver:
     """Tests for the underlying SMO QP solver."""
@@ -15,9 +16,8 @@ class TestSMOSolver:
         """On perfectly separable data, all alphas should be < C."""
         np.random.seed(0)
         n = 20
-        X = np.vstack([np.random.normal(-2, 0.3, (n, 2)),
-                       np.random.normal(2, 0.3, (n, 2))])
-        y = np.array([-1.0]*n + [1.0]*n)
+        X = np.vstack([np.random.normal(-2, 0.3, (n, 2)), np.random.normal(2, 0.3, (n, 2))])
+        y = np.array([-1.0] * n + [1.0] * n)
         K = X @ X.T  # linear kernel
         C = 100.0
         alpha, b = _smo_solve(K, y, C)
@@ -34,9 +34,8 @@ class TestSMOSolver:
         """With overlapping data and small C, some alphas should hit C."""
         np.random.seed(1)
         n = 30
-        X = np.vstack([np.random.normal(-0.5, 1.0, (n, 2)),
-                       np.random.normal(0.5, 1.0, (n, 2))])
-        y = np.array([-1.0]*n + [1.0]*n)
+        X = np.vstack([np.random.normal(-0.5, 1.0, (n, 2)), np.random.normal(0.5, 1.0, (n, 2))])
+        y = np.array([-1.0] * n + [1.0] * n)
         K = X @ X.T
         C = 0.5
         alpha, b = _smo_solve(K, y, C)
@@ -51,9 +50,8 @@ class TestSMOSolver:
         """Warm start should converge to similar solution."""
         np.random.seed(2)
         n = 20
-        X = np.vstack([np.random.normal(-1, 0.5, (n, 2)),
-                       np.random.normal(1, 0.5, (n, 2))])
-        y = np.array([-1.0]*n + [1.0]*n)
+        X = np.vstack([np.random.normal(-1, 0.5, (n, 2)), np.random.normal(1, 0.5, (n, 2))])
+        y = np.array([-1.0] * n + [1.0] * n)
         K = X @ X.T
         C = 1.0
 
@@ -70,6 +68,7 @@ class TestSMOSolver:
 
 # --- ConformalSupportVectorMachine tests ---
 
+
 class TestConformalSVM:
     """Tests for the conformal SVM classifier."""
 
@@ -78,9 +77,8 @@ class TestConformalSVM:
         """Well-separated two-class data."""
         np.random.seed(42)
         n = 30
-        X = np.vstack([np.random.normal(-2, 0.5, (n, 2)),
-                       np.random.normal(2, 0.5, (n, 2))])
-        y = np.array([-1]*n + [1]*n)
+        X = np.vstack([np.random.normal(-2, 0.5, (n, 2)), np.random.normal(2, 0.5, (n, 2))])
+        y = np.array([-1] * n + [1] * n)
         return X, y
 
     @pytest.fixture
@@ -88,17 +86,16 @@ class TestConformalSVM:
         """Overlapping two-class data."""
         np.random.seed(123)
         n = 40
-        X = np.vstack([np.random.normal(-0.3, 1.0, (n, 2)),
-                       np.random.normal(0.3, 1.0, (n, 2))])
-        y = np.array([-1]*n + [1]*n)
+        X = np.vstack([np.random.normal(-0.3, 1.0, (n, 2)), np.random.normal(0.3, 1.0, (n, 2))])
+        y = np.array([-1] * n + [1] * n)
         return X, y
 
     def test_prediction_returns_set(self, separable_data):
         """predict() should return a ConformalPredictionSet."""
         X, y = separable_data
         from online_cp.classifiers import ConformalPredictionSet
-        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0,
-                                           rnd_state=0)
+
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma = svm.predict(X[40])
         assert isinstance(Gamma, ConformalPredictionSet)
@@ -106,8 +103,7 @@ class TestConformalSVM:
     def test_correct_label_in_set(self, separable_data):
         """On well-separated data with small epsilon, errors should be rare."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel=GaussianKernel(sigma=1.0),
-                                           C=10.0, rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel=GaussianKernel(sigma=1.0), C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         errors = 0
         for i in range(40, 60):
@@ -121,15 +117,13 @@ class TestConformalSVM:
     def test_process_dataset(self, separable_data):
         """process_dataset should run without error."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0,
-                                           rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0, rnd_state=0)
         svm.process_dataset(X, y)
 
     def test_p_values_returned(self, separable_data):
         """return_p_values=True should return dict of p-values."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0,
-                                           rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma, p_vals = svm.predict(X[40], return_p_values=True)
         assert isinstance(p_vals, dict)
@@ -142,10 +136,7 @@ class TestConformalSVM:
         """Coverage should be approximately 1-epsilon over many predictions."""
         X, y = overlapping_data
         epsilon = 0.2
-        svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=1.0,
-            epsilon=epsilon, rnd_state=42
-        )
+        svm = ConformalSupportVectorMachine(kernel=GaussianKernel(sigma=1.0), C=1.0, epsilon=epsilon, rnd_state=42)
         n_train = 30
         svm.learn_initial_training_set(X[:n_train], y[:n_train])
 
@@ -165,8 +156,7 @@ class TestConformalSVM:
     def test_kernel_string_rbf(self, separable_data):
         """String kernel 'rbf' should work."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel='rbf', sigma=1.0, C=10.0,
-                                           rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel="rbf", sigma=1.0, C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma = svm.predict(X[40])
         assert y[40] in Gamma
@@ -174,8 +164,7 @@ class TestConformalSVM:
     def test_kernel_string_linear(self, separable_data):
         """String kernel 'linear' should work."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel='linear', C=10.0,
-                                           rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel="linear", C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma = svm.predict(X[40])
         assert y[40] in Gamma
@@ -183,8 +172,7 @@ class TestConformalSVM:
     def test_kernel_string_poly(self, separable_data):
         """String kernel 'poly' should work."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel='poly', degree=2, C=10.0,
-                                           rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel="poly", degree=2, C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma = svm.predict(X[40])
         assert y[40] in Gamma
@@ -195,7 +183,8 @@ class TestConformalSVM:
 
         def my_rbf(X, Y):
             from scipy.spatial.distance import cdist
-            dists = cdist(X, Y, 'sqeuclidean')
+
+            dists = cdist(X, Y, "sqeuclidean")
             return np.exp(-dists / 2.0)
 
         svm = ConformalSupportVectorMachine(kernel=my_rbf, C=10.0, rnd_state=0)
@@ -206,8 +195,7 @@ class TestConformalSVM:
     def test_kernel_native(self, separable_data):
         """Native online_cp kernel should work."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel=GaussianKernel(sigma=2.0),
-                                           C=10.0, rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel=GaussianKernel(sigma=2.0), C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma = svm.predict(X[40])
         assert y[40] in Gamma
@@ -215,8 +203,7 @@ class TestConformalSVM:
     def test_learn_one_extends_gram(self, separable_data):
         """learn_one should extend the cached Gram matrix correctly."""
         X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0,
-                                           rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0, rnd_state=0)
         svm.learn_initial_training_set(X[:10], y[:10])
         assert svm.K.shape == (10, 10)
         svm.learn_one(X[10], y[10])
@@ -230,7 +217,7 @@ class TestConformalSVM:
     def test_invalid_kernel_string_raises(self):
         """Invalid kernel string should raise ValueError."""
         with pytest.raises(ValueError, match="Unknown kernel string"):
-            ConformalSupportVectorMachine(kernel='invalid')
+            ConformalSupportVectorMachine(kernel="invalid")
 
     def test_invalid_kernel_type_raises(self):
         """Invalid kernel type should raise TypeError."""
@@ -239,12 +226,13 @@ class TestConformalSVM:
 
     def test_empty_training_set(self):
         """Prediction with no training data should return all labels."""
-        svm = ConformalSupportVectorMachine(kernel='linear', rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel="linear", rnd_state=0)
         Gamma = svm.predict(np.array([1.0, 2.0]))
         assert -1 in Gamma and 1 in Gamma
 
 
 # --- Multi-class tests ---
+
 
 class TestMultiClassSVM:
     """Tests for multi-class conformal SVM."""
@@ -258,7 +246,7 @@ class TestMultiClassSVM:
         X1 = np.random.normal(loc=[-3, -1], scale=0.5, size=(n, 2))
         X2 = np.random.normal(loc=[3, -1], scale=0.5, size=(n, 2))
         X = np.vstack([X0, X1, X2])
-        y = np.array([0]*n + [1]*n + [2]*n)
+        y = np.array([0] * n + [1] * n + [2] * n)
         # Shuffle so that training split includes all classes
         rng = np.random.default_rng(7)
         perm = rng.permutation(len(y))
@@ -269,13 +257,15 @@ class TestMultiClassSVM:
         """Four classes with arbitrary label names, shuffled."""
         np.random.seed(11)
         n = 20
-        X = np.vstack([
-            np.random.normal(loc=[2, 2], scale=0.4, size=(n, 2)),
-            np.random.normal(loc=[-2, 2], scale=0.4, size=(n, 2)),
-            np.random.normal(loc=[-2, -2], scale=0.4, size=(n, 2)),
-            np.random.normal(loc=[2, -2], scale=0.4, size=(n, 2)),
-        ])
-        y = np.array([10]*n + [20]*n + [30]*n + [40]*n)
+        X = np.vstack(
+            [
+                np.random.normal(loc=[2, 2], scale=0.4, size=(n, 2)),
+                np.random.normal(loc=[-2, 2], scale=0.4, size=(n, 2)),
+                np.random.normal(loc=[-2, -2], scale=0.4, size=(n, 2)),
+                np.random.normal(loc=[2, -2], scale=0.4, size=(n, 2)),
+            ]
+        )
+        y = np.array([10] * n + [20] * n + [30] * n + [40] * n)
         # Shuffle so training includes all classes
         rng = np.random.default_rng(11)
         perm = rng.permutation(len(y))
@@ -285,9 +275,9 @@ class TestMultiClassSVM:
         """Three-class SVM should return a valid prediction set."""
         X, y = three_class_data
         from online_cp.classifiers import ConformalPredictionSet
+
         svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=10.0,
-            label_space=np.array([0, 1, 2]), rnd_state=0
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([0, 1, 2]), rnd_state=0
         )
         svm.learn_initial_training_set(X[:60], y[:60])
         Gamma = svm.predict(X[60])
@@ -299,8 +289,7 @@ class TestMultiClassSVM:
         """P-values should be returned for all candidate labels."""
         X, y = three_class_data
         svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=10.0,
-            label_space=np.array([0, 1, 2]), rnd_state=0
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([0, 1, 2]), rnd_state=0
         )
         svm.learn_initial_training_set(X[:60], y[:60])
         Gamma, p_vals = svm.predict(X[60], return_p_values=True)
@@ -315,9 +304,7 @@ class TestMultiClassSVM:
         X, y = three_class_data
         epsilon = 0.2
         svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=5.0,
-            label_space=np.array([0, 1, 2]),
-            epsilon=epsilon, rnd_state=42
+            kernel=GaussianKernel(sigma=1.0), C=5.0, label_space=np.array([0, 1, 2]), epsilon=epsilon, rnd_state=42
         )
         n_train = 50
         svm.learn_initial_training_set(X[:n_train], y[:n_train])
@@ -338,8 +325,7 @@ class TestMultiClassSVM:
         """Arbitrary label values (10, 20, 30, 40) should work."""
         X, y = four_class_data
         svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=10.0,
-            label_space=np.array([10, 20, 30, 40]), rnd_state=0
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([10, 20, 30, 40]), rnd_state=0
         )
         svm.learn_initial_training_set(X[:60], y[:60])
         Gamma, p_vals = svm.predict(X[60], return_p_values=True)
@@ -349,19 +335,13 @@ class TestMultiClassSVM:
     def test_multiclass_process_dataset(self, three_class_data):
         """process_dataset should work with multi-class."""
         X, y = three_class_data
-        svm = ConformalSupportVectorMachine(
-            kernel=LinearKernel(), C=1.0,
-            label_space=np.array([0, 1, 2]), rnd_state=0
-        )
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0, label_space=np.array([0, 1, 2]), rnd_state=0)
         svm.process_dataset(X[:30], y[:30])
 
     def test_multiclass_learn_one(self, three_class_data):
         """learn_one should work with multi-class labels."""
         X, y = three_class_data
-        svm = ConformalSupportVectorMachine(
-            kernel=LinearKernel(), C=1.0,
-            label_space=np.array([0, 1, 2]), rnd_state=0
-        )
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0, label_space=np.array([0, 1, 2]), rnd_state=0)
         svm.learn_initial_training_set(X[:10], y[:10])
         svm.learn_one(X[10], y[10])
         assert svm.K.shape == (11, 11)

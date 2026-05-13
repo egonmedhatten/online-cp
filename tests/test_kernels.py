@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
-from online_cp.kernels import GaussianKernel, LinearKernel, PolynomialKernel, PeriodicKernel, LinearCombinationKernel
+
+from online_cp.kernels import GaussianKernel, LinearCombinationKernel, LinearKernel, PeriodicKernel, PolynomialKernel
 
 
 @pytest.fixture

@@ -1,8 +1,9 @@
 import numpy as np
 import pytest
-from online_cp.evaluation import Evaluation, Err, OE, OF, Width, WinklerScore, CRPS
-from online_cp.regressors import ConformalPredictionInterval
+
 from online_cp.classifiers import ConformalPredictionSet
+from online_cp.evaluation import OE, OF, Err, Evaluation, Width, WinklerScore
+from online_cp.regressors import ConformalPredictionInterval
 
 
 class TestErr:

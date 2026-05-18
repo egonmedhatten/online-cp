@@ -1454,26 +1454,25 @@ class ConformalLassoRegressor(ConformalRegressor):
                 break
 
             Sigma_J_inv_x = Sigma_J_inv @ x_J
-            denom = 1.0 + x_J @ Sigma_J_inv_x
 
-            if abs(denom) < 1e-14:
-                break
+            # eta(k) = (XtX_aug_J)^{-1} x_{n+1,J}  [paper eq. (5), first form]
+            # Note: the Sherman-Morrison form with training-only covariance has a
+            # 1/(1 + ...) denominator, but that is already baked into the
+            # inverse of XtX_aug.  Do NOT divide by denom again.
+            eta_k = sign * Sigma_J_inv_x  # slope of beta_{J_k}(t) w.r.t. |t|
 
-            eta_k = sign * Sigma_J_inv_x / denom  # slope of beta_{J_k}(t) w.r.t. |t|
-
-            # gamma(k) for inactive variables
+            # gamma(k) for inactive variables  [paper eq. (10), first form]
             if len(J_c_k) > 0:
                 Sigma_JcJ = XtX_aug[np.ix_(J_c_k, J_k)]
-                gamma_k = sign * (x_new[J_c_k] - Sigma_JcJ @ Sigma_J_inv_x) / denom
+                gamma_k = sign * (x_new[J_c_k] - Sigma_JcJ @ Sigma_J_inv_x)
             else:
                 gamma_k = np.array([])
 
             # Slopes of residuals:
-            # r_i(t) = r_i(t_k) - x_{i,J_k}^T eta(k) * delta_t  for training points
-            # r_{n+1}(t) = r_{n+1}(t_k) + (1 - x_{n+1,J}^T eta(k)/sign) * sign * delta_t
-            # Actually: r_{n+1}(t) slope = sign * (1/(1 + x_J^T Sigma_J_inv x_J)) = sign / denom
+            # dr_i/d(delta) = -x_{i,J}^T eta_k  for training points
+            # dr_{n+1}/d(delta) = sign * (1 - x_J^T eta_unsigned)
             slopes_train = -(self.X[:, J_k] @ eta_k)  # (n,) — dr_i/d(delta_t)
-            slope_test = sign / denom  # dr_{n+1}/d(delta_t)
+            slope_test = sign * (1.0 - x_J @ Sigma_J_inv_x)  # dr_{n+1}/d(delta_t)
 
             # Find breakpoint t_{k+1}
             # Primal: beta_j(t_k) + eta_j(k) * dt = 0 for j in J_k

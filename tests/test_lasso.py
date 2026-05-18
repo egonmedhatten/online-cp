@@ -196,6 +196,71 @@ class TestConformalLassoRegressor:
                 f"[{interval.lower:.3f}, {interval.upper:.3f}]"
             )
 
+    def test_homotopy_agrees_with_grid_evaluation(self):
+        """
+        Verify that the homotopy prediction set endpoints closely match
+        brute-force grid evaluation on multiple test points.  This guards
+        against errors in the homotopy slope formulas (eta, gamma, slope_test).
+        """
+        rng = np.random.default_rng(7)
+        n_train, p = 30, 10
+        epsilon = 0.1
+        lam = 0.5
+
+        # Generate Model-I-style data (paper: standard Gaussian linear model)
+        beta_true = rng.choice([-1.0, 1.0], size=p)
+        X = rng.normal(size=(n_train + 10, p))
+        y = X @ beta_true + rng.normal(size=n_train + 10)
+
+        cp = ConformalLassoRegressor(
+            lam=lam, epsilon=epsilon, search_range_factor=0.25, rnd_state=7
+        )
+        cp.learn_initial_training_set(X[:n_train], y[:n_train])
+        X_train, y_train = X[:n_train], y[:n_train]
+
+        threshold = int(np.ceil((n_train + 1) * (1 - epsilon)))
+        X_aug_base = np.vstack([X_train, np.zeros((1, p))])
+        beta0 = _solve_lasso(X_train, y_train, lam)
+
+        for i in range(10):
+            x_test = X[n_train + i]
+            X_aug_base[-1] = x_test
+
+            # Homotopy interval
+            interval = cp.predict(x_test, epsilon=epsilon)
+
+            # Brute-force grid evaluation (dense)
+            y_min, y_max = y_train.min(), y_train.max()
+            yr = y_max - y_min
+            grid = np.linspace(y_min - 0.25 * yr, y_max + 0.25 * yr, 2000)
+            in_set_bf = []
+            for y_trial in grid:
+                y_aug = np.append(y_train, y_trial)
+                beta_aug = _solve_lasso(X_aug_base, y_aug, lam, warm_start=beta0)
+                abs_res = np.abs(y_aug - X_aug_base @ beta_aug)
+                rank = np.sum(abs_res <= abs_res[-1])
+                if rank <= threshold:
+                    in_set_bf.append(y_trial)
+
+            if not in_set_bf:
+                assert np.isnan(interval.lower), (
+                    f"Test {i}: brute-force empty but homotopy non-empty"
+                )
+                continue
+
+            lo_bf, hi_bf = min(in_set_bf), max(in_set_bf)
+            grid_spacing = (grid[-1] - grid[0]) / (len(grid) - 1)
+
+            # Endpoints should agree within a few grid spacings
+            assert abs(interval.lower - lo_bf) < 5 * grid_spacing, (
+                f"Test {i}: lower endpoint mismatch: "
+                f"homotopy={interval.lower:.4f} vs bf={lo_bf:.4f}"
+            )
+            assert abs(interval.upper - hi_bf) < 5 * grid_spacing, (
+                f"Test {i}: upper endpoint mismatch: "
+                f"homotopy={interval.upper:.4f} vs bf={hi_bf:.4f}"
+            )
+
 
 class TestElasticNet:
     """Tests for the elastic net extension (rho > 0)."""

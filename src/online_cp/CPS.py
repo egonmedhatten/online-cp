@@ -817,9 +817,19 @@ class ConformalPredictiveDistributionFunction:
         """
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
+
+        If epsilon is a list/array, returns a MultiLevelPredictionInterval.
         """
         if epsilon is None:
             epsilon = self.epsilon
+
+        # Handle multi-level epsilon
+        if hasattr(epsilon, '__iter__'):
+            from .regressors import MultiLevelPredictionInterval
+            predictions = {}
+            for eps in epsilon:
+                predictions[eps] = self.predict_set(tau, epsilon=eps, bounds=bounds, minimise_width=minimise_width)
+            return MultiLevelPredictionInterval(predictions)
 
         if minimise_width:
             if bounds != "both":

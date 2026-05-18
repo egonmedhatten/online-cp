@@ -1,7 +1,11 @@
 import numpy as np
 
 from online_cp.kernels import GaussianKernel
-from online_cp.regressors import ConformalRidgeRegressor, KernelConformalRidgeRegressor
+from online_cp.regressors import (
+    ConformalRidgeRegressor,
+    KernelConformalRidgeRegressor,
+    MultiLevelPredictionInterval,
+)
 
 
 class TestConformalRidgeRegressor:
@@ -136,3 +140,56 @@ class TestKernelConformalRidgeRegressor:
         Gamma = cp.predict(X[n_init], epsilon=epsilon)
         assert Gamma.lower > -np.inf
         assert Gamma.upper < np.inf
+
+
+class TestMultiLevelPredict:
+    def test_ridge_multi_level(self, linear_dataset):
+        """Ridge regressor with list of epsilons returns MultiLevelPredictionInterval."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
+        cp.learn_initial_training_set(X[:30], y[:30])
+
+        epsilons = [0.01, 0.05, 0.1, 0.2]
+        result = cp.predict(X[30], epsilon=epsilons)
+
+        assert isinstance(result, MultiLevelPredictionInterval)
+        assert result.levels == sorted(epsilons)
+        assert len(result) == 4
+
+        # Smaller epsilon => wider interval
+        for i in range(len(epsilons) - 1):
+            assert result[epsilons[i]].width() >= result[epsilons[i + 1]].width()
+
+        # __contains__ returns bool (True if covered at all levels)
+        assert isinstance(y[30] in result, bool)
+
+        # .coverage() returns dict
+        coverage = result.coverage(y[30])
+        assert isinstance(coverage, dict)
+        assert set(coverage.keys()) == set(epsilons)
+
+    def test_kernel_ridge_multi_level(self, linear_dataset):
+        """Kernel ridge regressor with list of epsilons."""
+        X, y = linear_dataset
+        ker = GaussianKernel(sigma=1.0)
+        cp = KernelConformalRidgeRegressor(a=1.0, kernel=ker, warnings=False)
+        cp.learn_initial_training_set(X[:30], y[:30])
+
+        epsilons = [0.05, 0.1, 0.2]
+        result = cp.predict(X[30], epsilon=epsilons)
+
+        assert isinstance(result, MultiLevelPredictionInterval)
+        assert len(result) == 3
+        # Smaller epsilon => wider interval
+        assert result[0.05].width() >= result[0.1].width()
+        assert result[0.1].width() >= result[0.2].width()
+
+    def test_scalar_epsilon_unchanged(self, linear_dataset):
+        """Scalar epsilon should still return a single interval."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
+        cp.learn_initial_training_set(X[:30], y[:30])
+
+        from online_cp.regressors import ConformalPredictionInterval
+        result = cp.predict(X[30], epsilon=0.1)
+        assert isinstance(result, ConformalPredictionInterval)

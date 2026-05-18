@@ -268,3 +268,30 @@ class TestKernelRidgePredictionMachine:
         cpd = cps.predict_cpd(x_test)
         # CPD should be valid
         assert 0 <= cpd(0.0, tau=0.5) <= 1
+
+
+class TestMultiLevelCPD:
+    def test_predict_set_multi_level(self):
+        """CPD.predict_set with list of epsilons returns MultiLevelPredictionInterval."""
+        from online_cp.regressors import MultiLevelPredictionInterval
+
+        rng = np.random.default_rng(42)
+        X = rng.normal(size=(50, 2))
+        y = X @ np.array([1.0, -0.5]) + rng.normal(0, 0.3, 50)
+
+        cps = RidgePredictionMachine(a=1.0)
+        cps.learn_initial_training_set(X[:40], y[:40])
+
+        cpd = cps.predict_cpd(X[40])
+        tau = 0.5
+
+        epsilons = [0.01, 0.05, 0.1, 0.2]
+        result = cpd.predict_set(tau, epsilon=epsilons)
+
+        assert isinstance(result, MultiLevelPredictionInterval)
+        assert result.levels == sorted(epsilons)
+        assert len(result) == 4
+
+        # Smaller epsilon => wider interval
+        for i in range(len(epsilons) - 1):
+            assert result[epsilons[i]].width() >= result[epsilons[i + 1]].width()

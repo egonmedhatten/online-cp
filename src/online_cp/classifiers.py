@@ -16,6 +16,7 @@ __all__ = [
     "ConformalNearestNeighboursClassifier",
     "ConformalSupportVectorMachine",
     "ConformalPredictionSet",
+    "MultiLevelPredictionSet",
 ]
 
 default_epsilon = 0.1
@@ -50,6 +51,47 @@ class ConformalPredictionSet:
 
     def size(self):
         return self.__len__()
+
+
+class MultiLevelPredictionSet:
+    """Prediction sets at multiple significance levels.
+
+    Returned when ``predict`` is called with an array-like ``epsilon``.
+
+    Parameters
+    ----------
+    predictions : dict
+        Mapping ``{epsilon: ConformalPredictionSet}``.
+    """
+
+    def __init__(self, predictions: dict):
+        self._predictions = dict(sorted(predictions.items()))
+
+    @property
+    def levels(self):
+        """Sorted list of significance levels."""
+        return list(self._predictions.keys())
+
+    def __getitem__(self, eps):
+        return self._predictions[eps]
+
+    def __iter__(self):
+        return iter(self._predictions.items())
+
+    def __len__(self):
+        return len(self._predictions)
+
+    def __contains__(self, y):
+        """True if y is covered at all levels."""
+        return all(y in gamma for gamma in self._predictions.values())
+
+    def coverage(self, y):
+        """Return dict of {epsilon: bool} indicating coverage at each level."""
+        return {eps: (y in gamma) for eps, gamma in self._predictions.items()}
+
+    def __repr__(self):
+        parts = [f"  ε={eps}: {gamma}" for eps, gamma in self._predictions.items()]
+        return "MultiLevelPredictionSet(\n" + "\n".join(parts) + "\n)"
 
 
 class ConformalClassifier:
@@ -87,6 +129,15 @@ class ConformalClassifier:
             return float(p)
 
     def _compute_Gamma(self, p_values, epsilon):
+        if hasattr(epsilon, '__iter__'):
+            predictions = {}
+            for eps in epsilon:
+                Gamma = []
+                for y in self.label_space:
+                    if p_values[y] > eps:
+                        Gamma.append(y)
+                predictions[eps] = ConformalPredictionSet(np.array(Gamma), eps)
+            return MultiLevelPredictionSet(predictions)
         Gamma = []
         for y in self.label_space:
             if p_values[y] > epsilon:

@@ -16,6 +16,7 @@ __all__ = [
     "KernelConformalRidgeRegressor",
     "ConformalLassoRegressor",
     "ConformalPredictionInterval",
+    "MultiLevelPredictionInterval",
 ]
 
 
@@ -57,6 +58,47 @@ class ConformalPredictionInterval:
 
     def __str__(self):
         return f"({self.lower}, {self.upper})"
+
+
+class MultiLevelPredictionInterval:
+    """Prediction intervals at multiple significance levels.
+
+    Returned when ``predict`` is called with an array-like ``epsilon``.
+
+    Parameters
+    ----------
+    predictions : dict
+        Mapping ``{epsilon: ConformalPredictionInterval}``.
+    """
+
+    def __init__(self, predictions: dict):
+        self._predictions = dict(sorted(predictions.items()))
+
+    @property
+    def levels(self):
+        """Sorted list of significance levels."""
+        return list(self._predictions.keys())
+
+    def __getitem__(self, eps):
+        return self._predictions[eps]
+
+    def __iter__(self):
+        return iter(self._predictions.items())
+
+    def __len__(self):
+        return len(self._predictions)
+
+    def __contains__(self, y):
+        """True if y is covered at all levels."""
+        return all(y in interval for interval in self._predictions.values())
+
+    def coverage(self, y):
+        """Return dict of {epsilon: bool} indicating coverage at each level."""
+        return {eps: (y in interval) for eps, interval in self._predictions.items()}
+
+    def __repr__(self):
+        parts = [f"  ε={eps}: {interval}" for eps, interval in self._predictions.items()]
+        return "MultiLevelPredictionInterval(\n" + "\n".join(parts) + "\n)"
 
 
 class ConformalRegressor:
@@ -412,28 +454,39 @@ class ConformalRidgeRegressor(ConformalRegressor):
             XTXinv = None
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
+            eps_check = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
             if bounds == "both":
-                if not (epsilon >= 2 / n):
+                if not (eps_check >= 2 / n):
                     if self.warnings:
                         warnings.warn(
-                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / epsilon))} examples. Increase or add more examples",
+                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / eps_check))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
-                    if return_update:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, XTXinv, None, None)
+                    if hasattr(epsilon, '__iter__'):
+                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        result = MultiLevelPredictionInterval(predictions)
                     else:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                    if return_update:
+                        return result, build_precomputed(X, XTXinv, None, None)
+                    else:
+                        return result
             else:
-                if not (epsilon >= 1 / n):
+                if not (eps_check >= 1 / n):
                     if self.warnings:
                         warnings.warn(
-                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / epsilon))} examples. Increase or add more examples",
+                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / eps_check))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
-                    if return_update:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(X, XTXinv, None, None)
+                    if hasattr(epsilon, '__iter__'):
+                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        result = MultiLevelPredictionInterval(predictions)
                     else:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                    if return_update:
+                        return result, build_precomputed(X, XTXinv, None, None)
+                    else:
+                        return result
 
             tic = time.time()
             # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
@@ -459,14 +512,37 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 toc_dics = time.time() - tic
 
             if bounds == "both":
-                lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
-                upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
+                if hasattr(epsilon, '__iter__'):
+                    predictions = {}
+                    for eps in epsilon:
+                        lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
+                        up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
+                        predictions[eps] = self._construct_Gamma(lo, up, eps)
+                    result = MultiLevelPredictionInterval(predictions)
+                else:
+                    lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
+                    upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
+                    result = self._construct_Gamma(lower, upper, epsilon)
             elif bounds == "lower":
-                lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
-                upper = np.inf
+                if hasattr(epsilon, '__iter__'):
+                    predictions = {}
+                    for eps in epsilon:
+                        lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
+                        predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
+                    result = MultiLevelPredictionInterval(predictions)
+                else:
+                    lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
+                    result = self._construct_Gamma(lower, np.inf, epsilon)
             elif bounds == "upper":
-                lower = -np.inf
-                upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
+                if hasattr(epsilon, '__iter__'):
+                    predictions = {}
+                    for eps in epsilon:
+                        up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
+                        predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
+                    result = MultiLevelPredictionInterval(predictions)
+                else:
+                    upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
+                    result = self._construct_Gamma(-np.inf, upper, epsilon)
             else:
                 raise Exception
 
@@ -483,13 +559,16 @@ class ConformalRidgeRegressor(ConformalRegressor):
             A = None
             B = None
 
-            lower = -np.inf
-            upper = np.inf
+            if hasattr(epsilon, '__iter__'):
+                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                result = MultiLevelPredictionInterval(predictions)
+            else:
+                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
 
         if return_update:
-            return self._construct_Gamma(lower, upper, epsilon), build_precomputed(X, XTXinv, A, B)
+            return result, build_precomputed(X, XTXinv, A, B)
         else:
-            return self._construct_Gamma(lower, upper, epsilon)
+            return result
 
     def compute_p_value(self, x, y, bounds="both", precomputed=None, tau=None, smoothed=True):
         """
@@ -770,32 +849,43 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             n = X.shape[0]
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
+            eps_check = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
             if bounds == "both":
-                if not (epsilon >= 2 / n):
+                if not (eps_check >= 2 / n):
                     if self.warnings:
                         warnings.warn(
-                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / epsilon))} examples. Increase or add more examples",
+                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / eps_check))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
+                    if hasattr(epsilon, '__iter__'):
+                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        result = MultiLevelPredictionInterval(predictions)
+                    else:
+                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(
+                        return result, build_precomputed(
                             X, K, Kinv, None, None
                         )
                     else:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        return result
             else:
-                if not (epsilon >= 1 / n):
+                if not (eps_check >= 1 / n):
                     if self.warnings:
                         warnings.warn(
-                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / epsilon))} examples. Increase or add more examples",
+                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / eps_check))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
+                    if hasattr(epsilon, '__iter__'):
+                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        result = MultiLevelPredictionInterval(predictions)
+                    else:
+                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon), build_precomputed(
+                        return result, build_precomputed(
                             X, K, Kinv, None, None
                         )
                     else:
-                        return self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        return result
 
             tic = time.time()
             A, B = self.compute_A_and_B(X, K, Kinv, self.y)
@@ -806,14 +896,37 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             toc_dics = time.time() - tic
 
             if bounds == "both":
-                lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
-                upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
+                if hasattr(epsilon, '__iter__'):
+                    predictions = {}
+                    for eps in epsilon:
+                        lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
+                        up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
+                        predictions[eps] = self._construct_Gamma(lo, up, eps)
+                    result = MultiLevelPredictionInterval(predictions)
+                else:
+                    lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
+                    upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
+                    result = self._construct_Gamma(lower, upper, epsilon)
             elif bounds == "lower":
-                lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
-                upper = np.inf
+                if hasattr(epsilon, '__iter__'):
+                    predictions = {}
+                    for eps in epsilon:
+                        lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
+                        predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
+                    result = MultiLevelPredictionInterval(predictions)
+                else:
+                    lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
+                    result = self._construct_Gamma(lower, np.inf, epsilon)
             elif bounds == "upper":
-                lower = -np.inf
-                upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
+                if hasattr(epsilon, '__iter__'):
+                    predictions = {}
+                    for eps in epsilon:
+                        up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
+                        predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
+                    result = MultiLevelPredictionInterval(predictions)
+                else:
+                    upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
+                    result = self._construct_Gamma(-np.inf, upper, epsilon)
             else:
                 raise Exception
 
@@ -831,13 +944,16 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             A = None
             B = None
 
-            lower = -np.inf
-            upper = np.inf
+            if hasattr(epsilon, '__iter__'):
+                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                result = MultiLevelPredictionInterval(predictions)
+            else:
+                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
 
         if return_update:
-            return self._construct_Gamma(lower, upper, epsilon), build_precomputed(X, K, Kinv, A, B)
+            return result, build_precomputed(X, K, Kinv, A, B)
         else:
-            return self._construct_Gamma(lower, upper, epsilon)
+            return result
 
     def compute_p_value(self, x, y, bounds="both", precomputed=None, tau=None, smoothed=True):
         """
@@ -1159,9 +1275,22 @@ class ConformalLassoRegressor(ConformalRegressor):
 
         Returns a ConformalPredictionInterval (if the set is a single interval)
         or a list of (lower, upper) tuples otherwise.
+
+        If epsilon is a list/array, returns a MultiLevelPredictionInterval.
         """
         if epsilon is None:
             epsilon = self.epsilon
+
+        # Handle multi-level epsilon
+        if hasattr(epsilon, '__iter__'):
+            predictions = {}
+            for eps in epsilon:
+                result = self.predict(x, epsilon=eps, return_update=False)
+                predictions[eps] = result
+            result = MultiLevelPredictionInterval(predictions)
+            if return_update:
+                return result, {"beta": None}
+            return result
 
         x = np.atleast_1d(x).ravel()
         n = self.X.shape[0]

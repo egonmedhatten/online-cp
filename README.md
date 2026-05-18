@@ -1,76 +1,128 @@
-# online-cp -- Online Conformal Prediction
+# online-cp — Online Conformal Prediction
 
 [![online-cp's Build Status][build-status]][build-log]
 [![online-cp on PyPI][pypi-version]][online-cp-on-pypi]
 
-This project is an implementation of Online Conformal Prediction.
-
-For now, take a look at [`example.ipynb`][] to see how to use the library.
-
+A Python library for **online conformal prediction** — valid prediction sets and intervals with guaranteed coverage, updated one example at a time.
 
 ## Quick start
-
-The `online-cp` package is [available on PyPI][online-cp-on-pypi], to install just:
 
 ```bash
 pip install online-cp
 ```
 
-Let's create a dataset with noisy evaluations of the function _f(x₁, x₂) = x₁ + x₂_.
+### Conformal regression
 
-```py
+```python
 import numpy as np
-N = 30
+from online_cp import ConformalRidgeRegressor
+
+# Synthetic data: f(x) = x₁ + x₂ + noise
+N = 100
 X = np.random.uniform(0, 1, (N, 2))
 y = X.sum(axis=1) + np.random.normal(0, 0.1, N)
-cp.learn_initial_training_set(X, y)
+
+# Create regressor and learn an initial training set
+cp = ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+cp.learn_initial_training_set(X[:50], y[:50])
+
+# Online loop: predict then learn
+for i in range(50, N):
+    interval = cp.predict(X[i], epsilon=0.1)
+    print(f"Prediction interval: {interval}")
+    cp.learn_one(X[i], y[i])
 ```
 
-Import the library and create a regressor:
+### Conformal classification
 
-```py
-from online_cp import ConformalRidgeRegressor
-cp = ConformalRidgeRegressor(epsilon=0.1)
+```python
+from online_cp import ConformalNearestNeighboursClassifier
+
+cp = ConformalNearestNeighboursClassifier(k=3, label_space=np.array([0, 1, 2]))
+cp.learn_initial_training_set(X_train, y_train)
+
+Gamma = cp.predict(x_new, epsilon=0.1)
+print(f"Prediction set: {Gamma}")  # e.g. array([1])
 ```
 
-To predict, simply do
-```py
-cp.predict(X[0])
-(-inf, inf)
-```
-The output is non-informative since we have not learned anything yet. The parameter `epsilon` is the significance level.
+### Multi-level predictions
 
-Alternative 1: Learn the dataset sequentially online, and make predictions as we go. In order to output nontrivial prediction at significance level `epsilon=0.1`, we need to have learned at least 20 examples.
+All predictors support multiple significance levels in a single call:
 
-```py
-for x, y in zip(X[-1], Y[-1]):
-    print(f'Prediction set: {cp.predict(x)}')
-    cp.learn_one(x, y)
+```python
+result = cp.predict(x, epsilon=[0.01, 0.05, 0.1, 0.2])
+result[0.1]          # prediction at ε=0.1
+result.levels        # [0.01, 0.05, 0.1, 0.2]
+result.coverage(y)   # {0.01: True, 0.05: True, 0.1: True, 0.2: False}
 ```
 
-In the online setting, we first observe the object _x_, which is used to make a prediction, only then to observe the label _y_. The output will be `(inf, inf)` for the first 19 predictions, after which we will typically see meaningful prediction sets. The snippet above learned all but the last example. To predict it, do (your output may not be exactly the same, as the dataset depends on the random seed).
+### Evaluation
 
-```py
-cp.predict(X[-1])
-(0.029643344144500712, 0.34909922671253196)
+Composable metrics and a standalone evaluation loop:
+
+```python
+from online_cp import ErrorRate, IntervalWidth, WinklerScore
+from online_cp.evaluate import progressive_val
+
+metric = ErrorRate() + IntervalWidth() + WinklerScore()
+progressive_val(model, X_test, y_test, epsilon=0.1, metric=metric)
+print(metric)
+# ErrorRate: 0.0900
+# IntervalWidth: 0.4123
+# WinklerScore: 0.5012
 ```
 
-The prediction set is the closed interval whose boundaries are indicated by the output.
+### Conformal test martingales
 
-Alternative 2: Learn an initial training set offline, and predict e.g. only the last example
+Test the exchangeability assumption online:
 
-```py
-cp = ConformalRidgeRegressor()
-cp.learn_initial_training_set(X[:-1], Y[:-1])
-cp.predict(X[-1])
-(0.8748194061248175, 1.3357383729107446)
+```python
+from online_cp import PluginMartingale, GaussianKDE
+
+martingale = PluginMartingale(betting_strategy=GaussianKDE())
+for i in range(n_train, N):
+    p = cp.compute_p_value(X[i], y[i])
+    martingale.update_martingale_value(p)
+    cp.learn_one(X[i], y[i])
+
+# If martingale grows large → evidence against exchangeability
+print(f"Martingale: {martingale.M:.2f}")
 ```
 
-Further examples can be found in the notebooks, e.g. [`example.ipynb`][]. Current functionality includes
-* Conformal regression
-* Conformal classification
-* Testing exchangeability through conformal test martingales
+## Features
 
+| Module | Description |
+|--------|-------------|
+| **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalLassoRegressor` |
+| **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
+| **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
+| **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |
+| **Evaluation** | `progressive_val()`, `iter_progressive_val()` |
+| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper`, `OnionMartingale` |
+| **Kernels** | `GaussianKernel`, `LinearKernel`, `PolynomialKernel`, `PeriodicKernel`, `LinearCombinationKernel` |
+
+## API pattern
+
+All models follow the same interface:
+
+```python
+model = ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Learn
+model.learn_initial_training_set(X_train, y_train)  # batch
+model.learn_one(x, y)                                # online
+
+# Predict
+Gamma = model.predict(x, epsilon=0.1)      # single level
+result = model.predict(x, epsilon=[...])   # multi-level
+
+# P-value
+p = model.compute_p_value(x, y)
+```
+
+## Tutorial
+
+See [`notebooks/tutorial.ipynb`][] for a comprehensive walkthrough covering regression, classification, conformal predictive systems, evaluation, and test martingales.
 
 ## Links
 
@@ -80,12 +132,10 @@ Further examples can be found in the notebooks, e.g. [`example.ipynb`][]. Curren
 
 ## References
 
-The main reference for Conformal Prediction is the book
-
-Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. Algorithmic Learning in a Random World (2nd ed). Springer Nature, 2022.
+Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. *Algorithmic Learning in a Random World* (2nd ed). Springer Nature, 2022.
 
 
-[`example.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/example.ipynb
+[`notebooks/tutorial.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb
 [online-cp-on-pypi]: https://pypi.org/project/online-cp/
 [online-cp-on-github]: https://github.com/egonmedhatten/online-cp
 [pypi-version]: https://img.shields.io/pypi/v/online-cp

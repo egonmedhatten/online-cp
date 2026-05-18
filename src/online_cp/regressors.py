@@ -454,12 +454,14 @@ class ConformalRidgeRegressor(ConformalRegressor):
             XTXinv = None
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
-            eps_check = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+            # For multi-level: only bail out if even the largest epsilon is too small
+            eps_check = max(epsilon) if hasattr(epsilon, '__iter__') else epsilon
             if bounds == "both":
                 if not (eps_check >= 2 / n):
                     if self.warnings:
+                        eps_warn = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
                         warnings.warn(
-                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / eps_check))} examples. Increase or add more examples",
+                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / eps_warn))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
                     if hasattr(epsilon, '__iter__'):
@@ -474,8 +476,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
             else:
                 if not (eps_check >= 1 / n):
                     if self.warnings:
+                        eps_warn = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
                         warnings.warn(
-                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / eps_check))} examples. Increase or add more examples",
+                            f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / eps_warn))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
                     if hasattr(epsilon, '__iter__'):

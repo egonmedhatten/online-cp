@@ -16,7 +16,8 @@ Example
 >>> print(metric)
 """
 
-from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS
+if __name__ != "__main__":
+    from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS
 
 __all__ = [
     "progressive_val",

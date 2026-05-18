@@ -9,6 +9,7 @@ import time
 
 import numpy as np
 from joblib import Parallel, delayed
+from numba import njit
 from scipy.spatial.distance import cdist, pdist, squareform
 
 __all__ = [
@@ -512,9 +513,9 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     coef0 : float
         Constant for polynomial kernel. Default 1.0.
     smo_tol : float
-        Tolerance for SMO convergence. Default 1e-3.
+        Tolerance for SMO convergence. Default 1e-4.
     smo_max_iter : int
-        Maximum SMO iterations. Default 1000.
+        Maximum SMO iterations. Default 5000.
     epsilon : float
         Significance level. Default 0.1.
     rnd_state : int or None
@@ -542,7 +543,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         degree=3,
         coef0=1.0,
         smo_tol=1e-3,
-        smo_max_iter=1000,
+        smo_max_iter=5000,
         epsilon=default_epsilon,
         rnd_state=None,
     ):
@@ -671,10 +672,17 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             # Binarize: one-vs-rest (label -> +1, everything else -> -1)
             y_binary = np.where(y_aug == label, 1.0, -1.0)
 
-            # Solve SVM dual (no warm start: solutions differ greatly across labels)
             alpha, _ = _smo_solve(K_aug, y_binary, self.C, tol=self.smo_tol, max_iter=self.smo_max_iter)
 
             # NCM = alpha_i (nonconformity: larger alpha = more nonconforming)
+            # For multiclass (>2 labels), use only same-class alphas for the
+            # p-value. The one-vs-rest binarization makes the Gram matrix Q
+            # depend on the hypothesised label, so the NCM is only equivariant
+            # to permutations within the positive class.  For binary problems
+            # Q is invariant to the choice of reference label, so all alphas
+            # are exchangeable and we use the full vector.
+            if len(self.label_space) > 2:
+                alpha = alpha[y_binary == 1.0]
             p_values[label] = self._compute_p_value(alpha, tau, "nonconformity")
 
         Gamma = self._compute_Gamma(p_values, epsilon)
@@ -711,6 +719,9 @@ class ConformalSupportVectorMachine(ConformalClassifier):
 
         alpha, _ = _smo_solve(K_aug, y_binary, self.C, tol=self.smo_tol, max_iter=self.smo_max_iter)
 
+        # For multiclass, use only same-class alphas (see predict method comment)
+        if len(self.label_space) > 2:
+            alpha = alpha[y_binary == 1.0]
         return self._compute_p_value(alpha, tau, "nonconformity")
 
 
@@ -730,20 +741,109 @@ class _SklearnKernelAdapter:
             return K.ravel()
 
 
-def _smo_solve(K, y, C, tol=1e-3, max_iter=1000, warm_start=None):
+@njit(cache=True)
+def _smo_loop(K, y, C, tol, max_iter, alpha, G, Q_diag):
+    """Numba-jitted SMO inner loop with WSS3 working set selection."""
+    n = len(y)
+    for iteration in range(max_iter):
+        # Working set selection (WSS3: second-order)
+        # Find i from I_up with max -y_i*G_i
+        m_val = -np.inf
+        i = -1
+        for k in range(n):
+            if ((alpha[k] < C and y[k] > 0) or (alpha[k] > 0 and y[k] < 0)):
+                val = -y[k] * G[k]
+                if val > m_val:
+                    m_val = val
+                    i = k
+        if i == -1:
+            break
+
+        # WSS3: select j from I_low to maximize gain
+        best_gain = -np.inf
+        j = -1
+        K_ii = Q_diag[i]
+        for k in range(n):
+            if ((alpha[k] < C and y[k] < 0) or (alpha[k] > 0 and y[k] > 0)):
+                yG_k = -y[k] * G[k]
+                if yG_k < m_val:
+                    a_ij = K_ii + Q_diag[k] - 2.0 * K[i, k]
+                    if a_ij <= 0:
+                        a_ij = 1e-12
+                    gain = (m_val - yG_k) ** 2 / a_ij
+                    if gain > best_gain:
+                        best_gain = gain
+                        j = k
+        if j == -1:
+            break
+
+        M_val = -y[j] * G[j]
+        # Check convergence
+        if m_val - M_val <= tol:
+            break
+
+        # Quadratic coefficient
+        a = Q_diag[i] + Q_diag[j] - 2.0 * K[i, j]
+        if a <= 0:
+            a = 1e-12
+
+        # Compute bounds
+        old_ai = alpha[i]
+        old_aj = alpha[j]
+        s = y[i] * y[j]
+
+        if s > 0:
+            L = max(0.0, old_ai + old_aj - C)
+            H = min(C, old_ai + old_aj)
+        else:
+            L = max(0.0, old_aj - old_ai)
+            H = min(C, C + old_aj - old_ai)
+
+        if L >= H:
+            continue
+
+        # Update alpha_j
+        new_aj = old_aj + (s * G[i] - G[j]) / a
+        if new_aj < L:
+            new_aj = L
+        elif new_aj > H:
+            new_aj = H
+        new_ai = old_ai + s * (old_aj - new_aj)
+
+        d_i = new_ai - old_ai
+        d_j = new_aj - old_aj
+        if abs(d_i) < 1e-15 and abs(d_j) < 1e-15:
+            continue
+
+        alpha[i] = new_ai
+        alpha[j] = new_aj
+
+        # Update gradient
+        ci = d_i * y[i]
+        cj = d_j * y[j]
+        for k in range(n):
+            G[k] += y[k] * (ci * K[i, k] + cj * K[j, k])
+
+    return alpha, G
+
+
+def _smo_solve(K, y, C, tol=1e-3, max_iter=5000, warm_start=None):
     """
-    Solve the SVM dual QP via Sequential Minimal Optimization (SMO).
+    Solve the SVM dual QP using Sequential Minimal Optimization (SMO).
 
     max_alpha  sum(alpha) - 0.5 * alpha^T (y y^T * K) alpha
     s.t.       0 <= alpha_i <= C,  sum(alpha_i * y_i) = 0
+
+    Uses WSS3 (second-order) working set selection with a numba-jitted
+    inner loop for performance (Fan, Chen & Lin 2005 / libsvm).
 
     Parameters
     ----------
     K : ndarray (n, n), precomputed Gram matrix
     y : ndarray (n,), labels in {-1, +1}
     C : float, upper bound on alpha
-    tol : float, KKT violation tolerance
-    max_iter : int
+    tol : float, KKT violation tolerance for convergence
+    max_iter : int, maximum number of pair updates
     warm_start : ndarray (n,) or None, initial alpha values
 
     Returns
@@ -752,107 +852,44 @@ def _smo_solve(K, y, C, tol=1e-3, max_iter=1000, warm_start=None):
     b : float, bias term
     """
     n = len(y)
+
+    # Initialize alpha and gradient
     if warm_start is not None and len(warm_start) == n:
-        alpha = warm_start.copy()
-        # Ensure feasibility
-        alpha = np.clip(alpha, 0, C)
+        alpha = np.clip(warm_start.copy(), 0.0, C)
+        if abs(y @ alpha) > tol:
+            alpha = np.zeros(n)
+            G = -np.ones(n)
+        else:
+            G = (y * (K @ (y * alpha))) - 1.0
     else:
         alpha = np.zeros(n)
+        G = -np.ones(n)
 
-    # f_cache: f_i = sum_j alpha_j y_j K_{ij} - y_i  (negated gradient component)
-    # Actually the decision function value: f(x_i) = sum_j alpha_j y_j K_{ij} + b
-    # For KKT checking we use E_i = f(x_i) - y_i
-    # f(x_i) = (alpha * y) @ K[:, i] + b, but we track without b for simplicity
-    # and compute b at the end.
+    Q_diag = np.diag(K).copy()
 
-    # Precompute Q = y_i * y_j * K_{ij}
-    # E_i = sum_j alpha_j y_j K_{ij} - y_i (without bias, we'll account for it)
+    # Ensure contiguous arrays for numba
+    K = np.ascontiguousarray(K)
+    y = np.ascontiguousarray(y)
+    alpha = np.ascontiguousarray(alpha)
+    G = np.ascontiguousarray(G)
+    Q_diag = np.ascontiguousarray(Q_diag)
 
-    # Use the simplified approach: track E_i = f(x_i) - y_i
-    # where f(x_i) = sum_j (alpha_j * y_j * K[j,i]) + b
-    # Start with b=0
-    b = 0.0
-    E = np.zeros(n)
-    for i in range(n):
-        E[i] = (alpha * y) @ K[:, i] + b - y[i]
+    alpha, G = _smo_loop(K, y, C, tol, max_iter, alpha, G, Q_diag)
 
-    for _iteration in range(max_iter):
-        num_changed = 0
+    # Snap alpha values near boundaries
+    snap_tol = max(tol * 1e-2, 1e-10)
+    alpha[alpha < snap_tol] = 0.0
+    alpha[alpha > C - snap_tol] = C
 
-        for i in range(n):
-            # Check KKT conditions for alpha[i]
-            r_i = E[i] * y[i]  # = y_i * (f(x_i) - y_i) = y_i*f(x_i) - 1
-
-            if (r_i < -tol and alpha[i] < C) or (r_i > tol and alpha[i] > 0):
-                # Select j: maximum |E_i - E_j|
-                j = _select_j(i, E, n)
-
-                # Save old alphas
-                alpha_i_old = alpha[i]
-                alpha_j_old = alpha[j]
-
-                # Compute bounds
-                if y[i] != y[j]:
-                    L = max(0.0, alpha[j] - alpha[i])
-                    H = min(C, C + alpha[j] - alpha[i])
-                else:
-                    L = max(0.0, alpha[i] + alpha[j] - C)
-                    H = min(C, alpha[i] + alpha[j])
-
-                if L >= H:
-                    continue
-
-                # Compute eta
-                eta = 2.0 * K[i, j] - K[i, i] - K[j, j]
-                if eta >= 0:
-                    continue
-
-                # Update alpha[j]
-                alpha[j] -= y[j] * (E[i] - E[j]) / eta
-                alpha[j] = np.clip(alpha[j], L, H)
-
-                if abs(alpha[j] - alpha_j_old) < 1e-8:
-                    continue
-
-                # Update alpha[i]
-                alpha[i] += y[i] * y[j] * (alpha_j_old - alpha[j])
-
-                # Update bias
-                b1 = b - E[i] - y[i] * (alpha[i] - alpha_i_old) * K[i, i] - y[j] * (alpha[j] - alpha_j_old) * K[i, j]
-                b2 = b - E[j] - y[i] * (alpha[i] - alpha_i_old) * K[i, j] - y[j] * (alpha[j] - alpha_j_old) * K[j, j]
-
-                if 0 < alpha[i] < C:
-                    b = b1
-                elif 0 < alpha[j] < C:
-                    b = b2
-                else:
-                    b = (b1 + b2) / 2.0
-
-                # Update E cache
-                for k in range(n):
-                    E[k] = (alpha * y) @ K[:, k] + b - y[k]
-
-                num_changed += 1
-
-        if num_changed == 0:
-            break
+    # Compute bias from support vectors (0 < alpha < C)
+    sv_mask = (alpha > 0) & (alpha < C)
+    if np.any(sv_mask):
+        decision = (alpha * y) @ K
+        b = np.mean(y[sv_mask] - decision[sv_mask])
+    else:
+        b = 0.0
 
     return alpha, b
-
-
-def _select_j(i, E, n):
-    """Select the second index j that maximizes |E_i - E_j|."""
-    E_i = E[i]
-    max_delta = -1.0
-    j = 0
-    for k in range(n):
-        if k == i:
-            continue
-        delta = abs(E_i - E[k])
-        if delta > max_delta:
-            max_delta = delta
-            j = k
-    return j
 
 
 if __name__ == "__main__":

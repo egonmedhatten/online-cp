@@ -6,3 +6,4 @@ dist/
 notebooks/*.html
 notebooks/*.pdf
 papers/
+z_*

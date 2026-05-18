@@ -114,12 +114,6 @@ class TestConformalSVM:
         # Allow up to 4 (very generous for stability)
         assert errors <= 4, f"Too many errors: {errors}/20"
 
-    def test_process_dataset(self, separable_data):
-        """process_dataset should run without error."""
-        X, y = separable_data
-        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0, rnd_state=0)
-        svm.process_dataset(X, y)
-
     def test_p_values_returned(self, separable_data):
         """return_p_values=True should return dict of p-values."""
         X, y = separable_data
@@ -331,12 +325,6 @@ class TestMultiClassSVM:
         Gamma, p_vals = svm.predict(X[60], return_p_values=True)
         assert set(p_vals.keys()) == {10, 20, 30, 40}
         assert y[60] in Gamma
-
-    def test_multiclass_process_dataset(self, three_class_data):
-        """process_dataset should work with multi-class."""
-        X, y = three_class_data
-        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=1.0, label_space=np.array([0, 1, 2]), rnd_state=0)
-        svm.process_dataset(X[:30], y[:30])
 
     def test_multiclass_learn_one(self, three_class_data):
         """learn_one should work with multi-class labels."""

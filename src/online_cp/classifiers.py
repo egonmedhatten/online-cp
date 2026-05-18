@@ -55,15 +55,10 @@ class ConformalPredictionSet:
 class ConformalClassifier:
     """Base class for online conformal classifiers.
 
-    Provides shared methods for computing p-values, constructing prediction
-    sets, and tracking efficiency criteria (Err, OE, OF).
+    Provides shared methods for computing p-values and constructing prediction sets.
     """
 
     def __init__(self, epsilon=default_epsilon):
-        self.Err = 0
-        # Preferred efficiency criteria (See Protocol 3.1 ALRW)
-        self.OE = 0
-        self.OF = 0
         self.epsilon = epsilon
 
     @staticmethod
@@ -98,89 +93,7 @@ class ConformalClassifier:
                 Gamma.append(y)
         return ConformalPredictionSet(np.array(Gamma), epsilon)
 
-    def err(self, Gamma, y):
-        err = int(y not in Gamma)
-        self.Err += err
-        return err
 
-    def oe(self, Gamma, y):
-        if y in Gamma:
-            oe = len(Gamma) - 1
-        else:
-            oe = len(Gamma)
-        self.OE += oe
-        return oe
-
-    def of(self, p_values, y):
-        of = 0
-        for label, p in p_values.items():
-            if not label == y:
-                of += p
-        self.OF += of
-        return of
-
-    def learn_many(self, X, y):
-        for x1, y1 in zip(X, y):
-            self.learn_one(x1, y1)
-
-    # TEST
-    def process_dataset(self, X, y, epsilon=0.1, init_train=0, return_results=False):
-
-        self.label_space = np.unique(y)
-
-        X_train = X[:init_train]
-        y_train = y[:init_train]
-        X_run = X[init_train:]
-        y_run = y[init_train:]
-
-        if return_results:
-            res = np.zeros(shape=(y_run.shape[0], 3))
-            prediction_sets = {}
-
-        self.learn_initial_training_set(X=X_train, y=y_train)
-
-        time_init = time.time()
-        for i, (obj, lab) in enumerate(zip(X_run, y_run)):
-            # Make prediction
-            Gamma, p_values = self.predict(obj, epsilon=epsilon, return_p_values=True)
-
-            # Check error
-            self.err(Gamma, lab)
-
-            # Learn the label
-            self.learn_one(obj, lab)
-
-            # Prefferred efficiency criteria
-
-            # Observed excess
-            self.oe(Gamma, lab)
-
-            # Observed fuzziness
-            self.of(p_values, lab)
-
-            if return_results:
-                res[i, 0] = self.OE
-                res[i, 1] = self.OF
-                res[i, 2] = self.Err
-                prediction_sets[i] = Gamma
-
-        time_process = time.time() - time_init
-
-        result = {
-            "Efficiency": {
-                "Average error": self.Err / self.y.shape[0],
-                "Average OE": self.OE / self.y.shape[0],
-                "Average OF": self.OF / self.y.shape[0],
-                "Time": time_process,
-            }
-        }
-        if return_results:
-            result["Prediction sets"] = (prediction_sets,)
-            result["Cummulative Err"] = res[:, 2]
-            result["Cummulative OE"] = res[:, 0]
-            result["Cummulative OF"] = res[:, 1]
-
-        return result
 
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):

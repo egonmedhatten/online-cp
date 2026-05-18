@@ -134,14 +134,6 @@ class TestConformalLassoRegressor:
         # With epsilon=0.2, expect ~80% coverage; allow slack for small sample
         assert coverage >= 0.5, f"Coverage too low: {coverage:.2f}"
 
-    def test_process_dataset(self, sparse_data):
-        """Test process_dataset inherited method."""
-        X, y, _ = sparse_data
-        cp = ConformalLassoRegressor(lam=0.5, epsilon=0.2)
-        result = cp.process_dataset(X, y, init_train=20)
-        assert "Efficiency" in result
-        assert result["Efficiency"]["Average error"] <= 0.5
-
     def test_autotune(self, sparse_data):
         X, y, _ = sparse_data
         cp = ConformalLassoRegressor(lam=1.0, autotune=True, n_folds=3, rnd_state=42)

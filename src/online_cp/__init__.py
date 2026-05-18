@@ -23,25 +23,37 @@ from online_cp.CPS import (
 from online_cp.CPS import (
     RidgePredictionMachine as RidgePredictionMachine,
 )
-from online_cp.evaluation import (
+from online_cp.evaluate import (
+    progressive_val as progressive_val,
+)
+from online_cp.evaluate import (
+    iter_progressive_val as iter_progressive_val,
+)
+from online_cp.metrics import (
     CRPS as CRPS,
 )
-from online_cp.evaluation import (
-    OE as OE,
+from online_cp.metrics import (
+    ErrorRate as ErrorRate,
 )
-from online_cp.evaluation import (
-    OF as OF,
+from online_cp.metrics import (
+    IntervalWidth as IntervalWidth,
 )
-from online_cp.evaluation import (
-    Err as Err,
+from online_cp.metrics import (
+    Metric as Metric,
 )
-from online_cp.evaluation import (
-    Evaluation as Evaluation,
+from online_cp.metrics import (
+    Metrics as Metrics,
 )
-from online_cp.evaluation import (
-    Width as Width,
+from online_cp.metrics import (
+    ObservedExcess as ObservedExcess,
 )
-from online_cp.evaluation import (
+from online_cp.metrics import (
+    ObservedFuzziness as ObservedFuzziness,
+)
+from online_cp.metrics import (
+    SetSize as SetSize,
+)
+from online_cp.metrics import (
     WinklerScore as WinklerScore,
 )
 from online_cp.kernels import (

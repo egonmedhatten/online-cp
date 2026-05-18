@@ -47,14 +47,6 @@ class TestConformalNearestNeighboursClassifier:
         assert cp.X.shape[0] == 2
         assert cp.y.shape[0] == 2
 
-    def test_learn_many(self):
-        cp = ConformalNearestNeighboursClassifier(k=1, rnd_state=0)
-        X = np.array([[1, 2], [3, 4], [5, 6]], dtype=float)
-        y = np.array([1, -1, 1])
-        cp.learn_many(X, y)
-        assert cp.X.shape[0] == 3
-        assert cp.y.shape[0] == 3
-
     def test_prediction_set_nonempty_after_training(self, classification_dataset):
         """After sufficient training, prediction sets should not be empty at low epsilon."""
         X, y = classification_dataset
@@ -71,11 +63,3 @@ class TestConformalNearestNeighboursClassifier:
         cp = ConformalNearestNeighboursClassifier(k=1, label_space=np.array([0, 1, 2]), rnd_state=0)
         Gamma = cp.predict(np.array([0.0, 0.0]))
         assert len(Gamma) == 3
-
-    def test_process_dataset(self, classification_dataset):
-        X, y = classification_dataset
-        label_space = np.unique(y)
-        cp = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=3)
-        result = cp.process_dataset(X, y, epsilon=0.2, init_train=20, return_results=True)
-        assert "Efficiency" in result
-        assert result["Efficiency"]["Average error"] <= 0.3

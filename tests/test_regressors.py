@@ -104,14 +104,6 @@ class TestConformalRidgeRegressor:
         expected = np.linalg.inv(cp.X.T @ cp.X + 5.0 * np.identity(cp.p))
         assert np.allclose(cp.XTXinv, expected)
 
-    def test_process_dataset(self, linear_dataset):
-        X, y = linear_dataset
-        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
-        result = cp.process_dataset(X, y, epsilon=0.1, init_train=20, return_results=True)
-        assert "Efficiency" in result
-        assert result["Efficiency"]["Average error"] <= 0.15
-
-
 class TestKernelConformalRidgeRegressor:
     def test_validity(self, linear_dataset):
         X, y = linear_dataset

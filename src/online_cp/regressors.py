@@ -11,6 +11,20 @@ import warnings
 import numpy as np
 from scipy.optimize import Bounds, minimize
 
+# Optional numba for Lasso homotopy speedup
+try:
+    from numba import njit
+
+    HAS_NUMBA = True
+except ImportError:
+
+    def njit(*args, **kwargs):
+        if args and callable(args[0]):
+            return args[0]
+        return lambda f: f
+
+    HAS_NUMBA = False
+
 __all__ = [
     "ConformalRidgeRegressor",
     "KernelConformalRidgeRegressor",
@@ -1125,6 +1139,31 @@ def _solve_lasso(X, y, lam, rho=0.0, max_iter=1000, tol=1e-6, warm_start=None):
     return beta
 
 
+@njit(cache=True)
+def _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k):
+    """Find all delta values where |r_i(delta)| = |r_{n+1}(delta)| for some i.
+
+    Returns an array of valid crossing times within [0, dt_k].
+    """
+    # Maximum possible crossings: 2 per training point (two sign cases)
+    crossings = np.empty(2 * n)
+    count = 0
+    for i in range(n):
+        for s in (1.0, -1.0):
+            a = r_train[i] - s * r_test
+            b = slopes_train[i] - s * slope_test
+            if abs(b) > 1e-15:
+                d = -a / b
+                if -1e-12 < d < dt_k + 1e-12:
+                    if d < 0.0:
+                        d = 0.0
+                    elif d > dt_k:
+                        d = dt_k
+                    crossings[count] = d
+                    count += 1
+    return crossings[:count]
+
+
 class ConformalLassoRegressor(ConformalRegressor):
     """
     Conformal prediction with Lasso/elastic net using the piecewise linear
@@ -1641,29 +1680,15 @@ class ConformalLassoRegressor(ConformalRegressor):
 
         Returns intervals in GLOBAL t-space (t_accumulated + sign*delta mapped to t).
         """
-        # Find all crossing points where |r_i(delta)| = |r_{n+1}(delta)| for some i
-        crossings = []
+        # Find all crossing points using the JIT-compiled function
+        raw_crossings = _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k)
 
-        for i in range(n):
-            # |r_i(d)| = |r_{n+1}(d)|
-            # Case 1: r_i(d) = r_{n+1}(d)  => (r_train[i] - r_test) + (slopes_train[i] - slope_test)*d = 0
-            # Case 2: r_i(d) = -r_{n+1}(d) => (r_train[i] + r_test) + (slopes_train[i] + slope_test)*d = 0
-            # Case 3: -r_i(d) = r_{n+1}(d) => -(r_train[i] + r_test) - (slopes_train[i] + slope_test)*d = 0
-            #        same as case 2
-            # Case 4: -r_i(d) = -r_{n+1}(d) => same as case 1
-
-            # So we need: r_i(d) = +/- r_{n+1}(d)
-            for s in [1, -1]:
-                a = r_train[i] - s * r_test
-                b = slopes_train[i] - s * slope_test
-                if abs(b) > 1e-15:
-                    d = -a / b
-                    if -1e-12 < d < dt_k + 1e-12:
-                        d = np.clip(d, 0, dt_k)
-                        crossings.append(d)
-
-        # Add endpoints
-        crossings = [0.0] + sorted(set(crossings)) + [dt_k]
+        # Build sorted unique crossings with endpoints
+        crossings = [0.0]
+        for c in raw_crossings:
+            crossings.append(c)
+        crossings.append(dt_k)
+        crossings = sorted(set(crossings))
 
         # For each sub-interval, check rank at midpoint
         result_intervals = []

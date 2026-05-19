@@ -5,6 +5,7 @@ assumption online, along with various betting strategies (parametric, non-parame
 particle filter, expert aggregation) for constructing the martingale.
 """
 
+import math
 import warnings
 
 import numpy as np
@@ -12,6 +13,20 @@ from scipy.integrate import quad
 from scipy.optimize import minimize, minimize_scalar
 from scipy.special import betaln, gammainc, gammaln, logsumexp
 from scipy.stats import beta, norm, uniform
+
+# Optional numba for KDE speedup
+try:
+    from numba import njit
+
+    HAS_NUMBA = True
+except ImportError:
+
+    def njit(*args, **kwargs):
+        if args and callable(args[0]):
+            return args[0]
+        return lambda f: f
+
+    HAS_NUMBA = False
 
 __all__ = [
     "PluginMartingale",
@@ -140,6 +155,53 @@ class BetaKernel(BettingStrategy):
             self._kde.fit(data.reshape(-1, 1), compute_normalization=self.normalize)
 
 
+# ─── Numba-accelerated reflected Gaussian KDE helpers ─────────────────────────
+
+_INV_SQRT_2PI = 1.0 / np.sqrt(2.0 * np.pi)
+
+
+@njit(cache=True)
+def _reflected_kde_pdf_numba(x, data, h):
+    """Reflected Gaussian KDE PDF evaluated at a single point x.
+
+    Computes sum over data of [phi(x-d) + phi(x+d) + phi(x-(2-d))] / (n*h)
+    without allocating intermediate arrays.
+    """
+    n = data.shape[0]
+    total = 0.0
+    inv_h = 1.0 / h
+    for i in range(n):
+        d = data[i]
+        z1 = (x - d) * inv_h
+        z2 = (x + d) * inv_h
+        z3 = (x - (2.0 - d)) * inv_h
+        total += np.exp(-0.5 * z1 * z1) + np.exp(-0.5 * z2 * z2) + np.exp(-0.5 * z3 * z3)
+    return total * _INV_SQRT_2PI * inv_h / n
+
+
+@njit(cache=True)
+def _reflected_kde_cdf_numba(x, data, h):
+    """Reflected Gaussian KDE CDF evaluated at a single point x.
+
+    Uses the identity: Phi(z) = 0.5 * erfc(-z / sqrt(2)).
+    """
+    n = data.shape[0]
+    total = 0.0
+    inv_h = 1.0 / h
+    inv_sqrt2 = 1.0 / np.sqrt(2.0)
+    for i in range(n):
+        d = data[i]
+        z1 = (x - d) * inv_h
+        z2 = (x + d) * inv_h
+        z3 = (x - (2.0 - d)) * inv_h
+        total += (
+            0.5 * math.erfc(-z1 * inv_sqrt2)
+            + 0.5 * math.erfc(-z2 * inv_sqrt2)
+            + 0.5 * math.erfc(-z3 * inv_sqrt2)
+        )
+    return total / n - 1.0  # subtract 1 for the reflection normalization
+
+
 class GaussianKDE(BettingStrategy):
     """Gaussian Kernel Density Estimation betting strategy with boundary reflection.
 
@@ -192,6 +254,8 @@ class GaussianKDE(BettingStrategy):
 
     def _kernel_pdf_reflect(self, x, data, h):
         """Reflected Gaussian kernel PDF."""
+        if HAS_NUMBA:
+            return _reflected_kde_pdf_numba(float(x), data, h)
         x = np.atleast_1d(x)
         pdf_orig = np.mean(norm.pdf(x[:, None], loc=data, scale=h), axis=1)
         pdf_neg = np.mean(norm.pdf(x[:, None], loc=-data, scale=h), axis=1)
@@ -201,6 +265,8 @@ class GaussianKDE(BettingStrategy):
 
     def _kernel_cdf_reflect(self, x, data, h):
         """Reflected Gaussian kernel CDF."""
+        if HAS_NUMBA:
+            return _reflected_kde_cdf_numba(float(x), data, h)
         x = np.atleast_1d(x)
         cdf_orig = np.mean(norm.cdf(x[:, None], loc=data, scale=h), axis=1)
         cdf_neg = np.mean(norm.cdf(x[:, None], loc=-data, scale=h), axis=1)

@@ -14,7 +14,6 @@ requires-python = ">=3.9"
 dependencies = [
 	'numpy',
 	'scipy',
-	'numba',
 	'joblib >= 1.4.2',
 	'matplotlib',
 ]
@@ -26,9 +25,15 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+fast = [
+	"numba",
+]
 dev = [
 	"pytest",
 	"ruff",
+]
+all = [
+	"online-cp[fast,dev]",
 ]
 
 [project.urls]

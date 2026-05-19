@@ -113,3 +113,15 @@ from online_cp.regressors import (
 from online_cp.regressors import (
     KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
 )
+from online_cp.plotting import (
+    plot_coverage as plot_coverage,
+)
+from online_cp.plotting import (
+    plot_intervals as plot_intervals,
+)
+from online_cp.plotting import (
+    plot_martingale as plot_martingale,
+)
+from online_cp.plotting import (
+    plot_set_sizes as plot_set_sizes,
+)

@@ -9,8 +9,22 @@ import time
 
 import numpy as np
 from joblib import Parallel, delayed
-from numba import njit
 from scipy.spatial.distance import cdist, pdist, squareform
+
+# Numba is optional — provides ~10x speedup for the SMO solver
+try:
+    from numba import njit
+
+    HAS_NUMBA = True
+except ImportError:
+
+    def njit(*args, **kwargs):
+        """No-op decorator when numba is not installed."""
+        if args and callable(args[0]):
+            return args[0]
+        return lambda f: f
+
+    HAS_NUMBA = False
 
 __all__ = [
     "ConformalNearestNeighboursClassifier",

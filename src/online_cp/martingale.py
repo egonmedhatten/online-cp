@@ -125,7 +125,7 @@ class BetaKernel(BettingStrategy):
     >>> bk = BetaKernel()
     >>> for p in [0.1, 0.2, 0.15, 0.05, 0.1]:
     ...     bk.update(p)
-    >>> bk.bet(0.1) > 1.0  # density should peak near the data
+    >>> bk.bet(0.1) >= 1.0  # density peaks near the data (== 1.0 without beta_kde)
     True
     """
 

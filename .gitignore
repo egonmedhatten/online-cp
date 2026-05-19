@@ -3,6 +3,7 @@ __pycache__
 .coverage
 dist/
 *.egg-info/
+site/
 notebooks/*.html
 notebooks/*.pdf
 papers/

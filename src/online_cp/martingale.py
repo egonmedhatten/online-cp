@@ -17,7 +17,6 @@ __all__ = [
     "PluginMartingale",
     "SimpleJumper",
     "CompositeJumper",
-    "OnionMartingale",
     "SimpleMixtureMartingale",
     "BetaKernel",
     "GaussianKDE",
@@ -52,166 +51,134 @@ except ImportError:
         def pdf(self, x, normalized=True):
             return np.ones_like(x) if np.ndim(x) > 0 else 1.0
 
-# TODO
-# * Remove online update of statistics in the parametric models. It is better to have the possibility to use a window
-# * Tune the COEFFICIENTS in the adaptive rule
-# * Consider adding plotting functions for the ParticleFilter and ExpertAggregation (as in the notebook)
+# ═══════════════════════════════════════════════════════════════════════════════
+# BETTING STRATEGIES
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class BettingStrategy:
+    """Base class for betting strategies (pure density estimators on [0,1]).
+
+    A betting strategy estimates the density of conformal p-values. It exposes:
+    - ``bet(p)``: evaluate the current density at p (using past data only)
+    - ``integrate(p)``: evaluate the current CDF at p (protection function)
+    - ``update(p)``: incorporate a new p-value into the estimate
+
+    The critical invariant is **predict then learn**: ``bet(p)`` uses only data
+    seen before p, ensuring the martingale property.
+
+    Strategies are *pure* — they do not apply cautious mixing. That is the
+    responsibility of the martingale that wraps them.
     """
-    Base class for betting strategies.
 
-    Attributes:
-        min_sample_size (int): Minimum number of samples required before full betting.
-        mixing_parameter (float): Mixing parameter for cautious betting.
-    """
+    def bet(self, p):
+        """Return the density f(p) using current state (past data only).
 
-    def __init__(self, min_sample_size=100):
+        Must satisfy f(p) >= 0 and integrate to ~1 over [0,1].
         """
-        Initializes the BettingStrategy class.
+        return 1.0  # uniform = no betting
 
-        Args:
-            min_sample_size (int): Minimum number of samples required before full betting.
-        """
-        self.min_sample_size = min_sample_size
-        self.mixing_parameter = 0
+    def integrate(self, p):
+        """Return the CDF F(p) using current state (protection function).
 
-    def update_mixing_parameter(self, n):
+        Must satisfy F(0) = 0, F(1) = 1, monotone increasing.
         """
-        Updates the mixing parameter based on the number of observations.
+        return p  # uniform CDF
 
-        Args:
-            n (int): Number of observations.
-        """
-        # Avoid division by zero if min_sample_size is 0
-        if self.min_sample_size == 0:
-            self.mixing_parameter = 1.0
-        else:
-            self.mixing_parameter = min(n / self.min_sample_size, 1)
+    def update(self, p):
+        """Incorporate a new p-value observation into the density estimate."""
+        pass
 
 
 class BetaKernel(BettingStrategy):
+    """Beta Kernel Density Estimation betting strategy.
+
+    Uses the ``beta_kde`` package (if installed) to estimate the density
+    of p-values with a Beta kernel, which handles [0,1] boundaries well.
+
+    Parameters
+    ----------
+    bandwidth : str or float
+        Bandwidth selection method (default: "beta-reference").
+    window_size : int or None
+        If set, only use the last ``window_size`` observations.
+    normalize : bool
+        Whether to normalize the KDE.
+
+    Examples
+    --------
+    >>> bk = BetaKernel()
+    >>> for p in [0.1, 0.2, 0.15, 0.05, 0.1]:
+    ...     bk.update(p)
+    >>> bk.bet(0.1) > 1.0  # density should peak near the data
+    True
     """
-    Implements a Beta Kernel Density Estimation (KDE) betting strategy.
 
-    Attributes:
-        bandwidth (str or float): Bandwidth selection method.
-        window_size (str or int): Window size for adaptive KDE.
-        growth_factor (float): The sample size must increase by this factor to trigger a
-                               new bandwidth calculation.
-
-    Examples:
-        >>> bk = BetaKernel(min_sample_size=1000)
-        >>> p_vals = [0.1, 0.2, 0.15, 0.05, 0.1]
-        >>> # With large min_sample_size, mixing parameter is small, result is close to uniform
-        >>> b_func, B_func = bk.update_betting_function(p_vals)
-        >>> abs(b_func(0.5) - 1.0) < 0.1
-        True
-    """
-
-    def __init__(
-        self,
-        bandwidth="beta-reference",
-        window_size=None,
-        normalize=True,
-        min_sample_size=100,
-        max_iter=20,
-        bw_min=0.001,
-        bw_max=0.5,
-        growth_factor=1.1,
-    ):
-        super().__init__(min_sample_size)
+    def __init__(self, bandwidth="beta-reference", window_size=None, normalize=True):
         self.bandwidth = bandwidth
         self.window_size = window_size
-        self.max_iter = max_iter
-        self.bw_min = bw_min
-        self.bw_max = bw_max
-        self.growth_factor = growth_factor
-
-        self.current_bw = None
-        self.n_last_update = 0  # To track sample size at last bandwidth update
-
-        self.kde = BetaKDE(bandwidth=self.bandwidth)
         self.normalize = normalize
+        self._data = []
+        self._kde = BetaKDE(bandwidth=self.bandwidth)
 
-    def update_betting_function(self, p_values):
-        """
-        Updates the betting function based on the provided p-values.
-        """
-        if len(p_values) < 2:
-            pdf = lambda x: beta.pdf(x, 1, 1)
-            # cdf for uniform(0,1) is x
-            cdf = lambda x: x
-        else:
-            # OPTIMIZATION: Slice the list BEFORE converting to numpy array
-            window = self.calculate_window_size(p_values)
-            data = np.array(p_values[-window:])
+    def bet(self, p):
+        if len(self._data) < 2:
+            return 1.0
+        return float(self._kde.pdf(p, normalized=self.normalize))
 
-            self.kde.fit(data.reshape(-1, 1), compute_normalization=self.normalize)
+    def integrate(self, p):
+        if len(self._data) < 2:
+            return p
+        val, _ = quad(lambda x: self._kde.pdf(x, normalized=self.normalize), 0, p, limit=50)
+        return float(val)
 
-            # Define the learned pdf
-            # We capture self.kde.pdf carefully.
-            # Note: self.kde changes state, so the lambda binds to the object, which is correct for "current" state.
-            def learned_pdf(x):
-                return self.kde.pdf(x, normalized=self.normalize)
-
-            pdf = learned_pdf
-
-            # Define CDF via numerical integration if analytical not available
-            def learned_cdf(x):
-                # Safely handle array inputs for integration
-                if np.ndim(x) == 0:
-                    val, _ = quad(pdf, 0, x, limit=50)
-                    return val
-                else:
-                    return np.array([quad(pdf, 0, val, limit=50)[0] for val in x])
-
-            cdf = learned_cdf
-
-        self.update_mixing_parameter(len(p_values))
-
-        b_n = lambda x: self.mixing_parameter * pdf(x) + (1 - self.mixing_parameter)
-        B_n = lambda x: self.mixing_parameter * cdf(x) + (1 - self.mixing_parameter) * x
-
-        return b_n, B_n
-
-    def calculate_window_size(self, p_values):
-        if self.window_size is None:
-            return len(p_values)
-        else:
-            return self.window_size
+    def update(self, p):
+        self._data.append(p)
+        if len(self._data) >= 2:
+            window = self.window_size or len(self._data)
+            data = np.array(self._data[-window:])
+            self._kde.fit(data.reshape(-1, 1), compute_normalization=self.normalize)
 
 
 class GaussianKDE(BettingStrategy):
-    """
-    Implements a Gaussian Kernel Density Estimation (KDE) betting strategy.
+    """Gaussian Kernel Density Estimation betting strategy with boundary reflection.
 
-    Examples:
-        >>> # Initialize strategy
-        >>> gkde = GaussianKDE(min_sample_size=10, bandwidth=0.1)
-        >>> # Feed it some data clustered around 0.1
-        >>> p_vals = [0.1, 0.11, 0.09, 0.12, 0.08]
-        >>> b_func, B_func = gkde.update_betting_function(p_vals)
-        >>> # After 5 samples with min_sample_size=10, mixing param is 0.5.
-        >>> # The kernel should peak around 0.1.
-        >>> b_func(0.1) > 1.0
-        True
-        >>> b_func(0.9) < 1.0
-        True
+    Uses a reflected Gaussian kernel to properly handle the [0,1] boundary.
+
+    Parameters
+    ----------
+    bandwidth : str or float
+        Bandwidth selection: "silverman" (rule of thumb), "lcv" (likelihood
+        cross-validation), or a fixed float value.
+    window_size : int or None
+        If set, only use the last ``window_size`` observations.
+    max_iter : int
+        Maximum iterations for LCV bandwidth optimization.
+    bw_min, bw_max : float
+        Bandwidth search bounds for LCV.
+    growth_factor : float
+        Re-optimize bandwidth when sample size grows by this factor.
+
+    Examples
+    --------
+    >>> gkde = GaussianKDE(bandwidth=0.1)
+    >>> for p in [0.1, 0.11, 0.09, 0.12, 0.08]:
+    ...     gkde.update(p)
+    >>> gkde.bet(0.1) > 1.0  # should peak near the data
+    True
+    >>> gkde.bet(0.9) < 1.0
+    True
     """
 
     def __init__(
         self,
         bandwidth="silverman",
         window_size=None,
-        min_sample_size=100,
         max_iter=20,
         bw_min=0.001,
         bw_max=0.5,
         growth_factor=1.1,
     ):
-        super().__init__(min_sample_size)
         self.bandwidth = bandwidth
         self.window_size = window_size
         self.max_iter = max_iter
@@ -219,16 +186,13 @@ class GaussianKDE(BettingStrategy):
         self.bw_max = bw_max
         self.growth_factor = growth_factor
 
-        self.current_bw = None
-        self.n_last_update = 0
+        self._data = []
+        self._current_bw = None
+        self._n_last_update = 0
 
     def _kernel_pdf_reflect(self, x, data, h):
-        """Helper to compute the reflected kernel PDF for a given dataset and bandwidth."""
+        """Reflected Gaussian kernel PDF."""
         x = np.atleast_1d(x)
-        # Using broadcasting to compute differences
-        # data shape: (N,), x shape: (M,) -> (M, N)
-        # However, to be memory efficient with large N, we stick to the original structure or loop if needed.
-        # The original code used x[:, None] (M,1) against data (N,) which creates (M,N) matrix.
         pdf_orig = np.mean(norm.pdf(x[:, None], loc=data, scale=h), axis=1)
         pdf_neg = np.mean(norm.pdf(x[:, None], loc=-data, scale=h), axis=1)
         pdf_two = np.mean(norm.pdf(x[:, None], loc=2 - data, scale=h), axis=1)
@@ -236,7 +200,7 @@ class GaussianKDE(BettingStrategy):
         return pdf_values.item() if pdf_values.size == 1 else pdf_values
 
     def _kernel_cdf_reflect(self, x, data, h):
-        """Helper to compute the reflected kernel CDF for a given dataset and bandwidth."""
+        """Reflected Gaussian kernel CDF."""
         x = np.atleast_1d(x)
         cdf_orig = np.mean(norm.cdf(x[:, None], loc=data, scale=h), axis=1)
         cdf_neg = np.mean(norm.cdf(x[:, None], loc=-data, scale=h), axis=1)
@@ -245,9 +209,7 @@ class GaussianKDE(BettingStrategy):
         return cdf_values.item() if cdf_values.size == 1 else cdf_values
 
     def _likelihood_lcv_bw(self, data):
-        """
-        Finds the optimal bandwidth by optimizing the Likelihood Cross-Validation (LCV) score.
-        """
+        """Optimal bandwidth via Likelihood Cross-Validation."""
         n = len(data)
         data_col = data[:, np.newaxis]
         diff_orig = data_col - data
@@ -255,257 +217,212 @@ class GaussianKDE(BettingStrategy):
         diff_two = data_col - (2 - data)
 
         def objective_func(h):
-            """The negative LCV log-likelihood score function, to be minimized."""
             epsilon = 1e-10
-            # Calculation of the leave-one-out density
-            # Note: We subtract the diagonal term (kernel at 0 distance) later or fill diagonal
             kernel_matrix_orig = norm.pdf(diff_orig / h)
             kernel_matrix_neg = norm.pdf(diff_neg / h)
             kernel_matrix_two = norm.pdf(diff_two / h)
             total_kernel_matrix = kernel_matrix_orig + kernel_matrix_neg + kernel_matrix_two
-
-            # Remove the contribution of the point itself (diagonal of the first matrix)
-            # The reflection points (neg and two) are far enough that they are not 'the point itself' in the LOO sense usually,
-            # but technically LOO means we remove x_i from the dataset.
-            # If we remove x_i, we remove it from orig, neg, and two reflections.
             np.fill_diagonal(total_kernel_matrix, 0)
-
             loo_pdfs = np.sum(total_kernel_matrix, axis=1) / ((n - 1) * h)
             loo_log_likelihood = np.sum(np.log(loo_pdfs + epsilon))
             return -loo_log_likelihood
 
-        if n < self.min_sample_size or self.current_bw is None:
+        if n < 50 or self._current_bw is None:
             result = minimize_scalar(
-                objective_func, bounds=(self.bw_min, self.bw_max), method="bounded", options={"maxiter": self.max_iter}
+                objective_func, bounds=(self.bw_min, self.bw_max),
+                method="bounded", options={"maxiter": self.max_iter}
             )
         else:
-            search_bounds = (max(self.current_bw * 0.8, self.bw_min), min(self.current_bw * 1.2, self.bw_max))
-            result = minimize_scalar(
-                objective_func, bounds=search_bounds, method="bounded", options={"maxiter": self.max_iter}
+            search_bounds = (
+                max(self._current_bw * 0.8, self.bw_min),
+                min(self._current_bw * 1.2, self.bw_max),
             )
-
+            result = minimize_scalar(
+                objective_func, bounds=search_bounds,
+                method="bounded", options={"maxiter": self.max_iter}
+            )
         return result
 
-    def update_betting_function(self, p_values):
-        """
-        Updates the betting function based on the provided p-values.
-        """
-        if len(p_values) < 2:
-            pdf = lambda x: beta.pdf(x, 1, 1)
-            cdf = lambda x: beta.cdf(x, 1, 1)
-        else:
-            # OPTIMIZATION: Slice list before array conversion
-            window = self.calculate_window_size(p_values)
-            data = np.array(p_values[-window:])
-
-            if data.std() < 1e-6:
-                pdf = lambda x: beta.pdf(x, 1, 1)
-                cdf = lambda x: beta.cdf(x, 1, 1)
-            else:
-                h = self.calculate_bandwidth(data)
-                self.current_bw = h
-
-                # Bind data and h to the lambda
-                pdf = lambda x: self._kernel_pdf_reflect(x, data, h)
-                cdf = lambda x: self._kernel_cdf_reflect(x, data, h)
-
-        self.update_mixing_parameter(len(p_values))
-
-        b_n = lambda x: self.mixing_parameter * pdf(x) + (1 - self.mixing_parameter)
-        B_n = lambda x: self.mixing_parameter * cdf(x) + (1 - self.mixing_parameter) * x
-
-        return b_n, B_n
-
-    def calculate_bandwidth(self, data):
-        """
-        Calculates the bandwidth, using the growth_factor to decide when to run the expensive optimization.
-        """
+    def _calculate_bandwidth(self, data):
+        """Calculate bandwidth for current data."""
         n = data.size
-
         if self.bandwidth == "silverman":
             sigma = np.std(data)
-            h = ((4 * sigma**5) / (3 * n)) ** (1 / 5)  # Silverman's rule of thumb
-
+            h = ((4 * sigma**5) / (3 * n)) ** (1 / 5)
         elif self.bandwidth == "lcv":
             should_recalculate = (
-                (self.current_bw is None)
-                or (n < self.min_sample_size)
-                or (n >= self.n_last_update * self.growth_factor)
+                (self._current_bw is None)
+                or (n >= self._n_last_update * self.growth_factor)
             )
-
             if should_recalculate and n > 1:
-                self.opt_result = self._likelihood_lcv_bw(data)
-                h = self.opt_result.x
-                self.n_last_update = n
+                result = self._likelihood_lcv_bw(data)
+                h = result.x
+                self._n_last_update = n
             else:
-                h = self.current_bw
-
-        else:  # Fixed bandwidth
+                h = self._current_bw
+        else:
             h = float(self.bandwidth)
         return h
 
-    def calculate_window_size(self, p_values):
-        if self.window_size is None:
-            return len(p_values)
-        else:
-            return self.window_size
+    def _get_data(self):
+        """Get the current data array (windowed if applicable)."""
+        window = self.window_size or len(self._data)
+        return np.array(self._data[-window:])
+
+    def bet(self, p):
+        if len(self._data) < 2:
+            return 1.0
+        data = self._get_data()
+        if data.std() < 1e-6:
+            return 1.0
+        return self._kernel_pdf_reflect(p, data, self._current_bw)
+
+    def integrate(self, p):
+        if len(self._data) < 2:
+            return p
+        data = self._get_data()
+        if data.std() < 1e-6:
+            return p
+        return self._kernel_cdf_reflect(p, data, self._current_bw)
+
+    def update(self, p):
+        self._data.append(p)
+        if len(self._data) >= 2:
+            data = self._get_data()
+            if data.std() >= 1e-6:
+                self._current_bw = self._calculate_bandwidth(data)
 
 
 class BetaMoments(BettingStrategy):
+    """Betting strategy based on Beta distribution with method of moments.
+
+    Maintains online running mean and variance (Welford's algorithm)
+    and uses method-of-moments to fit Beta(a, b) parameters.
+
+    Examples
+    --------
+    >>> bm = BetaMoments()
+    >>> for p in [0.01, 0.02, 0.05, 0.01, 0.03]:
+    ...     bm.update(p)
+    >>> bm.bet(0.01) > 1.0  # should favor small p-values
+    True
+    >>> bm.bet(0.99) < 1.0
+    True
     """
-    Implements a betting strategy based on Beta distribution moments.
 
-    Examples:
-        >>> bm = BetaMoments(min_sample_size=10)
-        >>> # Feed highly skewed data (lots of small p-values)
-        >>> p_vals = [0.01, 0.02, 0.05, 0.01, 0.03]
-        >>> for p in p_vals:
-        ...     _ = bm.update_betting_function([p])
-        >>> b_func, _ = bm.update_betting_function([0.01])
-        >>> # Strategy should now bet heavily on small p-values
-        >>> b_func(0.01) > 1.0
-        True
-        >>> b_func(0.99) < 1.0
-        True
-    """
+    def __init__(self):
+        self._n = 0
+        self._mean = 0.0
+        self._M2 = 0.0
+        self._ahat = 1.0
+        self._bhat = 1.0
 
-    def __init__(self, min_sample_size=100):
-        super().__init__(min_sample_size)
-        self.n = 0
-        self.mean = 0.0
-        self.M2 = 0.0
-        self.ahat = 1.0
-        self.bhat = 1.0
+    def bet(self, p):
+        return beta.pdf(p, self._ahat, self._bhat)
 
-    def update_betting_function(self, p_values):
-        if not p_values:
-            b_n = lambda x: beta.pdf(x, 1, 1)
-            B_n = lambda x: beta.cdf(x, 1, 1)
-            return b_n, B_n
+    def integrate(self, p):
+        return beta.cdf(p, self._ahat, self._bhat)
 
-        p = p_values[-1]
-        if self.n < 2:
-            self.ahat = 1.0
-            self.bhat = 1.0
-        else:
-            sample_variance = self.M2 / (self.n - 1) if self.n > 1 else 0
-            if sample_variance <= 0:
-                self.ahat = 1
-                self.bhat = 1
-            else:
-                # Method of moments estimation for Beta
-                common_factor = (self.mean * (1 - self.mean) / sample_variance) - 1
-                self.ahat = max(self.mean * common_factor, 1e-4)  # Avoid <= 0
-                self.bhat = max((1 - self.mean) * common_factor, 1e-4)
+    def update(self, p):
+        # Welford online update
+        self._n += 1
+        delta = p - self._mean
+        self._mean += delta / self._n
+        delta2 = p - self._mean
+        self._M2 += delta * delta2
 
-        self.n += 1
-        delta = p - self.mean
-        self.mean += delta / self.n
-        delta2 = p - self.mean
-        self.M2 += delta * delta2
-
-        self.update_mixing_parameter(self.n)
-
-        # Capture current ahat/bhat
-        current_a, current_b = self.ahat, self.bhat
-
-        b_n = lambda x: self.mixing_parameter * beta.pdf(x, current_a, current_b) + (1 - self.mixing_parameter)
-        B_n = lambda x: self.mixing_parameter * beta.cdf(x, current_a, current_b) + (1 - self.mixing_parameter) * x
-
-        return b_n, B_n
+        # Re-estimate parameters
+        if self._n >= 2:
+            sample_variance = self._M2 / (self._n - 1)
+            if sample_variance > 0 and 0 < self._mean < 1:
+                common_factor = (self._mean * (1 - self._mean) / sample_variance) - 1
+                if common_factor > 0:
+                    self._ahat = max(self._mean * common_factor, 1e-4)
+                    self._bhat = max((1 - self._mean) * common_factor, 1e-4)
 
 
 class BetaMLE(BettingStrategy):
+    """Betting strategy based on MLE for Beta distribution parameters.
+
+    Maintains sufficient statistics (sum of log) and re-optimizes
+    Beta(a, b) via maximum likelihood at each step.
+
+    Examples
+    --------
+    >>> bmle = BetaMLE()
+    >>> for p in [0.01, 0.02, 0.01, 0.02, 0.01]:
+    ...     bmle.update(p)
+    >>> bmle.bet(0.01) > 1.0  # should favor small p-values
+    True
     """
-    Implements a betting strategy based on Maximum Likelihood Estimation (MLE) for Beta distribution parameters.
 
-    Examples:
-        >>> bmle = BetaMLE(min_sample_size=10)
-        >>> # Feed skewed data
-        >>> p_vals = [0.01, 0.02, 0.01]
-        >>> for p in p_vals:
-        ...     _ = bmle.update_betting_function([p])
-        >>> b_func, _ = bmle.update_betting_function([0.01])
-        >>> # Should bet on small values
-        >>> b_func(0.01) > 1.0
-        True
-    """
+    def __init__(self):
+        self._n = 0
+        self._log_sum_x = 0.0
+        self._log_sum_1_minus_x = 0.0
+        self._ahat = 1.0
+        self._bhat = 1.0
 
-    def __init__(self, min_sample_size=100):
-        super().__init__(min_sample_size)
-        self.n = 0
-        self.log_sum_x = 0.0
-        self.log_sum_1_minus_x = 0.0
-        self.ahat = 1.0
-        self.bhat = 1.0
+    def bet(self, p):
+        return beta.pdf(p, self._ahat, self._bhat)
 
-    def update_betting_function(self, p_values):
-        if not p_values:
-            b_n = lambda x: beta.pdf(x, 1, 1)
-            B_n = lambda x: beta.cdf(x, 1, 1)
-            return b_n, B_n
+    def integrate(self, p):
+        return beta.cdf(p, self._ahat, self._bhat)
 
-        p = p_values[-1]
-
-        def negative_log_likelihood(params):
-            alpha, beta = params
-            if alpha <= 0 or beta <= 0:
-                return np.inf
-            log_likelihood = (
-                (alpha - 1) * self.log_sum_x + (beta - 1) * self.log_sum_1_minus_x - self.n * betaln(alpha, beta)
-            )
-            return -log_likelihood
-
-        # Update sufficient statistics
-        # Clip p to avoid log(0)
+    def update(self, p):
         p_safe = np.clip(p, 1e-12, 1 - 1e-12)
-        self.n += 1
-        self.log_sum_x += np.log(p_safe)
-        self.log_sum_1_minus_x += np.log(1 - p_safe)
+        self._n += 1
+        self._log_sum_x += np.log(p_safe)
+        self._log_sum_1_minus_x += np.log(1 - p_safe)
 
-        if self.n < 2:
-            self.ahat = 1.0
-            self.bhat = 1.0
-        else:
-            initial_guess = [self.ahat, self.bhat]  # Use previous estimate as warm start
-            result = minimize(negative_log_likelihood, initial_guess, bounds=[(1e-5, None), (1e-5, None)])
+        if self._n >= 2:
+            n = self._n
+            ls_x = self._log_sum_x
+            ls_1mx = self._log_sum_1_minus_x
+
+            def neg_ll(params):
+                a, b = params
+                if a <= 0 or b <= 0:
+                    return np.inf
+                return -((a - 1) * ls_x + (b - 1) * ls_1mx - n * betaln(a, b))
+
+            result = minimize(
+                neg_ll, [self._ahat, self._bhat],
+                bounds=[(1e-5, None), (1e-5, None)]
+            )
             if result.success:
-                self.ahat, self.bhat = result.x
-            else:
-                # If optimization fails, stick to previous or default
-                pass
-
-        self.update_mixing_parameter(self.n)
-
-        current_a, current_b = self.ahat, self.bhat
-
-        b_n = lambda x: self.mixing_parameter * beta.pdf(x, current_a, current_b) + (1 - self.mixing_parameter)
-        B_n = lambda x: self.mixing_parameter * beta.cdf(x, current_a, current_b) + (1 - self.mixing_parameter) * x
-
-        return b_n, B_n
+                self._ahat, self._bhat = result.x
 
 
 class ParticleFilterStrategy(BettingStrategy):
+    """Particle filter betting strategy for adaptive Beta distribution estimation.
+
+    Maintains a particle cloud in (log-alpha, log-beta) space and uses
+    sequential Monte Carlo to track the evolving distribution of p-values.
+
+    Parameters
+    ----------
+    num_particles : int
+        Number of particles.
+    process_noise_std : float or "auto"
+        Standard deviation of the random walk noise. "auto" learns volatility.
+    vol_noise_std : float
+        Noise on the log-volatility process (when process_noise_std="auto").
+    seed : int or None
+        Random seed for reproducibility.
+
+    Examples
+    --------
+    >>> pf = ParticleFilterStrategy(num_particles=100, seed=42)
+    >>> for p in [0.1, 0.1, 0.1]:
+    ...     pf.update(p)
+    >>> pf.bet(0.1) > 1.0  # should favor 0.1
+    True
     """
-    A betting strategy based on a particle filter.
 
-    Examples:
-        >>> # Test with seed for reproducibility
-        >>> pf = ParticleFilterStrategy(num_particles=100, seed=42, min_sample_size=10)
-        >>> p_vals = [0.1, 0.1, 0.1]
-        >>> # Update logic
-        >>> b_func, _ = pf.update_betting_function(p_vals)
-        >>> # Given low p-values, the density at 0.1 should be high
-        >>> b_func(0.1) > 1.0
-        True
-    """
-
-    def __init__(self, num_particles=1000, process_noise_std=0.05, vol_noise_std=0.01, min_sample_size=100, seed=None):
-
-        super().__init__(min_sample_size)
+    def __init__(self, num_particles=1000, process_noise_std=0.05, vol_noise_std=0.01, seed=None):
         self.N = num_particles
         self.adaptive_noise = process_noise_std == "auto"
-
         self.rng = np.random.default_rng(seed)
 
         if self.adaptive_noise:
@@ -524,11 +441,10 @@ class ParticleFilterStrategy(BettingStrategy):
         self.beta_history = []
 
     def _predict(self):
-        """Propagates particles according to the motion model."""
+        """Propagate particles according to the motion model."""
         if self.adaptive_noise:
             vol_noise = self.rng.standard_normal(self.N) * self.vol_noise_std
             self.particles[:, 2] += vol_noise
-
             current_sigmas = np.exp(self.particles[:, 2])
             main_noise = self.rng.standard_normal((self.N, 2)) * current_sigmas[:, np.newaxis]
             self.particles[:, :2] += main_noise
@@ -537,11 +453,12 @@ class ParticleFilterStrategy(BettingStrategy):
             noise = self.rng.multivariate_normal(mean=np.zeros(2), cov=self.Q, size=self.N)
             self.particles += noise
 
-    def _update(self, p_obs):
-        """Calculates particle weights based on the likelihood of p_obs."""
+    def _update_weights(self, p_obs):
+        """Calculate particle weights based on the likelihood of p_obs."""
         p_obs_clipped = np.clip(p_obs, 1e-9, 1 - 1e-9)
-        alpha, beta_param = np.exp(self.particles[:, 0]), np.exp(self.particles[:, 1])
-        likelihood = beta.pdf(p_obs_clipped, a=alpha, b=beta_param) + 1e-9
+        alphas = np.exp(self.particles[:, 0])
+        betas_param = np.exp(self.particles[:, 1])
+        likelihood = beta.pdf(p_obs_clipped, a=alphas, b=betas_param) + 1e-9
 
         if np.sum(likelihood) > 0:
             self.weights = likelihood / np.sum(likelihood)
@@ -549,17 +466,15 @@ class ParticleFilterStrategy(BettingStrategy):
             self.weights.fill(1.0 / self.N)
 
     def _resample(self):
-        """Resamples particles using a reproducible systematic resampling."""
-        indices = self.systematic_resample(self.weights, self.rng)
+        """Resample particles using systematic resampling."""
+        indices = self._systematic_resample(self.weights, self.rng)
         self.particles = self.particles[indices]
         self.weights.fill(1.0 / self.N)
 
     @staticmethod
-    def systematic_resample(weights, rng):
-        """Performs the systemic resampling algorithm used by particle filters."""
+    def _systematic_resample(weights, rng):
         N = len(weights)
         positions = (rng.random() + np.arange(N)) / N
-
         indexes = np.zeros(N, "i")
         cumulative_sum = np.cumsum(weights)
         i, j = 0, 0
@@ -571,43 +486,28 @@ class ParticleFilterStrategy(BettingStrategy):
                 j += 1
         return indexes
 
-    def update_betting_function(self, p_values):
-        """Updates the filter and returns the predictive functions for the next step."""
-        if not p_values:
-            return (lambda x: 1.0), (lambda x: x)
-        p = p_values[-1]
+    def _get_alphas_betas(self):
+        return np.exp(self.particles[:, 0]), np.exp(self.particles[:, 1])
+
+    def bet(self, p):
+        alphas, betas_param = self._get_alphas_betas()
+        return float(np.mean(beta.pdf(p, a=alphas, b=betas_param)))
+
+    def integrate(self, p):
+        alphas, betas_param = self._get_alphas_betas()
+        return float(np.mean(beta.cdf(p, a=alphas, b=betas_param)))
+
+    def update(self, p):
         self._predict()
-        self._update(p)
+        self._update_weights(p)
         self._resample()
 
-        alphas = np.exp(self.particles[:, 0])
-        betas = np.exp(self.particles[:, 1])
-
+        alphas, betas_param = self._get_alphas_betas()
         self.alpha_history.append(np.percentile(alphas, [50, 2.5, 97.5]))
-        self.beta_history.append(np.percentile(betas, [50, 2.5, 97.5]))
-
-        # Use simple mean of the particle distributions for the predictive density
-        def learned_pdf(x):
-            return np.mean(beta.pdf(x, a=alphas, b=betas))
-
-        def learned_cdf(x):
-            return np.mean(beta.cdf(x, a=alphas, b=betas))
-
-        self.update_mixing_parameter(len(p_values))
-
-        def b_n(x):
-            return self.mixing_parameter * learned_pdf(x) + (1 - self.mixing_parameter) * 1.0
-
-        def B_n(x):
-            return self.mixing_parameter * learned_cdf(x) + (1 - self.mixing_parameter) * x
-
-        return b_n, B_n
+        self.beta_history.append(np.percentile(betas_param, [50, 2.5, 97.5]))
 
     def plot_parameters(self, title="Particle Filter Parameter Evolution"):
-        """
-        Plots the evolution of the learned Beta parameters (alpha and beta).
-        Shows median and 95% confidence intervals.
-        """
+        """Plot the evolution of the learned Beta parameters."""
         try:
             import matplotlib.pyplot as plt
         except ImportError:
@@ -624,7 +524,6 @@ class ParticleFilterStrategy(BettingStrategy):
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 
-        # Alpha plot
         ax1.plot(steps, alphas[:, 0], label="Alpha (Median)", color="blue")
         ax1.fill_between(steps, alphas[:, 1], alphas[:, 2], color="blue", alpha=0.2, label="95% CI")
         ax1.set_ylabel("Alpha")
@@ -632,7 +531,6 @@ class ParticleFilterStrategy(BettingStrategy):
         ax1.legend()
         ax1.grid(True, alpha=0.3)
 
-        # Beta plot
         ax2.plot(steps, betas[:, 0], label="Beta (Median)", color="green")
         ax2.fill_between(steps, betas[:, 1], betas[:, 2], color="green", alpha=0.2, label="95% CI")
         ax2.set_ylabel("Beta")
@@ -647,179 +545,142 @@ class ParticleFilterStrategy(BettingStrategy):
 
 
 class FixedStrategy(BettingStrategy):
-    """
-    A strategy that uses a fixed, unchanging betting function.
+    """A strategy that uses a fixed, unchanging density function.
+
     Accepts either a scipy-like distribution object OR explicit pdf/cdf callables.
 
-    This strategy does NOT use the mixing parameter logic.
+    Parameters
+    ----------
+    distribution : object with .pdf() and .cdf() methods
+        E.g., a scipy.stats distribution.
+    pdf : callable
+        Explicit PDF (overrides distribution).
+    cdf : callable
+        Explicit CDF. If pdf given without cdf, numerical integration is used.
+    check_integration : bool
+        Verify that the PDF integrates to 1.
 
-    Examples:
-        >>> # Example 1: Using scipy distribution
-        >>> fs = FixedStrategy(distribution=uniform())
-        >>> b, _ = fs.update_betting_function([])
-        >>> b(0.5)
-        1.0
-
-        >>> # Example 2: Explicit PDF
-        >>> # A density that bets on small p-values: f(x) = 2(1-x)
-        >>> fs2 = FixedStrategy(pdf=lambda x: 2 * (1 - x))
-        >>> b, _ = fs2.update_betting_function([])
-        >>> b(0.1)
-        1.8
+    Examples
+    --------
+    >>> fs = FixedStrategy(distribution=uniform())
+    >>> fs.bet(0.5)
+    1.0
+    >>> fs2 = FixedStrategy(pdf=lambda x: 2 * (1 - x))
+    >>> fs2.bet(0.1)
+    1.8
     """
 
     def __init__(self, distribution=None, pdf=None, cdf=None, check_integration=True):
-        """
-        Initializes the FixedStrategy.
-
-        Args:
-            distribution: An object with .pdf() and .cdf() methods (e.g., from scipy.stats).
-            pdf (callable): A probability density function (optional, overrides distribution if both provided).
-            cdf (callable): A cumulative distribution function (optional). If pdf is provided but cdf is not,
-                            numerical integration will be used.
-            check_integration (bool): Whether to verify that the PDF integrates to 1.
-        """
-        # Pass 0 to super to imply full mixing, though we override the logic below anyway.
-        super().__init__(min_sample_size=0)
-
-        self.base_pdf = None
-        self.base_cdf = None
-
-        # Logic to determine pdf/cdf
         if pdf is not None:
-            self.base_pdf = pdf
+            self._pdf = pdf
             if cdf is not None:
-                self.base_cdf = cdf
+                self._cdf = cdf
             else:
-                # Fallback to numerical integration for CDF
                 def numerical_cdf(x):
                     if np.ndim(x) == 0:
-                        return quad(self.base_pdf, 0, x, limit=50)[0]
-                    return np.array([quad(self.base_pdf, 0, val, limit=50)[0] for val in x])
-
-                self.base_cdf = numerical_cdf
+                        return quad(self._pdf, 0, x, limit=50)[0]
+                    return np.array([quad(self._pdf, 0, val, limit=50)[0] for val in x])
+                self._cdf = numerical_cdf
         elif distribution is not None:
-            self.base_pdf = distribution.pdf
-            self.base_cdf = distribution.cdf
+            self._pdf = distribution.pdf
+            self._cdf = distribution.cdf
         else:
-            # Default to uniform
             u = uniform()
-            self.base_pdf = u.pdf
-            self.base_cdf = u.cdf
+            self._pdf = u.pdf
+            self._cdf = u.cdf
 
         if check_integration:
             try:
-                total_prob, _ = quad(self.base_pdf, 0, 1, limit=100)
+                total_prob, _ = quad(self._pdf, 0, 1, limit=100)
                 if not np.isclose(total_prob, 1.0, atol=1e-3):
                     warnings.warn(
-                        f"FixedStrategy PDF does not integrate to 1 (integral={total_prob:.4f}). This may invalidate the martingale.",
+                        f"FixedStrategy PDF does not integrate to 1 "
+                        f"(integral={total_prob:.4f}). This may invalidate the martingale.",
                         stacklevel=2,
                     )
             except Exception as e:
                 warnings.warn(f"Could not verify FixedStrategy PDF integration: {e}", stacklevel=2)
 
-    def update_betting_function(self, p_values):
-        """
-        Returns the fixed betting function regardless of p_values.
-        """
-        return self.base_pdf, self.base_cdf
+    def bet(self, p):
+        return float(self._pdf(p))
+
+    def integrate(self, p):
+        return float(self._cdf(p))
 
 
 class ExpertAggregationStrategy(BettingStrategy):
-    """
-    An aggregation strategy using an adaptive Exponentially Weighted Average forecaster.
+    """Exponentially Weighted Average aggregation of expert betting strategies.
 
-    Examples:
-        >>> # Two experts: one good (FixedStrategy betting on 0.1), one bad (Uniform)
-        >>> expert_good = FixedStrategy(
-        ...     pdf=lambda x: norm.pdf(x, 0.1, 0.1) / (norm.cdf(1, 0.1, 0.1) - norm.cdf(0, 0.1, 0.1)),
-        ...     check_integration=False,
-        ... )
-        >>> expert_bad = FixedStrategy(distribution=uniform())
-        >>> agg = ExpertAggregationStrategy(experts=[expert_good, expert_bad])
-        >>> # After seeing p=0.1, expert_good should have higher weight
-        >>> _ = agg.update_betting_function([0.1])
-        >>> w = agg.get_current_weights()
-        >>> w[0] > w[1]
-        True
+    Maintains a portfolio over multiple expert strategies and reweights
+    based on their performance (log-gains).
+
+    Parameters
+    ----------
+    experts : list of BettingStrategy
+        The expert strategies to aggregate.
+    learning_rate : float
+        Step size for the exponential weights update.
+    base_alpha : float
+        Base mixing rate towards uniform for regularization.
+
+    Examples
+    --------
+    >>> expert_good = FixedStrategy(
+    ...     pdf=lambda x: norm.pdf(x, 0.1, 0.1) / (norm.cdf(1, 0.1, 0.1) - norm.cdf(0, 0.1, 0.1)),
+    ...     check_integration=False,
+    ... )
+    >>> expert_bad = FixedStrategy(distribution=uniform())
+    >>> agg = ExpertAggregationStrategy(experts=[expert_good, expert_bad])
+    >>> agg.update(0.1)
+    >>> w = agg.get_current_weights()
+    >>> w[0] > w[1]
+    True
     """
 
     def __init__(self, experts, learning_rate=0.1, base_alpha=0.01):
-        super().__init__(min_sample_size=0)
         self.experts = experts
         self.num_experts = len(experts)
         self.learning_rate = learning_rate
         self.base_alpha = base_alpha
-
         self.log_weights = np.zeros(self.num_experts)
         self.expert_weights_history = []
 
-        self.expert_pdfs = [lambda x: 1.0 for _ in self.experts]
-        self.expert_cdfs = [lambda x: x for _ in self.experts]
-
-        self.update_betting_function([])
-
     def get_current_weights(self):
-        """Calculates current linear weights from log-weights."""
+        """Calculate current linear weights from log-weights."""
         lse = logsumexp(self.log_weights)
         return np.exp(self.log_weights - lse)
 
-    def update_betting_function(self, p_values):
-        if not p_values:
-            for i, expert in enumerate(self.experts):
-                self.expert_pdfs[i], self.expert_cdfs[i] = expert.update_betting_function(p_values)
-        else:
-            previous_weights = self.get_current_weights()
-            p = p_values[-1]
+    def bet(self, p):
+        weights = self.get_current_weights()
+        return float(np.dot(weights, [expert.bet(p) for expert in self.experts]))
 
-            gains = np.array([pdf(p) for pdf in self.expert_pdfs])
+    def integrate(self, p):
+        weights = self.get_current_weights()
+        return float(np.dot(weights, [expert.integrate(p) for expert in self.experts]))
 
-            master_prediction = np.dot(previous_weights, gains)
-            loss = 1.0 - np.clip(master_prediction / self.num_experts, 0, 1)  # Optional scaling
-            alpha_t = self.base_alpha * loss
+    def update(self, p):
+        # Update weights based on expert performance
+        gains = np.array([expert.bet(p) for expert in self.experts])
+        master_prediction = np.dot(self.get_current_weights(), gains)
+        loss = 1.0 - np.clip(master_prediction / self.num_experts, 0, 1)
+        alpha_t = self.base_alpha * loss
 
-            # FIX: Added epsilon or clip to avoid log(0) which causes NaN propagation
-            log_gains = np.log(np.maximum(gains, 1e-12))
+        log_gains = np.log(np.maximum(gains, 1e-12))
+        self.log_weights += self.learning_rate * log_gains
 
-            self.log_weights += self.learning_rate * log_gains
+        intermediate_weights = self.get_current_weights()
+        final_weights = (1 - alpha_t) * intermediate_weights + alpha_t / self.num_experts
+        final_weights /= np.sum(final_weights)
+        self.log_weights = np.log(np.maximum(final_weights, 1e-12))
 
-            intermediate_weights = self.get_current_weights()
-            final_weights = (1 - alpha_t) * intermediate_weights + alpha_t / self.num_experts
-            final_weights /= np.sum(final_weights)
+        self.expert_weights_history.append(final_weights.copy())
 
-            # Update log_weights safely
-            self.log_weights = np.log(np.maximum(final_weights, 1e-12))
-
-            for i, expert in enumerate(self.experts):
-                self.expert_pdfs[i], self.expert_cdfs[i] = expert.update_betting_function(p_values)
-
-        final_weights_for_next_step = self.get_current_weights()
-        self.expert_weights_history.append(final_weights_for_next_step.copy())
-
-        # We must capture the CURRENT state of pdfs/cdfs.
-        # Since self.expert_pdfs is a list that changes elements, we need to be careful.
-        # However, we only replace the elements, so 'current_pdfs' capturing the list object is okay
-        # as long as we don't modify the list *during* the execution of next_agg_pdf.
-        current_pdfs = self.expert_pdfs[:]
-        current_cdfs = self.expert_cdfs[:]
-
-        def next_agg_pdf(x):
-            return np.dot(final_weights_for_next_step, [pdf(x) for pdf in current_pdfs])
-
-        def next_agg_cdf(x):
-            return np.dot(final_weights_for_next_step, [cdf(x) for cdf in current_cdfs])
-
-        return next_agg_pdf, next_agg_cdf
+        # Then update each expert
+        for expert in self.experts:
+            expert.update(p)
 
     def plot_weights(self, expert_names=None, title="Evolution of Expert Weights", ax=None):
-        """
-        Plots the evolution of expert weights over time.
-
-        Args:
-            expert_names (list of str, optional): Names for the experts for the legend.
-            title (str, optional): Title of the plot.
-            ax (matplotlib.axes.Axes, optional): Axes object to plot on. If None, a new figure is created.
-        """
+        """Plot the evolution of expert weights over time."""
         try:
             import matplotlib.pyplot as plt
         except ImportError:
@@ -846,21 +707,35 @@ class ExpertAggregationStrategy(BettingStrategy):
         ax.legend(loc="best")
         ax.grid(True, alpha=0.3)
 
-        if ax is None:  # Only show if we created the figure
+        if ax is None:
             plt.tight_layout()
             plt.show()
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
 # MARTINGALES
-class ConformalTestMartingale:
-    """
-    Parent class for conformal test martingales.
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    Attributes:
-        logM (float): Logarithm of the martingale value.
-        max (float): Maximum martingale value observed so far.
-        p_values (list): List of observed p-values.
-        store_p_values (bool): Whether to store the full history of p-values.
+
+class ConformalTestMartingale:
+    """Base class for conformal test martingales.
+
+    A conformal test martingale is a non-negative process starting at 1
+    that grows when the exchangeability assumption is violated. It exposes:
+    - ``b_n(p)``: the current betting function (density) for the next step
+    - ``B_n(p)``: the current protection function (CDF) for the next step
+    - ``update(p)``: incorporate a new p-value and advance the martingale
+
+    Attributes
+    ----------
+    logM : float
+        Log martingale value.
+    M : float
+        Current martingale value (property).
+    b_n : callable
+        Betting function for the next step.
+    B_n : callable
+        Protection function (CDF) for the next step.
     """
 
     def __init__(self, warnings=True, warning_level=100, store_p_values=True):
@@ -871,9 +746,9 @@ class ConformalTestMartingale:
         self.log_martingale_values = [0.0]
         self.warning_level = warning_level
         self.warnings = warnings
-        self._warned = False  # Track if we have already warned
-        self.b_n = lambda x: beta.pdf(x, 1, 1)
-        self.B_n = lambda x: beta.cdf(x, 1, 1)
+        self._warned = False
+        self.b_n = lambda x: 1.0
+        self.B_n = lambda x: x
 
     @property
     def M(self):
@@ -892,64 +767,122 @@ class ConformalTestMartingale:
         return [logM / np.log(10) for logM in self.log_martingale_values]
 
     def check_warning(self):
-        # Perform check in log-space to avoid overflow
         if self.log_max >= np.log(self.warning_level) and self.warnings and not self._warned:
             warnings.warn(
                 f"Exchangeability assumption likely violated: Max martingale value is {self.max}", stacklevel=2
             )
             self._warned = True
 
+    def update(self, p):
+        """Incorporate a new p-value. Subclasses must implement this."""
+        raise NotImplementedError
+
+    # Backward compatibility alias
+    def update_martingale_value(self, p):
+        """Deprecated: use update(p) instead."""
+        return self.update(p)
+
 
 class PluginMartingale(ConformalTestMartingale):
-    """
-    Implements a plugin martingale using a specified betting strategy.
+    """Plugin martingale using a betting strategy with cautious-start mixing.
 
-    Examples:
-        >>> # Use a fixed strategy betting on p < 0.5
-        >>> strat = FixedStrategy(pdf=lambda x: 2 if x < 0.5 else 0, check_integration=False)
-        >>> martingale = PluginMartingale(betting_strategy=strat)
-        >>> # A low p-value should double the wealth
-        >>> martingale.update_martingale_value(0.1)
-        >>> np.isclose(martingale.M, 2.0)
-        True
-        >>> # A high p-value should loose everything (logM becomes -inf)
-        >>> martingale.update_martingale_value(0.9)
-        >>> martingale.M == 0.0
-        True
+    The martingale wraps a ``BettingStrategy`` and applies cautious mixing:
+    during the first ``min_sample_size`` observations, the strategy's density
+    is linearly mixed towards uniform to avoid catastrophic loss before the
+    density estimate is reliable.
+
+    Protocol per step:
+    1. **Predict**: evaluate ``strategy.bet(p)`` (uses past data only)
+    2. **Mix**: apply cautious start ``b = λ * f + (1 - λ)``
+    3. **Accumulate**: ``logM += log(b)``
+    4. **Learn**: call ``strategy.update(p)``
+    5. **Expose**: set ``b_n`` and ``B_n`` for the *next* step
+
+    Parameters
+    ----------
+    betting_strategy : BettingStrategy or type
+        An instantiated strategy, or a class to be instantiated with kwargs.
+    min_sample_size : int
+        Number of steps over which to linearly ramp up from uniform to full betting.
+    **kwargs
+        Passed to the strategy constructor if a class is given.
+
+    Examples
+    --------
+    >>> strat = FixedStrategy(pdf=lambda x: 2 if x < 0.5 else 0, check_integration=False)
+    >>> m = PluginMartingale(betting_strategy=strat, min_sample_size=0)
+    >>> m.update(0.1)
+    >>> np.isclose(m.M, 2.0)
+    True
+    >>> m.update(0.9)
+    >>> m.M == 0.0
+    True
     """
 
-    def __init__(self, betting_strategy=GaussianKDE, warnings=True, warning_level=100, store_p_values=True, **kwargs):
+    def __init__(
+        self,
+        betting_strategy=GaussianKDE,
+        min_sample_size=100,
+        warnings=True,
+        warning_level=100,
+        store_p_values=True,
+        **kwargs,
+    ):
         super().__init__(warnings, warning_level, store_p_values)
+        self.min_sample_size = min_sample_size
+        self._n = 0
 
         if isinstance(betting_strategy, BettingStrategy):
-            self.betting_strategy = betting_strategy
+            self.strategy = betting_strategy
         else:
-            betting_kwargs = (
-                kwargs
-                if kwargs
-                else {
-                    "bandwidth": "silverman",
-                    "window_size": None,
-                    "min_sample_size": 100,
-                }
-            )
-            self.betting_strategy = betting_strategy(**betting_kwargs)
+            betting_kwargs = kwargs if kwargs else {}
+            self.strategy = betting_strategy(**betting_kwargs)
 
-        # Initialize betting functions from strategy (for the first step)
-        self.b_n, self.B_n = self.betting_strategy.update_betting_function([])
+        # Expose initial b_n / B_n (with mixing at step 0)
+        self._update_exposed_functions()
 
-    def update_martingale_value(self, p):
-        self.logM += np.log(self.b_n(p))
+    def _mixing_parameter(self, n):
+        """Linear ramp from 0 to 1 over min_sample_size steps."""
+        if self.min_sample_size == 0:
+            return 1.0
+        return min(n / self.min_sample_size, 1.0)
+
+    def _update_exposed_functions(self):
+        """Set b_n and B_n for the *next* step (using current strategy state)."""
+        lam = self._mixing_parameter(self._n)
+        strategy = self.strategy
+
+        def b_n(x, _lam=lam, _s=strategy):
+            return _lam * _s.bet(x) + (1 - _lam)
+
+        def B_n(x, _lam=lam, _s=strategy):
+            return _lam * _s.integrate(x) + (1 - _lam) * x
+
+        self.b_n = b_n
+        self.B_n = B_n
+
+    def update(self, p):
+        # 1. Predict: evaluate current betting function
+        f = self.strategy.bet(p)
+        F = self.strategy.integrate(p)
+
+        # 2. Mix (cautious start)
+        lam = self._mixing_parameter(self._n)
+        b = lam * f + (1 - lam)
+
+        # 3. Accumulate wealth
+        self.logM += np.log(b)
         self.log_martingale_values.append(self.logM)
 
         if self.store_p_values:
             self.p_values.append(p)
 
-        # NOTE: Betting strategies usually require history.
-        # If store_p_values is False, this might break strategies that rely on it.
-        # However, for PluginMartingale, it is generally expected that p_values are stored.
-        # If one disables storage, they must ensure the strategy handles it (e.g. requires no history like FixedStrategy).
-        self.b_n, self.B_n = self.betting_strategy.update_betting_function(self.p_values)
+        # 4. Learn
+        self._n += 1
+        self.strategy.update(p)
+
+        # 5. Expose next step's functions
+        self._update_exposed_functions()
 
         if self.logM > self.log_max:
             self.log_max = self.logM
@@ -958,38 +891,40 @@ class PluginMartingale(ConformalTestMartingale):
 
 
 class SimpleJumper(ConformalTestMartingale):
-    """
-    Implements a simple jumper martingale in log-space to avoid overflow.
+    """Simple jumper martingale in log-space.
 
-    Examples:
-        >>> # Initialize a jumper
-        >>> sj = SimpleJumper(J=0.1)
-        >>> # A sequence of small p-values should increase the wealth
-        >>> for _ in range(5):
-        ...     sj.update_martingale_value(0.0001)
-        >>> sj.M > 1.0
-        True
-        >>> # A p-value of 0.5 should keep wealth roughly stable or decaying slightly if prior was wrong
-        >>> sj.update_martingale_value(0.5)
+    Uses three experts (epsilon = -1, 0, 1) with a jump rate J that controls
+    how quickly the martingale can adapt to changing alternatives.
+
+    Parameters
+    ----------
+    J : float
+        Jump rate (probability of switching expert per step).
+
+    Examples
+    --------
+    >>> sj = SimpleJumper(J=0.1)
+    >>> for _ in range(5):
+    ...     sj.update(0.0001)
+    >>> sj.M > 1.0
+    True
     """
 
     def __init__(self, J=0.01, warning_level=100, warnings=True, store_p_values=True, **kwargs):
         super().__init__(warnings, warning_level, store_p_values)
         self.J = J
-        # Initialize log wealths. log(1/3) approx -1.0986
         self.log_C_epsilon = {-1: -np.log(3), 0: -np.log(3), 1: -np.log(3)}
-        self.log_C = 0.0  # log(1)
+        self.log_C = 0.0
 
         self.b_epsilon = lambda u, epsilon: 1 + epsilon * (u - 1 / 2)
         self.B_n_inv = lambda x: x
 
-    def update_martingale_value(self, p):
+    def update(self, p):
         if self.store_p_values:
             self.p_values.append(p)
 
-        # Precompute mixing logs
         if self.J == 1:
-            log_1_minus_J = -np.inf  # effectively 0 in linear space
+            log_1_minus_J = -np.inf
         else:
             log_1_minus_J = np.log(1 - self.J)
 
@@ -998,29 +933,19 @@ class SimpleJumper(ConformalTestMartingale):
         new_log_C_epsilon = {}
 
         for epsilon in [-1, 0, 1]:
-            # Mixing step in log space: log((1-J)*C_eps + (J/3)*C)
-            # = logaddexp(log(1-J) + log_C_eps, log(J/3) + log_C)
             term1 = log_1_minus_J + self.log_C_epsilon[epsilon]
             term2 = log_J_div_3 + self.log_C
             log_C_mixed = np.logaddexp(term1, term2)
-
-            # Betting step
             bet_val = self.b_epsilon(p, epsilon)
-            # bet_val is always in [0.5, 1.5] for eps in [-1, 1], so log is safe
             new_log_C_epsilon[epsilon] = log_C_mixed + np.log(bet_val)
 
         self.log_C_epsilon = new_log_C_epsilon
-
-        # Calculate total wealth via logsumexp
         self.log_C = logsumexp(list(self.log_C_epsilon.values()))
 
         self.logM = self.log_C
         self.log_martingale_values.append(self.logM)
 
-        # Calculate epsilon_bar for the effective betting function at the NEXT step.
-        # After mixing, the pre-bet weight for expert ε is:
-        #   w_ε = (1-J)*(C_ε,n / C_n) + J/3
-        # The effective epsilon_bar is w_1 - w_{-1} = (1-J)*(C_1,n/C_n - C_{-1,n}/C_n).
+        # Effective betting function for next step
         w_1 = np.exp(self.log_C_epsilon[1] - self.log_C)
         w_minus_1 = np.exp(self.log_C_epsilon[-1] - self.log_C)
         epsilon_bar = (1 - self.J) * (w_1 - w_minus_1)
@@ -1041,20 +966,17 @@ class SimpleJumper(ConformalTestMartingale):
 
 
 class CompositeJumper(ConformalTestMartingale):
-    """
-    Composite Jumper that averages over multiple jump rates.
+    """Composite Jumper that averages over multiple jump rates.
 
-    Examples:
-        >>> # Standard initialization
-        >>> cj = CompositeJumper()
-        >>> # Update with small p sequence
-        >>> for _ in range(5):
-        ...     cj.update_martingale_value(0.001)
-        >>> cj.M > 1
-        True
+    Examples
+    --------
+    >>> cj = CompositeJumper()
+    >>> for _ in range(5):
+    ...     cj.update(0.001)
+    >>> cj.M > 1
+    True
     """
 
-    # FIX: Changed mutable default argument J=[] to J=None
     def __init__(self, J=None, warnings=True, warning_level=100, store_p_values=True):
         super().__init__(warnings, warning_level, store_p_values)
         if J is None:
@@ -1062,37 +984,27 @@ class CompositeJumper(ConformalTestMartingale):
         else:
             self.J = J
 
-        # FIX: Initialize sub-jumpers with store_p_values=False to save memory.
-        # The CompositeJumper itself will store the history if requested.
         self.Jumpers = {j: SimpleJumper(J=j, warnings=False, store_p_values=False) for j in self.J}
 
-    def update_martingale_value(self, p):
+    def update(self, p):
         if self.store_p_values:
             self.p_values.append(p)
 
-        # Update individual jumpers
         for m in self.Jumpers.values():
-            m.update_martingale_value(p)
+            m.update(p)
 
-        # Log-space aggregation to prevent overflow
-        # M_composite = mean(M_i)
-        # logM = log(sum(exp(logM_i))) - log(N)
         log_M_values = [m.logM for m in self.Jumpers.values()]
         self.logM = logsumexp(log_M_values) - np.log(len(self.Jumpers))
 
         self.log_martingale_values.append(self.logM)
 
-        # Calculate wealth-weighted betting function for consistency
-        # weights w_i = M_i / \sum M_k = exp(logM_i - log(\sum M_k))
-        # log(\sum M_k) = self.logM + log(N)
+        # Wealth-weighted betting function
         log_sum_M = self.logM + np.log(len(self.Jumpers))
         weights = np.exp(np.array(log_M_values) - log_sum_M)
 
-        # We need to capture the current b_n functions of the jumpers
         current_b_ns = [m.b_n for m in self.Jumpers.values()]
         current_B_ns = [m.B_n for m in self.Jumpers.values()]
 
-        # The composite b_n is the weighted average of individual b_ns
         self.b_n = lambda u: np.dot(weights, [f(u) for f in current_b_ns])
         self.B_n = lambda u: np.dot(weights, [F(u) for F in current_B_ns])
 
@@ -1102,99 +1014,28 @@ class CompositeJumper(ConformalTestMartingale):
         self.check_warning()
 
 
-class OnionMartingale(ConformalTestMartingale):
-    """
-    Multi-layer protection martingale (the "onion").
-
-    Composes a list of ConformalTestMartingale instances into a layered
-    protection scheme. Each layer bets against the uniformity of the
-    previous layer's protected p-values. The combined martingale value
-    is the product of all layer martingales (Proposition 5.1).
-
-    Each layer is a full ConformalTestMartingale and maintains its own
-    state, so individual trajectories and p-values can be inspected via
-    ``self.layers[i]``.
-
-    Examples:
-        >>> from copy import deepcopy
-        >>> base = SimpleJumper(warnings=False)
-        >>> onion = OnionMartingale([deepcopy(base) for _ in range(3)])
-        >>> for _ in range(10):
-        ...     onion.update_martingale_value(0.01)
-        >>> onion.M > 1.0
-        True
-        >>> # Each layer's p-values are accessible
-        >>> len(onion.layers[0].p_values) == 10
-        True
-        >>> # Composite B_n maps [0,1] to [0,1]
-        >>> abs(onion.B_n(0.0)) < 1e-12
-        True
-        >>> abs(onion.B_n(1.0) - 1.0) < 1e-12
-        True
-    """
-
-    def __init__(self, layers, warnings=True, warning_level=100, store_p_values=True):
-        super().__init__(warnings, warning_level, store_p_values)
-        if not layers:
-            raise ValueError("At least one layer is required.")
-        self.layers = layers
-
-    def update_martingale_value(self, p):
-        p_i = p
-        for layer in self.layers:
-            p_i_next = layer.B_n(p_i)  # protect BEFORE update (uses B_j)
-            layer.update_martingale_value(p_i)  # updates martingale, then sets B_n = B_{j+1}
-            p_i = p_i_next
-
-        if self.store_p_values:
-            self.p_values.append(p_i)  # final protected p-value
-
-        self.logM = sum(layer.logM for layer in self.layers)
-        self.log_martingale_values.append(self.logM)
-
-        # Composite betting function: b_total(p) = prod_i b^(i)(B^(i-1)(...(p)...))
-        current_b_ns = [layer.b_n for layer in self.layers]
-        current_B_ns = [layer.B_n for layer in self.layers]
-
-        def _composite_b(u):
-            val = 1.0
-            x = u
-            for _i, (b, B) in enumerate(zip(current_b_ns, current_B_ns)):
-                val *= b(x)
-                x = B(x)
-            return val
-
-        def _composite_B(u):
-            x = u
-            for B in current_B_ns:
-                x = B(x)
-            return x
-
-        self.b_n = _composite_b
-        self.B_n = _composite_B
-
-        if self.logM > self.log_max:
-            self.log_max = self.logM
-
-        self.check_warning()
-
-
 class SimpleMixtureMartingale(ConformalTestMartingale):
-    """
-    Implements the Simple Mixture Martingale using the efficient closed-form
-    solution based on the incomplete gamma function.
+    """Simple Mixture Martingale using the incomplete gamma function.
 
-    Examples:
-        >>> sm = SimpleMixtureMartingale()
-        >>> # A series of small p-values should grow the martingale
-        >>> sm.update_martingale_value(0.01)
-        >>> sm.update_martingale_value(0.01)
-        >>> sm.M > 1
-        True
-        >>> # A p-value of 1.0 is bad for the alternative, should decrease wealth
-        >>> sm.update_martingale_value(1.0)
-        >>> sm.M < sm.martingale_values[-2]
-        True
+    This is the canonical "parameter-free" test martingale that averages over
+    all power alternatives t^epsilon with epsilon ~ Exp(1). It has a closed-form
+    solution based on the regularized incomplete gamma function.
+
+    After each step, ``b_n`` and ``B_n`` are set analytically:
+    - b_n(p) = M_n(p) / M_{n-1} where M_n(p) is the martingale value if the
+      next observation were p.
+    - B_n(p) = integral of b_n from 0 to p.
+
+    Examples
+    --------
+    >>> sm = SimpleMixtureMartingale()
+    >>> sm.update(0.01)
+    >>> sm.update(0.01)
+    >>> sm.M > 1
+    True
+    >>> sm.update(1.0)
+    >>> sm.M < sm.martingale_values[-2]
+    True
     """
 
     def __init__(self, **kwargs):
@@ -1202,43 +1043,56 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         self.n = 0
         self.sum_log_p = 0.0
 
-    def update_martingale_value(self, p):
-        # 1. Update the sufficient statistics
+    def _compute_logM(self, n, sum_log_p):
+        """Compute log-martingale value from sufficient statistics."""
+        if n == 0:
+            return 0.0
+        L = sum_log_p
+        if np.isclose(L, 0):
+            return -np.log(n + 1)
+        arg = -L
+        log_gamma_n_plus_1 = gammaln(n + 1)
+        val_gammainc = gammainc(n + 1, arg)
+        if val_gammainc <= 0:
+            log_incomplete_gamma = -700
+        else:
+            log_incomplete_gamma = log_gamma_n_plus_1 + np.log(val_gammainc)
+        return -L + log_incomplete_gamma - (n + 1) * np.log(arg)
+
+    def _update_b_n(self):
+        """Set analytic b_n and B_n for the next step.
+
+        b_n(p) = M(n+1, sum_log_p + log(p)) / M(n, sum_log_p)
+        which simplifies to an analytic ratio of incomplete gamma terms.
+        """
+        n = self.n
+        slp = self.sum_log_p
+        current_logM = self.logM
+
+        def b_n(p, _n=n, _slp=slp, _logM=current_logM):
+            p_c = np.clip(p, 1e-12, 1.0)
+            next_logM = self._compute_logM(_n + 1, _slp + np.log(p_c))
+            return np.exp(next_logM - _logM)
+
+        def B_n(p, _n=n, _slp=slp, _logM=current_logM):
+            # B_n(p) = integral_0^p b_n(t) dt
+            # We compute this via numerical integration (the ratio doesn't simplify to closed-form CDF)
+            if p <= 1e-12:
+                return 0.0
+            if p >= 1.0 - 1e-12:
+                return 1.0
+            val, _ = quad(b_n, 1e-12, p, limit=50)
+            return val
+
+        self.b_n = b_n
+        self.B_n = B_n
+
+    def update(self, p):
         self.n += 1
-        p_clipped = np.clip(p, 1e-12, 1.0)  # Clip away from zero for log
+        p_clipped = np.clip(p, 1e-12, 1.0)
         self.sum_log_p += np.log(p_clipped)
 
-        # 2. Calculate the new martingale value using the formula
-        n = self.n
-        L = self.sum_log_p
-
-        # Handle the edge case where all p-values were 1.0, so L=0
-        if np.isclose(L, 0):
-            # new_M = 1 / (n + 1) -> logM = -log(n+1)
-            self.logM = -np.log(n + 1)
-        else:
-            # The argument for the gamma functions is -L
-            arg = -L
-
-            # Use log-gamma for numerical stability
-            log_gamma_n_plus_1 = gammaln(n + 1)
-
-            # γ(n+1, -L) = Γ(n+1) * P(n+1, -L)
-            # where P is the regularized incomplete gamma function (gammainc)
-            # FIX: Check for underflow in gammainc
-            val_gammainc = gammainc(n + 1, arg)
-            if val_gammainc <= 0:
-                # If we underflow, we are deep in the tail.
-                # This happens if arg (sum log p) is massive, meaning p-values are tiny.
-                # In this region, martingale value is huge.
-                # Fallback or strict lower bound might be needed, but usually 1e-300 is fine.
-                log_incomplete_gamma = -700  # Approx log(tiny)
-            else:
-                log_incomplete_gamma = log_gamma_n_plus_1 + np.log(val_gammainc)
-
-            # The full formula in log-space to avoid large numbers
-            # log_M = -L + log_incomplete_gamma - (n + 1) * np.log(arg)
-            self.logM = -L + log_incomplete_gamma - (n + 1) * np.log(arg)
+        self.logM = self._compute_logM(self.n, self.sum_log_p)
 
         if self.store_p_values:
             self.p_values.append(p)
@@ -1246,6 +1100,8 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
 
         if self.logM > self.log_max:
             self.log_max = self.logM
+
+        self._update_b_n()
         self.check_warning()
 
 

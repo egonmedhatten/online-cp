@@ -93,9 +93,6 @@ from online_cp.martingale import (
     GaussianKDE as GaussianKDE,
 )
 from online_cp.martingale import (
-    OnionMartingale as OnionMartingale,
-)
-from online_cp.martingale import (
     ParticleFilterStrategy as ParticleFilterStrategy,
 )
 from online_cp.martingale import (

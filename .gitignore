@@ -7,3 +7,5 @@ notebooks/*.html
 notebooks/*.pdf
 papers/
 z_*
+*_dev.py
+tests/*_dev.py

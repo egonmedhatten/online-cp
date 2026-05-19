@@ -39,6 +39,8 @@ nav:
 
 plugins:
   - search
+  - macros:
+      include_dir: .
   - mkdocstrings:
       handlers:
         python:

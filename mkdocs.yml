@@ -1,0 +1,68 @@
+site_name: "online-cp: Online Conformal Prediction"
+site_description: "Valid prediction sets and intervals with guaranteed coverage, updated one example at a time."
+site_url: https://egonmedhatten.github.io/online-cp/
+repo_url: https://github.com/egonmedhatten/online-cp
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - API Reference:
+    - Regressors: api/regressors.md
+    - Classifiers: api/classifiers.md
+    - Mondrian CP: api/mondrian.md
+    - Predictive Systems: api/cps.md
+    - Martingales: api/martingale.md
+    - Evaluation: api/evaluation.md
+    - Metrics: api/metrics.md
+    - Plotting: api/plotting.md
+    - Kernels: api/kernels.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: true
+            show_root_heading: true
+            members_order: source
+            docstring_style: numpy
+            show_signature_annotations: true
+
+markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js

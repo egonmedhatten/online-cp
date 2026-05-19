@@ -32,6 +32,10 @@ dev = [
 	"pytest",
 	"ruff",
 ]
+docs = [
+	"mkdocs-material",
+	"mkdocstrings[python]",
+]
 all = [
 	"online-cp[fast,dev]",
 ]

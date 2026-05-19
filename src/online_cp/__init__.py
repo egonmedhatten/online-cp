@@ -114,7 +114,10 @@ from online_cp.regressors import (
     KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
 )
 from online_cp.mondrian import (
-    MondrianWrapper as MondrianWrapper,
+    MondrianConformalClassifier as MondrianConformalClassifier,
+)
+from online_cp.mondrian import (
+    MondrianConformalRegressor as MondrianConformalRegressor,
 )
 from online_cp.plotting import (
     plot_coverage as plot_coverage,

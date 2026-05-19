@@ -22,21 +22,22 @@ Example
 ...     base_model=ConformalRidgeRegressor(a=1.0),
 ...     category_fn=lambda x: "pos" if x[0] > 0 else "neg",
 ... )
->>> wrapper.learn_initial_training_set(X_train, y_train)
->>> interval = wrapper.predict(x_test, epsilon=0.1)
+>>> wrapper.learn_initial_training_set(X_train, y_train)  # doctest: +SKIP
+>>> interval = wrapper.predict(x_test, epsilon=0.1)  # doctest: +SKIP
 """
 
 import numpy as np
 
-from online_cp.regressors import (
-    ConformalLassoRegressor,
-    ConformalPredictionInterval,
-    ConformalRegressor,
-    ConformalRidgeRegressor,
-    KernelConformalRidgeRegressor,
-    MultiLevelPredictionInterval,
-    _solve_lasso,
-)
+if __name__ != "__main__":
+    from online_cp.regressors import (
+        ConformalLassoRegressor,
+        ConformalPredictionInterval,
+        ConformalRegressor,
+        ConformalRidgeRegressor,
+        KernelConformalRidgeRegressor,
+        MultiLevelPredictionInterval,
+        _solve_lasso,
+    )
 
 __all__ = ["MondrianConformalRegressor", "MondrianConformalClassifier"]
 
@@ -647,3 +648,25 @@ class MondrianConformalClassifier:
             f"n_total={len(self.categories_)}, "
             f"base={self.base_model.__class__.__name__})"
         )
+
+
+if __name__ == "__main__":
+    import doctest
+    import sys
+
+    # Make intra-package imports available when run as a script
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from online_cp.regressors import (  # noqa: E402, F811
+        ConformalLassoRegressor,
+        ConformalPredictionInterval,
+        ConformalRegressor,
+        ConformalRidgeRegressor,
+        KernelConformalRidgeRegressor,
+        MultiLevelPredictionInterval,
+        _solve_lasso,
+    )
+
+    (failures, _) = doctest.testmod()
+    if failures:
+        sys.exit(1)

@@ -5,6 +5,8 @@ Provides conformal regressors, classifiers, conformal predictive systems,
 conformal test martingales, and evaluation metrics.
 """
 
+__version__ = "0.2.0"
+
 from online_cp.classifiers import (
     ConformalNearestNeighboursClassifier as ConformalNearestNeighboursClassifier,
 )

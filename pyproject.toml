@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "online-cp"
-version = "0.1.1"
+version = "0.2.0"
 authors = [
 	{ name="Johan Hallberg Szabadvary", email="johan.hallberg.szabadvary@ju.se" },
 ]
@@ -18,7 +18,7 @@ dependencies = [
 	'matplotlib',
 ]
 classifiers = [
-	"Development Status :: 2 - Pre-Alpha",
+	"Development Status :: 3 - Alpha",
 	"Programming Language :: Python :: 3",
 	"License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",

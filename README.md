@@ -1,7 +1,9 @@
 # online-cp — Online Conformal Prediction
 
-[![online-cp's Build Status][build-status]][build-log]
-[![online-cp on PyPI][pypi-version]][online-cp-on-pypi]
+[![PyPI version](https://badge.fury.io/py/online-cp.svg)](https://badge.fury.io/py/online-cp)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
+[![Tests](https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg)](https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)
 
 A Python library for **online conformal prediction** — valid prediction sets and intervals with guaranteed coverage, updated one example at a time.
 
@@ -9,6 +11,9 @@ A Python library for **online conformal prediction** — valid prediction sets a
 
 ```bash
 pip install online-cp
+
+# Optional: install with numba for faster Lasso homotopy and KDE
+pip install online-cp[fast]
 ```
 
 ### Conformal regression
@@ -56,9 +61,27 @@ result.levels        # [0.01, 0.05, 0.1, 0.2]
 result.coverage(y)   # {0.01: True, 0.05: True, 0.1: True, 0.2: False}
 ```
 
-### Evaluation
+### Mondrian conformal prediction
 
-Composable metrics and a standalone evaluation loop:
+Group-conditional coverage via a single pooled model with category-filtered calibration:
+
+```python
+from online_cp import ConformalRidgeRegressor
+from online_cp.mondrian import MondrianConformalRegressor
+
+wrapper = MondrianConformalRegressor(
+    base_model=ConformalRidgeRegressor(a=1.0),
+    category_fn=lambda x: "high" if x[0] > 0 else "low",
+)
+wrapper.learn_initial_training_set(X_train, y_train)
+
+# Guarantees: P(y ∈ Γ | category = k) ≥ 1 − ε  for each k
+interval = wrapper.predict(x_new, epsilon=0.1)
+```
+
+### Streaming evaluation
+
+River-style test-then-train loop with composable metrics:
 
 ```python
 from online_cp import ErrorRate, IntervalWidth, WinklerScore
@@ -70,6 +93,30 @@ print(metric)
 # ErrorRate: 0.0900
 # IntervalWidth: 0.4123
 # WinklerScore: 0.5012
+```
+
+Supports streaming iterables and conditional learning:
+
+```python
+from online_cp.evaluate import iter_progressive_val
+
+# Stream from any iterable of (x, y) pairs
+stream = ((x, y) for x, y in data_source)
+for snapshot in iter_progressive_val(model, stream, epsilon=0.1, step=50):
+    print(snapshot)  # periodic metric checkpoints
+
+# Conditional learning: only learn from some examples
+progressive_val(model, X, y, learn=lambda i, x, y: i % 2 == 0)
+```
+
+### Plotting utilities
+
+```python
+from online_cp.plotting import plot_coverage, plot_martingale, plot_intervals
+
+plot_coverage(error_rate_metric, nominal=0.9)
+plot_martingale(martingale)
+plot_intervals(y_true, intervals)
 ```
 
 ### Conformal test martingales
@@ -95,10 +142,12 @@ print(f"Martingale: {martingale.M:.2f}")
 |--------|-------------|
 | **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalLassoRegressor` |
 | **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
+| **Mondrian CP** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage |
 | **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |
-| **Evaluation** | `progressive_val()`, `iter_progressive_val()` |
-| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper`, `OnionMartingale` |
+| **Evaluation** | `progressive_val()`, `iter_progressive_val()` — streaming test-then-train |
+| **Plotting** | `plot_coverage`, `plot_martingale`, `plot_intervals`, `plot_set_sizes` |
+| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper` |
 | **Kernels** | `GaussianKernel`, `LinearKernel`, `PolynomialKernel`, `PeriodicKernel`, `LinearCombinationKernel` |
 
 ## API pattern
@@ -122,12 +171,13 @@ p = model.compute_p_value(x, y)
 
 ## Tutorial
 
-See [`notebooks/tutorial.ipynb`][] for a comprehensive walkthrough covering regression, classification, conformal predictive systems, evaluation, and test martingales.
+Start with [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) for a 5-minute introduction ([run on Binder](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)), then see [`notebooks/tutorial.ipynb`](notebooks/tutorial.ipynb) for a comprehensive walkthrough covering regression, classification, Mondrian CP, conformal predictive systems, martingales, and evaluation.
 
 ## Links
 
 * [online-cp on GitHub][online-cp-on-github]
 * [online-cp on PyPI][online-cp-on-pypi]
+* [Changelog](CHANGELOG.md)
 
 
 ## References
@@ -138,9 +188,6 @@ Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. *Algorithmic Learning in a
 [`notebooks/tutorial.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb
 [online-cp-on-pypi]: https://pypi.org/project/online-cp/
 [online-cp-on-github]: https://github.com/egonmedhatten/online-cp
-[pypi-version]: https://img.shields.io/pypi/v/online-cp
-[build-log]:    https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml
-[build-status]: https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg
 
 ## 📄 Citing `online-cp`
 

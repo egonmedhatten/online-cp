@@ -125,7 +125,7 @@ class BetaKernel(BettingStrategy):
     >>> bk = BetaKernel()
     >>> for p in [0.1, 0.2, 0.15, 0.05, 0.1]:
     ...     bk.update(p)
-    >>> bk.bet(0.1) >= 1.0  # density peaks near the data (== 1.0 without beta_kde)
+    >>> bool(bk.bet(0.1) >= 1.0)  # density peaks near the data (== 1.0 without beta_kde)
     True
     """
 
@@ -226,9 +226,9 @@ class GaussianKDE(BettingStrategy):
     >>> gkde = GaussianKDE(bandwidth=0.1)
     >>> for p in [0.1, 0.11, 0.09, 0.12, 0.08]:
     ...     gkde.update(p)
-    >>> gkde.bet(0.1) > 1.0  # should peak near the data
+    >>> bool(gkde.bet(0.1) > 1.0)  # should peak near the data
     True
-    >>> gkde.bet(0.9) < 1.0
+    >>> bool(gkde.bet(0.9) < 1.0)
     True
     """
 
@@ -370,9 +370,9 @@ class BetaMoments(BettingStrategy):
     >>> bm = BetaMoments()
     >>> for p in [0.01, 0.02, 0.05, 0.01, 0.03]:
     ...     bm.update(p)
-    >>> bm.bet(0.01) > 1.0  # should favor small p-values
+    >>> bool(bm.bet(0.01) > 1.0)  # should favor small p-values
     True
-    >>> bm.bet(0.99) < 1.0
+    >>> bool(bm.bet(0.99) < 1.0)
     True
     """
 
@@ -418,7 +418,7 @@ class BetaMLE(BettingStrategy):
     >>> bmle = BetaMLE()
     >>> for p in [0.01, 0.02, 0.01, 0.02, 0.01]:
     ...     bmle.update(p)
-    >>> bmle.bet(0.01) > 1.0  # should favor small p-values
+    >>> bool(bmle.bet(0.01) > 1.0)  # should favor small p-values
     True
     """
 
@@ -482,7 +482,7 @@ class ParticleFilterStrategy(BettingStrategy):
     >>> pf = ParticleFilterStrategy(num_particles=100, seed=42)
     >>> for p in [0.1, 0.1, 0.1]:
     ...     pf.update(p)
-    >>> pf.bet(0.1) > 1.0  # should favor 0.1
+    >>> bool(pf.bet(0.1) > 1.0)  # should favor 0.1
     True
     """
 
@@ -699,7 +699,7 @@ class ExpertAggregationStrategy(BettingStrategy):
     >>> agg = ExpertAggregationStrategy(experts=[expert_good, expert_bad])
     >>> agg.update(0.1)
     >>> w = agg.get_current_weights()
-    >>> w[0] > w[1]
+    >>> bool(w[0] > w[1])
     True
     """
 
@@ -878,10 +878,10 @@ class PluginMartingale(ConformalTestMartingale):
     >>> strat = FixedStrategy(pdf=lambda x: 2 if x < 0.5 else 0, check_integration=False)
     >>> m = PluginMartingale(betting_strategy=strat, min_sample_size=0)
     >>> m.update(0.1)
-    >>> np.isclose(m.M, 2.0)
+    >>> bool(np.isclose(m.M, 2.0))
     True
     >>> m.update(0.9)
-    >>> m.M == 0.0
+    >>> bool(m.M == 0.0)
     True
     """
 
@@ -972,7 +972,7 @@ class SimpleJumper(ConformalTestMartingale):
     >>> sj = SimpleJumper(J=0.1)
     >>> for _ in range(5):
     ...     sj.update(0.0001)
-    >>> sj.M > 1.0
+    >>> bool(sj.M > 1.0)
     True
     """
 
@@ -1039,7 +1039,7 @@ class CompositeJumper(ConformalTestMartingale):
     >>> cj = CompositeJumper()
     >>> for _ in range(5):
     ...     cj.update(0.001)
-    >>> cj.M > 1
+    >>> bool(cj.M > 1)
     True
     """
 
@@ -1097,10 +1097,10 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
     >>> sm = SimpleMixtureMartingale()
     >>> sm.update(0.01)
     >>> sm.update(0.01)
-    >>> sm.M > 1
+    >>> bool(sm.M > 1)
     True
     >>> sm.update(1.0)
-    >>> sm.M < sm.martingale_values[-2]
+    >>> bool(sm.M < sm.martingale_values[-2])
     True
     """
 

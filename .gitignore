@@ -10,3 +10,6 @@ papers/
 z_*
 *_dev.py
 tests/*_dev.py
+scripts/sync-to-desktop
+scripts/sync-from-desktop
+uv.lock

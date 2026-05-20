@@ -1,5 +1,0 @@
-numpy >= 1.20, < 2.0
-scipy >= 1.13
-numba
-joblib >= 1.4.2
-matplotlib

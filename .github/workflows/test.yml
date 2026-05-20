@@ -6,18 +6,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.12 # 2023-2024
-          cache: 'pip' # caching pip dependencies
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest nbconvert ipykernel scikit-learn scipy matplotlib validate-pyproject trove-classifiers coverage tqdm ipywidgets ucimlrepo
+        run: uv sync --extra ci
       - name: Parse libraries and run doctests (./scripts/run-modules)
-        run: ./scripts/run-modules
-      - run: ./scripts/run-notebooks
-      - run: validate-pyproject pyproject.toml
-      - run: pytest
-      - run: scripts/run-coverage
+        run: uv run ./scripts/run-modules
+      - run: uv run ./scripts/run-notebooks
+      - run: uv run validate-pyproject pyproject.toml
+      - run: uv run pytest
+      - run: uv run ./scripts/run-coverage

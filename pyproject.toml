@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=64"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "online-cp"
@@ -37,6 +37,18 @@ docs = [
 	"mkdocstrings[python]",
 	"mkdocs-macros-plugin",
 ]
+ci = [
+	"online-cp[all]",
+	"coverage",
+	"nbconvert",
+	"ipykernel",
+	"scikit-learn",
+	"tqdm",
+	"ipywidgets",
+	"ucimlrepo",
+	"validate-pyproject",
+	"trove-classifiers",
+]
 all = [
 	"online-cp[fast,dev]",
 ]
@@ -49,8 +61,8 @@ all = [
 pythonpath = ["src"]
 testpaths = ["tests"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/online_cp"]
 
 [tool.ruff]
 target-version = "py39"

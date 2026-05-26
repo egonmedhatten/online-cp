@@ -1,6 +1,9 @@
-import numpy as np
+import warnings
 
-from online_cp.classifiers import ConformalNearestNeighboursClassifier, MultiLevelPredictionSet
+import numpy as np
+import pytest
+
+from online_cp.classifiers import ConformalClassifierWrapper, ConformalNearestNeighboursClassifier, MultiLevelPredictionSet
 
 
 class TestConformalNearestNeighboursClassifier:
@@ -100,3 +103,296 @@ class TestConformalNearestNeighboursClassifier:
         result, p_values = cp.predict(X[50], epsilon=[0.05, 0.1], return_p_values=True)
         assert isinstance(result, MultiLevelPredictionSet)
         assert isinstance(p_values, dict)
+
+    def test_compute_p_value_matches_predict_per_label(self, classification_dataset):
+        """compute_p_value should match predict() p-values for the same hypothesis."""
+        X, y = classification_dataset
+        label_space = np.unique(y)
+        X_train, y_train = X[:40], y[:40]
+        x_test = X[40]
+
+        for label in label_space:
+            cp_predict = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=123)
+            cp_predict.learn_initial_training_set(X_train, y_train)
+            _, p_values = cp_predict.predict(x_test, return_p_values=True)
+
+            cp_single = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=123)
+            cp_single.learn_initial_training_set(X_train, y_train)
+            p_single = cp_single.compute_p_value(x_test, label)
+
+            assert np.isclose(p_single, p_values[label], atol=1e-12)
+            assert 0 <= p_single <= 1
+
+    def test_predict_return_update_produces_consistent_state(self, classification_dataset):
+        """Using predict(..., return_update=True) should preserve learn_one state equivalence."""
+        X, y = classification_dataset
+        label_space = np.unique(y)
+        X_train, y_train = X[:30], y[:30]
+        x_new, y_new = X[30], y[30]
+
+        cp_with_update = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=7)
+        cp_with_update.learn_initial_training_set(X_train, y_train)
+
+        cp_reference = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=7)
+        cp_reference.learn_initial_training_set(X_train, y_train)
+
+        _, D = cp_with_update.predict(x_new, return_update=True)
+        assert D.shape == (X_train.shape[0] + 1, X_train.shape[0] + 1)
+
+        cp_with_update.learn_one(x_new, y_new, D=D)
+        cp_reference.learn_one(x_new, y_new)
+
+        assert np.allclose(cp_with_update.X, cp_reference.X)
+        assert np.allclose(cp_with_update.y, cp_reference.y)
+        assert np.allclose(cp_with_update.D, cp_reference.D)
+
+    def test_compute_p_value_return_update_produces_consistent_state(self, classification_dataset):
+        """Using compute_p_value(..., return_update=True) should preserve learn_one state equivalence."""
+        X, y = classification_dataset
+        label_space = np.unique(y)
+        X_train, y_train = X[:30], y[:30]
+        x_new, y_new = X[31], y[31]
+
+        cp_with_update = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=9)
+        cp_with_update.learn_initial_training_set(X_train, y_train)
+
+        cp_reference = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=9)
+        cp_reference.learn_initial_training_set(X_train, y_train)
+
+        p_value, D = cp_with_update.compute_p_value(x_new, y_new, return_update=True)
+        assert 0 <= p_value <= 1
+        assert D.shape == (X_train.shape[0] + 1, X_train.shape[0] + 1)
+
+        cp_with_update.learn_one(x_new, y_new, D=D)
+        cp_reference.learn_one(x_new, y_new)
+
+        assert np.allclose(cp_with_update.X, cp_reference.X)
+        assert np.allclose(cp_with_update.y, cp_reference.y)
+        assert np.allclose(cp_with_update.D, cp_reference.D)
+
+    def test_multiclass_arbitrary_labels_with_k_edge_cases(self):
+        """Nearest-neighbour p-values should work for multiclass arbitrary labels and large k."""
+        X = np.array(
+            [
+                [0.0, 0.0],
+                [0.0, 1.0],
+                [10.0, 10.0],
+                [10.0, 11.0],
+                [20.0, 20.0],
+            ]
+        )
+        y = np.array([10, 10, 20, 30, 30])
+        label_space = np.array([10, 20, 30])
+
+        cp = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, rnd_state=0)
+        cp.learn_initial_training_set(X[:4], y[:4])
+
+        Gamma, p_values = cp.predict(X[4], return_p_values=True)
+
+        assert set(p_values.keys()) == {10, 20, 30}
+        for p in p_values.values():
+            assert np.isfinite(p)
+            assert 0 <= p <= 1
+        assert set(Gamma.elements).issubset({10, 20, 30})
+
+        multi = cp.predict(X[4], epsilon=[0.05, 0.2, 0.5])
+        assert isinstance(multi, MultiLevelPredictionSet)
+        assert len(multi[0.05]) >= len(multi[0.2]) >= len(multi[0.5])
+
+    def test_non_euclidean_distance_metric(self, classification_dataset):
+        """Classifier should work with non-Euclidean scipy distance metrics."""
+        X, y = classification_dataset
+        label_space = np.unique(y)
+
+        cp = ConformalNearestNeighboursClassifier(
+            k=3,
+            label_space=label_space,
+            distance="cityblock",
+            rnd_state=0,
+        )
+        cp.learn_initial_training_set(X[:25], y[:25])
+
+        Gamma, p_values = cp.predict(X[25], return_p_values=True)
+
+        assert set(p_values.keys()) == set(label_space)
+        assert cp.D.shape == (25, 25)
+        for p in p_values.values():
+            assert 0 <= p <= 1
+        assert set(Gamma.elements).issubset(set(label_space))
+
+        p_true = cp.compute_p_value(X[25], y[25])
+        assert 0 <= p_true <= 1
+
+    def test_custom_distance_function_is_used(self):
+        """Custom distance functions should determine the stored distance matrix and predictions."""
+        calls = []
+
+        def chebyshev_distance(X, y=None):
+            X = np.atleast_2d(X)
+            calls.append((X.shape, None if y is None else np.atleast_2d(y).shape))
+            if y is None:
+                diff = np.abs(X[:, None, :] - X[None, :, :])
+            else:
+                Y = np.atleast_2d(y)
+                diff = np.abs(X[:, None, :] - Y[None, :, :])
+            return diff.max(axis=2)
+
+        X = np.array(
+            [
+                [0.0, 0.0],
+                [1.0, 2.0],
+                [4.0, 1.0],
+                [5.0, 5.0],
+            ]
+        )
+        y = np.array([0, 0, 1, 1])
+        expected_D = np.array(
+            [
+                [0.0, 2.0, 4.0, 5.0],
+                [2.0, 0.0, 3.0, 4.0],
+                [4.0, 3.0, 0.0, 4.0],
+                [5.0, 4.0, 4.0, 0.0],
+            ]
+        )
+
+        cp = ConformalNearestNeighboursClassifier(
+            k=1,
+            label_space=np.array([0, 1]),
+            distance_func=chebyshev_distance,
+            rnd_state=0,
+        )
+        cp.learn_initial_training_set(X, y)
+
+        assert cp.distance == "custom"
+        assert np.allclose(cp.D, expected_D)
+
+        Gamma, p_values = cp.predict(np.array([3.0, 3.0]), return_p_values=True)
+
+        assert calls
+        assert set(p_values.keys()) == {0, 1}
+        for p in p_values.values():
+            assert 0 <= p <= 1
+        assert set(Gamma.elements).issubset({0, 1})
+
+        p_label = cp.compute_p_value(np.array([3.0, 3.0]), 1)
+        assert 0 <= p_label <= 1
+
+
+class _ToyProbLearner:
+    """Minimal sklearn-like learner with classes_ and predict_proba."""
+
+    def __init__(self):
+        self.classes_ = None
+
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        return self
+
+    def predict_proba(self, X):
+        n = X.shape[0]
+        m = len(self.classes_)
+        probs = np.tile(np.linspace(1.0, float(m), m), (n, 1))
+        probs /= probs.sum(axis=1, keepdims=True)
+        return probs
+
+
+class LogisticRegression(_ToyProbLearner):
+    """Name-based stand-in to exercise recommended-estimator warning logic."""
+
+
+class _BadNormalizedProbLearner(_ToyProbLearner):
+    def predict_proba(self, X):
+        probs = super().predict_proba(X)
+        return probs * 2.0
+
+
+class _BadShapeProbLearner(_ToyProbLearner):
+    def predict_proba(self, X):
+        probs = super().predict_proba(X)
+        return probs[:, 0]
+
+
+class TestConformalClassifierWrapper:
+    def test_soft_whitelist_warns_for_non_recommended_estimator(self):
+        with pytest.warns(UserWarning, match="not in the recommended set"):
+            ConformalClassifierWrapper(_ToyProbLearner(), label_space=np.array([10, 20]), rnd_state=0)
+
+    def test_recommended_name_does_not_emit_support_tier_warning(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ConformalClassifierWrapper(LogisticRegression(), label_space=np.array([10, 20]), rnd_state=0)
+
+        messages = [str(w.message) for w in caught]
+        assert any("experimental, slow" in msg for msg in messages)
+        assert not any("not in the recommended set" in msg for msg in messages)
+        assert not any("supported with caution" in msg for msg in messages)
+
+    def test_empty_training_predicts_all_labels(self):
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(_ToyProbLearner(), label_space=np.array([10, 20]), rnd_state=0)
+
+        Gamma, p_values = cp.predict(np.array([0.0, 1.0]), return_p_values=True)
+        assert set(Gamma.elements) == {10, 20}
+        assert set(p_values.keys()) == {10, 20}
+        assert all(v == 1.0 for v in p_values.values())
+
+    def test_learn_initial_training_set_and_arbitrary_labels(self):
+        X = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
+        y = np.array([10, 30, 10])
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(_ToyProbLearner(), label_space=np.array([10, 20, 30]), rnd_state=0)
+
+        cp.learn_initial_training_set(X, y)
+        assert cp.X.shape == X.shape
+        assert cp.y.shape == y.shape
+
+        Gamma, p_values = cp.predict(np.array([3.0, 3.0]), return_p_values=True)
+        assert set(p_values.keys()) == {10, 20, 30}
+        assert set(Gamma.elements).issubset({10, 20, 30})
+        for p in p_values.values():
+            assert 0 <= p <= 1
+
+    def test_probability_alignment_with_missing_class(self):
+        X = np.array([[0.0], [1.0], [2.0], [3.0]])
+        y = np.array([10, 10, 30, 30])
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(_ToyProbLearner(), label_space=np.array([10, 20, 30]), rnd_state=0)
+
+        cp.learn_initial_training_set(X, y)
+        _, p_values = cp.predict(np.array([4.0]), return_p_values=True)
+
+        assert set(p_values.keys()) == {10, 20, 30}
+        for p in p_values.values():
+            assert 0 <= p <= 1
+
+    def test_invalid_probability_rows_warn_but_continue(self):
+        X = np.array([[0.0], [1.0], [2.0]])
+        y = np.array([0, 1, 0])
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(_BadNormalizedProbLearner(), label_space=np.array([0, 1]), rnd_state=0)
+
+        cp.learn_initial_training_set(X, y)
+        with pytest.warns(UserWarning, match="not normalized"):
+            Gamma, p_values = cp.predict(np.array([3.0]), return_p_values=True)
+
+        assert set(p_values.keys()) == {0, 1}
+        assert set(Gamma.elements).issubset({0, 1})
+        for p in p_values.values():
+            assert 0 <= p <= 1
+
+    def test_invalid_probability_shape_falls_back_to_full_set(self):
+        X = np.array([[0.0], [1.0], [2.0]])
+        y = np.array([0, 1, 0])
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(_BadShapeProbLearner(), label_space=np.array([0, 1]), rnd_state=0)
+
+        cp.learn_initial_training_set(X, y)
+        with pytest.warns(UserWarning, match="must return a 2D array"):
+            Gamma, p_values = cp.predict(np.array([3.0]), return_p_values=True)
+
+        assert set(Gamma.elements) == {0, 1}
+        assert p_values == {0: 1.0, 1: 1.0}

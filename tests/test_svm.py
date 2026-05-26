@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from online_cp.classifiers import ConformalSupportVectorMachine, _smo_solve
+from online_cp.classifiers import ConformalSupportVectorMachine, MultiLevelPredictionSet, _smo_solve
 from online_cp.kernels import GaussianKernel, LinearKernel
 
 # --- SMO solver tests ---
@@ -224,6 +224,47 @@ class TestConformalSVM:
         Gamma = svm.predict(np.array([1.0, 2.0]))
         assert -1 in Gamma and 1 in Gamma
 
+    def test_compute_p_value_empty_training_set(self):
+        """compute_p_value should return 1.0 with no training data."""
+        svm = ConformalSupportVectorMachine(kernel="linear", rnd_state=0)
+        assert svm.compute_p_value(np.array([1.0, 2.0]), 1) == 1.0
+
+    def test_compute_p_value_binary_in_unit_interval(self, separable_data):
+        """Binary compute_p_value should produce a valid p-value."""
+        X, y = separable_data
+        svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, rnd_state=0)
+        svm.learn_initial_training_set(X[:40], y[:40])
+        p_value = svm.compute_p_value(X[40], y[40])
+        assert 0 <= p_value <= 1
+
+    def test_compute_p_value_matches_predict_binary(self, separable_data):
+        """compute_p_value should match the corresponding predict() p-value in binary problems."""
+        X, y = separable_data
+
+        svm_predict = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, rnd_state=123)
+        svm_predict.learn_initial_training_set(X[:40], y[:40])
+        _, p_values = svm_predict.predict(X[40], return_p_values=True)
+
+        svm_single = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, rnd_state=123)
+        svm_single.learn_initial_training_set(X[:40], y[:40])
+        p_value = svm_single.compute_p_value(X[40], y[40])
+
+        assert np.isclose(p_value, p_values[y[40]], atol=1e-12)
+
+    def test_multi_level_epsilon(self, separable_data):
+        """predict with multiple epsilon levels should return a MultiLevelPredictionSet."""
+        X, y = separable_data
+        svm = ConformalSupportVectorMachine(kernel=GaussianKernel(sigma=1.0), C=10.0, rnd_state=0)
+        svm.learn_initial_training_set(X[:40], y[:40])
+
+        epsilons = [0.01, 0.05, 0.1, 0.2]
+        result = svm.predict(X[40], epsilon=epsilons)
+
+        assert isinstance(result, MultiLevelPredictionSet)
+        assert result.levels == sorted(epsilons)
+        for i in range(len(epsilons) - 1):
+            assert len(result[epsilons[i]]) >= len(result[epsilons[i + 1]])
+
 
 # --- Multi-class tests ---
 
@@ -325,6 +366,70 @@ class TestMultiClassSVM:
         Gamma, p_vals = svm.predict(X[60], return_p_values=True)
         assert set(p_vals.keys()) == {10, 20, 30, 40}
         assert y[60] in Gamma
+
+    def test_compute_p_value_multiclass_in_unit_interval(self, three_class_data):
+        """Multiclass compute_p_value should produce a valid p-value."""
+        X, y = three_class_data
+        svm = ConformalSupportVectorMachine(
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([0, 1, 2]), rnd_state=0
+        )
+        svm.learn_initial_training_set(X[:60], y[:60])
+        p_value = svm.compute_p_value(X[60], y[60])
+        assert 0 <= p_value <= 1
+
+    def test_compute_p_value_matches_predict_multiclass(self, three_class_data):
+        """compute_p_value should match the corresponding predict() p-value in multiclass problems."""
+        X, y = three_class_data
+
+        svm_predict = ConformalSupportVectorMachine(
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([0, 1, 2]), rnd_state=123
+        )
+        svm_predict.learn_initial_training_set(X[:60], y[:60])
+        _, p_values = svm_predict.predict(X[60], return_p_values=True)
+
+        svm_single = ConformalSupportVectorMachine(
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([0, 1, 2]), rnd_state=123
+        )
+        svm_single.learn_initial_training_set(X[:60], y[:60])
+        p_value = svm_single.compute_p_value(X[60], y[60])
+
+        assert np.isclose(p_value, p_values[y[60]], atol=1e-12)
+
+    def test_multiclass_positive_class_only_p_value_regression(self, three_class_data):
+        """Multiclass p-values should be computed from positive-class alphas only."""
+        X, y = three_class_data
+        label_space = np.array([0, 1, 2])
+        label = y[60]
+
+        svm = ConformalSupportVectorMachine(
+            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=label_space, rnd_state=123
+        )
+        svm.learn_initial_training_set(X[:60], y[:60])
+
+        x = X[60]
+        tau = np.random.default_rng(123).uniform()
+        k_row = svm._compute_kernel_row(svm.X, x)
+        kappa = svm._kernel(x.reshape(1, -1))
+        if np.ndim(kappa) > 0:
+            kappa = kappa.item()
+
+        n = svm.K.shape[0]
+        K_aug = np.empty((n + 1, n + 1))
+        K_aug[:n, :n] = svm.K
+        K_aug[:n, n] = k_row
+        K_aug[n, :n] = k_row
+        K_aug[n, n] = kappa
+
+        y_aug = np.append(svm.y, float(label))
+        y_binary = np.where(y_aug == label, 1.0, -1.0)
+        alpha, _ = _smo_solve(K_aug, y_binary, svm.C, tol=svm.smo_tol, max_iter=svm.smo_max_iter)
+
+        expected = svm._compute_p_value(alpha[y_binary == 1.0], tau, "nonconformity")
+        full_alpha = svm._compute_p_value(alpha, tau, "nonconformity")
+        observed = svm.compute_p_value(x, label)
+
+        assert np.isclose(observed, expected, atol=1e-12)
+        assert not np.isclose(expected, full_alpha, atol=1e-12)
 
     def test_multiclass_learn_one(self, three_class_data):
         """learn_one should work with multi-class labels."""

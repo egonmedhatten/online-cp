@@ -6,6 +6,7 @@ machine-based conformal classifiers.
 """
 
 import time
+import warnings
 
 import numpy as np
 from joblib import Parallel, delayed
@@ -211,6 +212,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self.y = np.empty(0)
         self.X = None
         self.D = None
+        self._label_indices = {}
 
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
@@ -238,39 +240,80 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.X = X
             self.y = y
             self.D = self.distance_func(X)
+            self._label_indices = self._build_label_indices(y)
 
     @staticmethod
     def update_distance_matrix(D, d):
-        return np.block([[D, d], [d.T, np.array([0])]])
-
-    def _find_nearest_distances(self, D, y):
+        d = np.asarray(d).reshape(-1)
         n = D.shape[0]
+        D_new = np.empty((n + 1, n + 1), dtype=np.result_type(D.dtype, d.dtype))
+        D_new[:n, :n] = D
+        D_new[:n, n] = d
+        D_new[n, :n] = d
+        D_new[n, n] = 0
+        return D_new
 
-        # Initialize arrays to store the results
+    @staticmethod
+    def _build_label_indices(y):
+        return {label: np.flatnonzero(y == label) for label in np.unique(y)}
+
+    @staticmethod
+    def _extend_label_indices(label_indices, label, new_index):
+        extended = label_indices.copy()
+        if label in extended:
+            extended[label] = np.concatenate((extended[label], np.array([new_index], dtype=int)))
+        else:
+            extended[label] = np.array([new_index], dtype=int)
+        return extended
+
+    def _find_nearest_distances(self, D, y=None, label_indices=None):
+        """Vectorized nearest same/different class distances for any k."""
+        n = D.shape[0]
+        k = self.k
         same_label_distances = np.full(n, np.inf)
         different_label_distances = np.full(n, np.inf)
 
-        for i in range(n):
-            # Create a mask for the same and different labels
-            same_label_mask = y == y[i]
-            different_label_mask = y != y[i]
+        if label_indices is None:
+            if y is None:
+                raise ValueError("Either y or label_indices must be provided")
+            label_indices = self._build_label_indices(y)
 
-            # Ignore the distance to itself by setting it to np.inf
-            same_label_mask[i] = False
+        all_idx = np.arange(n)
+        for idx in label_indices.values():
+            not_mask = np.ones(n, dtype=bool)
+            not_mask[idx] = False
+            not_idx = all_idx[not_mask]
 
-            # Extract distances for the same label
-            if np.any(same_label_mask):
-                same_label_distances[i] = np.sort(D[i, same_label_mask])[: self.k].mean()
+            # Same-class: for points of this label, k nearest same-label neighbors
+            if len(idx) > 1:
+                D_sub = D[np.ix_(idx, idx)].copy()
+                np.fill_diagonal(D_sub, np.inf)
+                m = len(idx) - 1  # available neighbors (excluding self)
+                if m >= k:
+                    same_label_distances[idx] = np.partition(D_sub, k - 1, axis=1)[:, :k].mean(axis=1)
+                else:
+                    # Fewer than k same-class neighbors: use all available
+                    same_label_distances[idx] = np.sort(D_sub, axis=1)[:, :m].mean(axis=1)
 
-            # Extract distances for the different label
-            if np.any(different_label_mask):
-                different_label_distances[i] = np.sort(D[i, different_label_mask])[: self.k].mean()
+            # Different-class: for points OF this label, k nearest among all other labels
+            if len(idx) > 0 and len(not_idx) > 0:
+                D_sub = D[np.ix_(idx, not_idx)]
+                if len(not_idx) >= k:
+                    different_label_distances[idx] = np.partition(D_sub, k - 1, axis=1)[:, :k].mean(axis=1)
+                else:
+                    different_label_distances[idx] = D_sub.mean(axis=1)
 
         return same_label_distances, different_label_distances
 
     def learn_one(self, x, y, D=None):
+        new_index = 0 if self.X is None else self.X.shape[0]
+
         # Learn label y
         self.y = np.append(self.y, y)
+        if y in self._label_indices:
+            self._label_indices[y] = np.concatenate((self._label_indices[y], np.array([new_index], dtype=int)))
+        else:
+            self._label_indices[y] = np.array([new_index], dtype=int)
 
         # Learn object
         if self.X is None:
@@ -282,6 +325,45 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 D = self.update_distance_matrix(self.D, d)
             self.D = D
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+
+    def compute_p_value(self, x, y, return_update=False):
+        """Compute conformal p-value for a single (x, y) pair.
+
+        Only tests the given label y (not the full label space),
+        making this faster than predict() when only one p-value is needed.
+
+        Parameters
+        ----------
+        x : array-like
+            Test object.
+        y : scalar
+            Hypothesized label.
+        return_update : bool
+            If True, also return the updated distance matrix D.
+
+        Returns
+        -------
+        p_value : float
+            Smoothed conformal p-value for the hypothesis that x has label y.
+        D : ndarray, optional
+            Updated distance matrix (only if return_update=True).
+        """
+        tau = self.rnd_gen.uniform(0, 1)
+
+        if self.y.shape[0] >= 1:
+            d = self.distance_func(self.X, x)
+            D = self.update_distance_matrix(self.D, d)
+            label_indices = self._extend_label_indices(self._label_indices, y, D.shape[0] - 1)
+            same_label_distances, different_label_distances = self._find_nearest_distances(D, label_indices=label_indices)
+            Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+            p_value = self._compute_p_value(Alpha, tau, "nonconformity")
+        else:
+            D = None
+            p_value = self._compute_p_value(np.array([np.inf]), tau, "nonconformity")
+
+        if return_update:
+            return p_value, D
+        return p_value
 
     def predict(self, x, epsilon=None, return_p_values=False, return_update=False, verbose=0):
         p_values = {}
@@ -295,13 +377,17 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             d = self.distance_func(self.X, x)
             D = self.update_distance_matrix(self.D, d)
             time_update_D = time.time() - tic
+            base_label_indices = self._label_indices
+            test_index = D.shape[0] - 1
 
             tic = time.time()
             if self.n_jobs is not None:
 
                 def process_label(label):
-                    y = np.append(self.y, label)
-                    same_label_distances, different_label_distances = self._find_nearest_distances(D, y)
+                    label_indices = self._extend_label_indices(base_label_indices, label, test_index)
+                    same_label_distances, different_label_distances = self._find_nearest_distances(
+                        D, label_indices=label_indices
+                    )
 
                     Alpha = same_label_distances / different_label_distances
                     if verbose > 10:
@@ -315,9 +401,11 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 p_values = dict(results)
             else:
                 for label in self.label_space:
-                    y = np.append(self.y, label)
+                    label_indices = self._extend_label_indices(base_label_indices, label, test_index)
 
-                    same_label_distances, different_label_distances = self._find_nearest_distances(D, y)
+                    same_label_distances, different_label_distances = self._find_nearest_distances(
+                        D, label_indices=label_indices
+                    )
 
                     Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
 
@@ -365,39 +453,53 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
 class ConformalClassifierWrapper(ConformalClassifier):
     """
-    The following scikit-learn classifiers should in priciple be compatible (they have a predict_proba method):
-    AdaBoostClassifier
-    BaggingClassifier
-    BernoulliNB
-    CalibratedClassifierCV
-    CategoricalNB
-    ComplementNB
-    DecisionTreeClassifier
-    DummyClassifier
-    ExtraTreeClassifier
-    ExtraTreesClassifier
-    GaussianNB
-    GaussianProcessClassifier
-    GradientBoostingClassifier
-    HistGradientBoostingClassifier
-    KNeighborsClassifier
-    LabelPropagation
-    LabelSpreading
-    LinearDiscriminantAnalysis
-    LogisticRegression
-    LogisticRegressionCV
-    MLPClassifier
-    MultinomialNB
-    NearestCentroid
-    QuadraticDiscriminantAnalysis
-    RadiusNeighborsClassifier
-    RandomForestClassifier
+    Experimental convenience adapter for wrapping a sklearn-style classifier
+    with ``predict_proba`` in a transductive conformal loop.
+
+    Caveats
+    -------
+    - Slow by design: the wrapped learner is refit once per candidate label.
+    - Not a first-class supported classifier in this package.
+    - Semantics are narrow: probabilities are aligned via ``learner.classes_``.
+    - Labels absent from the current fit are assigned zero probability mass.
+
+    Validity assumptions
+    --------------------
+    - Data are exchangeable.
+    - The wrapped learner has stable ``predict_proba`` semantics.
+    - Reproducibility may require controlling learner randomness externally.
     """
+
+    _RECOMMENDED_ESTIMATORS = frozenset(
+        {
+            "LogisticRegression",
+            "RandomForestClassifier",
+            "ExtraTreesClassifier",
+            "HistGradientBoostingClassifier",
+            "GaussianNB",
+        }
+    )
+
+    _CAUTION_ESTIMATORS = frozenset(
+        {
+            "MLPClassifier",
+            "GaussianProcessClassifier",
+            "KNeighborsClassifier",
+        }
+    )
 
     def __init__(self, learner, label_space=None, epsilon=default_epsilon, verbose=0, rnd_state=None, n_jobs=None):
         super().__init__(epsilon)
 
-        assert hasattr(learner, "predict_proba")
+        warnings.warn(
+            "ConformalClassifierWrapper is experimental, slow, and only reliable "
+            "for narrowly aligned label/probability conventions.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+        if not hasattr(learner, "predict_proba"):
+            raise TypeError("Wrapped learner must implement predict_proba")
 
         self.learner = learner
 
@@ -410,6 +512,26 @@ class ConformalClassifierWrapper(ConformalClassifier):
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
+        self._warn_estimator_support_tier()
+
+    def _warn_estimator_support_tier(self):
+        estimator_name = type(self.learner).__name__
+        if estimator_name in self._RECOMMENDED_ESTIMATORS:
+            return
+        if estimator_name in self._CAUTION_ESTIMATORS:
+            warnings.warn(
+                f"Wrapped estimator '{estimator_name}' is supported with caution; "
+                "results can be unstable or slow.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return
+        warnings.warn(
+            f"Wrapped estimator '{estimator_name}' is not in the recommended set "
+            "for ConformalClassifierWrapper and may behave unexpectedly.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     def learn_one(self, x, y, D=None):
         # Learn label y
@@ -420,6 +542,54 @@ class ConformalClassifierWrapper(ConformalClassifier):
         else:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
+    def learn_initial_training_set(self, X, y):
+        if X.shape[0] > 0:
+            self.X = X
+            self.y = y
+
+    def _align_probabilities(self, Prob, classes):
+        """Align predict_proba columns to self.label_space order."""
+        aligned = np.zeros((Prob.shape[0], self.label_space.size), dtype=Prob.dtype)
+        class_to_col = {cls: i for i, cls in enumerate(classes)}
+        for j, label in enumerate(self.label_space):
+            col = class_to_col.get(label)
+            if col is not None:
+                aligned[:, j] = Prob[:, col]
+        return aligned
+
+    def _fallback_prediction(self, epsilon):
+        p_values = {label: 1.0 for label in self.label_space}
+        return self._compute_Gamma(p_values, epsilon), p_values
+
+    def _validate_probabilities(self, Prob, classes, expected_rows):
+        if Prob.ndim != 2:
+            warnings.warn("predict_proba must return a 2D array", UserWarning, stacklevel=3)
+            return False
+        if Prob.shape[0] != expected_rows:
+            warnings.warn("predict_proba row count does not match fitted data", UserWarning, stacklevel=3)
+            return False
+        if Prob.shape[1] != len(classes):
+            warnings.warn("predict_proba columns do not match learner.classes_", UserWarning, stacklevel=3)
+            return False
+        if not np.all(np.isfinite(Prob)):
+            warnings.warn("predict_proba contains non-finite values", UserWarning, stacklevel=3)
+            return False
+
+        row_sums = Prob.sum(axis=1)
+        if not np.allclose(row_sums, 1.0, atol=1e-6):
+            warnings.warn(
+                "predict_proba rows are not normalized to 1.0; continuing with provided scores",
+                UserWarning,
+                stacklevel=3,
+            )
+        if np.any(Prob < 0) or np.any(Prob > 1):
+            warnings.warn(
+                "predict_proba contains values outside [0, 1]; continuing with provided scores",
+                UserWarning,
+                stacklevel=3,
+            )
+        return True
+
     def predict(self, x, epsilon=None, return_p_values=False, verbose=0):
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
@@ -427,31 +597,70 @@ class ConformalClassifierWrapper(ConformalClassifier):
         if epsilon is None:
             epsilon = self.epsilon
 
-        # TODO: Fix parallellisation
+        if self.X is None or self.y.shape[0] == 0:
+            Gamma, p_values = self._fallback_prediction(epsilon)
+            if return_p_values:
+                return Gamma, p_values
+            return Gamma
 
-        # TODO: Some models have minimum requirements for the training set.
-        # if self.y.shape[0] >= 1:
-        try:
-            X = np.append(self.X, x.reshape(1, -1), axis=0)
-            # Label loop
-            for y in self.label_space:
-                Y = np.append(self.y, y)
+        label_to_idx = {label: i for i, label in enumerate(self.label_space)}
+
+        if np.any(np.array([label_to_idx.get(label, -1) for label in self.y], dtype=int) < 0):
+            warnings.warn("Observed training labels are not present in label_space", UserWarning, stacklevel=2)
+            Gamma, p_values = self._fallback_prediction(epsilon)
+            if return_p_values:
+                return Gamma, p_values
+            return Gamma
+
+        X = np.append(self.X, x.reshape(1, -1), axis=0)
+        # Label loop
+        for y in self.label_space:
+            Y = np.append(self.y, y)
+            try:
                 self.learner.fit(X, Y)
-
                 Prob = self.learner.predict_proba(X)
-                if Prob.shape[1] < self.label_space.size:
-                    zeros_to_add = self.label_space.size - Prob.shape[1]
-                    Prob = np.hstack([Prob, np.zeros((Prob.shape[0], zeros_to_add))])
+            except Exception as exc:
+                warnings.warn(
+                    f"Wrapped learner failed during fit/predict_proba ({type(exc).__name__}); "
+                    "falling back to full prediction set",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                Gamma, p_values = self._fallback_prediction(epsilon)
+                if return_p_values:
+                    return Gamma, p_values
+                return Gamma
 
-                Alpha = Prob[np.arange(len(Y)), Y.astype("int")]
-                p_values[y] = self._compute_p_value(Alpha, tau, "conformity")
-            Gamma = self._compute_Gamma(p_values, epsilon)
-        # else:
-        except ValueError:
-            for label in self.label_space:
-                Alpha = np.array([np.inf])
-                p_values[label] = self._compute_p_value(Alpha, tau, "conformity")
-            Gamma = self._compute_Gamma(p_values, epsilon)
+            classes = getattr(self.learner, "classes_", None)
+            if classes is None:
+                warnings.warn(
+                    "Wrapped learner must expose classes_ after fit; falling back to full prediction set",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                Gamma, p_values = self._fallback_prediction(epsilon)
+                if return_p_values:
+                    return Gamma, p_values
+                return Gamma
+
+            if not self._validate_probabilities(Prob, classes, expected_rows=len(Y)):
+                Gamma, p_values = self._fallback_prediction(epsilon)
+                if return_p_values:
+                    return Gamma, p_values
+                return Gamma
+
+            Prob = self._align_probabilities(Prob, classes)
+            label_idx = np.array([label_to_idx.get(label, -1) for label in Y], dtype=int)
+            if np.any(label_idx < 0):
+                warnings.warn("Observed labels are not present in label_space", UserWarning, stacklevel=2)
+                Gamma, p_values = self._fallback_prediction(epsilon)
+                if return_p_values:
+                    return Gamma, p_values
+                return Gamma
+
+            Alpha = Prob[np.arange(len(Y)), label_idx]
+            p_values[y] = self._compute_p_value(Alpha, tau, "conformity")
+        Gamma = self._compute_Gamma(p_values, epsilon)
 
         if return_p_values:
             return Gamma, p_values

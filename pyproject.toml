@@ -52,6 +52,11 @@ ci = [
 all = [
 	"online-cp[fast,dev]",
 ]
+benchmark = [
+	"scikit-learn",
+	"ucimlrepo",
+	"pandas",
+]
 
 [project.urls]
 "Homepage"    = "https://github.com/egonmedhatten/online-cp"

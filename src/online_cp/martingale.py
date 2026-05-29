@@ -28,11 +28,18 @@ except ImportError:
 
     HAS_NUMBA = False
 
+_NUMBA_BROKEN = False  # Set True on first numba runtime failure
+
 __all__ = [
     "PluginMartingale",
     "SimpleJumper",
     "CompositeJumper",
     "SimpleMixtureMartingale",
+    "SleeperStayer",
+    "SleeperDrifter",
+    "CUSUMWrapper",
+    "ShiryaevRobertsWrapper",
+    "PiecewiseConstantBetting",
     "BetaKernel",
     "GaussianKDE",
     "BetaMoments",
@@ -160,7 +167,7 @@ class BetaKernel(BettingStrategy):
 _INV_SQRT_2PI = 1.0 / np.sqrt(2.0 * np.pi)
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _reflected_kde_pdf_numba(x, data, h):
     """Reflected Gaussian KDE PDF evaluated at a single point x.
 
@@ -179,7 +186,7 @@ def _reflected_kde_pdf_numba(x, data, h):
     return total * _INV_SQRT_2PI * inv_h / n
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _reflected_kde_cdf_numba(x, data, h):
     """Reflected Gaussian KDE CDF evaluated at a single point x.
 
@@ -254,8 +261,12 @@ class GaussianKDE(BettingStrategy):
 
     def _kernel_pdf_reflect(self, x, data, h):
         """Reflected Gaussian kernel PDF."""
-        if HAS_NUMBA:
-            return _reflected_kde_pdf_numba(float(x), data, h)
+        global _NUMBA_BROKEN
+        if HAS_NUMBA and not _NUMBA_BROKEN:
+            try:
+                return _reflected_kde_pdf_numba(float(x), data, h)
+            except (ModuleNotFoundError, RuntimeError, TypeError):
+                _NUMBA_BROKEN = True
         x = np.atleast_1d(x)
         pdf_orig = np.mean(norm.pdf(x[:, None], loc=data, scale=h), axis=1)
         pdf_neg = np.mean(norm.pdf(x[:, None], loc=-data, scale=h), axis=1)
@@ -265,8 +276,12 @@ class GaussianKDE(BettingStrategy):
 
     def _kernel_cdf_reflect(self, x, data, h):
         """Reflected Gaussian kernel CDF."""
-        if HAS_NUMBA:
-            return _reflected_kde_cdf_numba(float(x), data, h)
+        global _NUMBA_BROKEN
+        if HAS_NUMBA and not _NUMBA_BROKEN:
+            try:
+                return _reflected_kde_cdf_numba(float(x), data, h)
+            except (ModuleNotFoundError, RuntimeError, TypeError):
+                _NUMBA_BROKEN = True
         x = np.atleast_1d(x)
         cdf_orig = np.mean(norm.cdf(x[:, None], loc=data, scale=h), axis=1)
         cdf_neg = np.mean(norm.cdf(x[:, None], loc=-data, scale=h), axis=1)
@@ -674,6 +689,66 @@ class FixedStrategy(BettingStrategy):
         return float(self._cdf(p))
 
 
+class PiecewiseConstantBetting(BettingStrategy):
+    """Piecewise-constant betting function f_{(a,b)} from ALRW2 §9.2.
+
+    The betting function is defined as:
+
+        f_{(a,b)}(p) = b/a          if p <= a
+        f_{(a,b)}(p) = (1-b)/(1-a)  if p > a
+
+    This integrates to 1 over [0,1] for any a, b in (0,1), making it a valid
+    betting density. It bets that fraction b of the probability mass falls
+    below threshold a.
+
+    Parameters
+    ----------
+    a : float
+        Threshold in (0, 1). Splits the domain into [0, a] and (a, 1].
+    b : float
+        Probability mass allocated to [0, a]. Must be in (0, 1).
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, §9.2. Cambridge University Press.
+
+    Examples
+    --------
+    >>> pcb = PiecewiseConstantBetting(a=0.3, b=0.5)
+    >>> pcb.bet(0.1)  # b/a = 0.5/0.3
+    1.6666666666666667
+    >>> pcb.bet(0.8)  # (1-b)/(1-a) = 0.5/0.7
+    0.7142857142857143
+    >>> abs(pcb.integrate(1.0) - 1.0) < 1e-10
+    True
+    """
+
+    def __init__(self, a, b):
+        if not (0 < a < 1):
+            raise ValueError(f"a must be in (0, 1), got {a}")
+        if not (0 < b < 1):
+            raise ValueError(f"b must be in (0, 1), got {b}")
+        self.a = a
+        self.b = b
+        self._left = b / a
+        self._right = (1 - b) / (1 - a)
+
+    def bet(self, p):
+        """Evaluate f_{(a,b)}(p)."""
+        return self._left if p <= self.a else self._right
+
+    def integrate(self, p):
+        """CDF: (b/a)*p if p <= a, else b + ((1-b)/(1-a))*(p - a)."""
+        if p <= self.a:
+            return self._left * p
+        return self.b + self._right * (p - self.a)
+
+    def update(self, p):
+        """No-op: the piecewise-constant function is static."""
+        pass
+
+
 class ExpertAggregationStrategy(BettingStrategy):
     """Exponentially Weighted Average aggregation of expert betting strategies.
 
@@ -957,15 +1032,23 @@ class PluginMartingale(ConformalTestMartingale):
 
 
 class SimpleJumper(ConformalTestMartingale):
-    """Simple jumper martingale in log-space.
+    """Simple Jumper betting martingale (Algorithm 8.1 of ALRW2).
 
-    Uses three experts (epsilon = -1, 0, 1) with a jump rate J that controls
-    how quickly the martingale can adapt to changing alternatives.
+    Uses a set of experts indexed by epsilon with betting functions
+    f_epsilon(p) = 1 + epsilon*(p - 0.5). A Markov chain with jump rate J
+    tracks the best expert, enabling adaptation to changing alternatives.
 
     Parameters
     ----------
     J : float
         Jump rate (probability of switching expert per step).
+    E : list of float or None
+        Expert grid. Default is [-1, -0.5, 0, 0.5, 1] (Algorithm 8.1).
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, Algorithm 8.1. Cambridge University Press.
 
     Examples
     --------
@@ -976,10 +1059,15 @@ class SimpleJumper(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, J=0.01, warning_level=100, warnings=True, store_p_values=True, **kwargs):
+    def __init__(self, J=0.01, E=None, warning_level=100, warnings=True, store_p_values=True, **kwargs):
         super().__init__(warnings, warning_level, store_p_values)
         self.J = J
-        self.log_C_epsilon = {-1: -np.log(3), 0: -np.log(3), 1: -np.log(3)}
+        if E is None:
+            self.E = [-1, -0.5, 0, 0.5, 1]
+        else:
+            self.E = list(E)
+        self._n_experts = len(self.E)
+        self.log_C_epsilon = {eps: -np.log(self._n_experts) for eps in self.E}
         self.log_C = 0.0
 
         self.b_epsilon = lambda u, epsilon: 1 + epsilon * (u - 1 / 2)
@@ -994,13 +1082,13 @@ class SimpleJumper(ConformalTestMartingale):
         else:
             log_1_minus_J = np.log(1 - self.J)
 
-        log_J_div_3 = np.log(self.J / 3)
+        log_J_div_E = np.log(self.J / self._n_experts)
 
         new_log_C_epsilon = {}
 
-        for epsilon in [-1, 0, 1]:
+        for epsilon in self.E:
             term1 = log_1_minus_J + self.log_C_epsilon[epsilon]
-            term2 = log_J_div_3 + self.log_C
+            term2 = log_J_div_E + self.log_C
             log_C_mixed = np.logaddexp(term1, term2)
             bet_val = self.b_epsilon(p, epsilon)
             new_log_C_epsilon[epsilon] = log_C_mixed + np.log(bet_val)
@@ -1011,10 +1099,12 @@ class SimpleJumper(ConformalTestMartingale):
         self.logM = self.log_C
         self.log_martingale_values.append(self.logM)
 
-        # Effective betting function for next step
-        w_1 = np.exp(self.log_C_epsilon[1] - self.log_C)
-        w_minus_1 = np.exp(self.log_C_epsilon[-1] - self.log_C)
-        epsilon_bar = (1 - self.J) * (w_1 - w_minus_1)
+        # Effective betting function for next step: wealth-weighted mixture
+        # b_n(u) = sum_eps w_eps * (1 + eps*(u - 0.5))
+        #        = 1 + eps_bar * (u - 0.5)
+        # where eps_bar = (1-J) * sum_eps eps * exp(log_C_eps - log_C)
+        weights = {eps: np.exp(self.log_C_epsilon[eps] - self.log_C) for eps in self.E}
+        epsilon_bar = (1 - self.J) * sum(eps * weights[eps] for eps in self.E)
 
         self.b_n = lambda u: 1 + epsilon_bar * (u - 1 / 2)
         self.B_n = lambda u: (epsilon_bar / 2) * u**2 + (1 - epsilon_bar / 2) * u
@@ -1076,6 +1166,247 @@ class CompositeJumper(ConformalTestMartingale):
 
         if self.logM > self.log_max:
             self.log_max = self.logM
+
+        self.check_warning()
+
+
+class SleeperStayer(ConformalTestMartingale):
+    """Sleeper/Stayer conformal test martingale (Algorithm 9.4 of ALRW2).
+
+    Maintains a grid of piecewise-constant betting experts indexed by (a, b)
+    together with a sleeping capital account. At each step, a fraction R of the
+    sleeping capital is redistributed equally to all active experts.
+
+    Each expert uses the betting function f_{(a,b)}(p) = b/a if p <= a, else
+    (1-b)/(1-a). This targets change-points where the conformal p-values shift
+    from Uniform to having mass b below threshold a.
+
+    Parameters
+    ----------
+    R : float
+        Wake-up rate: fraction of sleeping capital redistributed per step.
+    G : int
+        Grid resolution. The grid is {1/G, 2/G, ..., (G-1)/G}^2.
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, Algorithm 9.4 (Sleeper). Cambridge University Press.
+
+    Examples
+    --------
+    >>> ss = SleeperStayer(R=0.01, G=5)
+    >>> for _ in range(50):
+    ...     ss.update(0.05)
+    >>> bool(ss.M > 1.0)
+    True
+    """
+
+    def __init__(self, R=0.001, G=10, warnings=True, warning_level=100, store_p_values=True):
+        super().__init__(warnings, warning_level, store_p_values)
+        self.R = R
+        self.G = G
+
+        # Build the grid: (a, b) pairs with a, b in {1/G, ..., (G-1)/G}
+        grid_vals = np.arange(1, G) / G
+        self._grid = [(a, b) for a in grid_vals for b in grid_vals]
+        self._n_experts = len(self._grid)
+
+        # Precompute betting values for each expert: left = b/a, right = (1-b)/(1-a)
+        self._left = np.array([b / a for a, b in self._grid])
+        self._right = np.array([(1 - b) / (1 - a) for a, b in self._grid])
+        self._thresholds = np.array([a for a, _ in self._grid])
+
+        # Capital: all starts in sleeping account
+        self._S_active = np.zeros(self._n_experts)
+        self._S_sleep = 1.0
+        self._n = 0
+
+    def update(self, p):
+        if self.store_p_values:
+            self.p_values.append(p)
+
+        self._n += 1
+
+        # Step 1: Bet — multiply each active expert by f_{(a,b)}(p)
+        # (Only experts that received capital in previous steps bet)
+        bets = np.where(p <= self._thresholds, self._left, self._right)
+        self._S_active *= bets
+
+        # Step 2: Output — total capital is the martingale value
+        S_n = self._S_sleep + self._S_active.sum()
+        self.logM = np.log(max(S_n, 1e-300))
+        self.log_martingale_values.append(self.logM)
+
+        if self.logM > self.log_max:
+            self.log_max = self.logM
+
+        # Step 3: Redistribute — move fraction R of sleeping capital to active experts
+        # (prepares experts for next step's bet)
+        transfer = self.R * self._S_sleep / self._n_experts
+        self._S_active += transfer
+        self._S_sleep *= (1 - self.R)
+
+        # Expose b_n / B_n as wealth-weighted combination of active experts
+        total_active = self._S_active.sum()
+        if total_active > 0:
+            weights = self._S_active / total_active
+            left_vals = self._left
+            right_vals = self._right
+            thresholds = self._thresholds
+
+            def _b_n(u, w=weights, l=left_vals, r=right_vals, t=thresholds):
+                bets = np.where(u <= t, l, r)
+                return float(np.dot(w, bets))
+
+            def _B_n(u, w=weights, l=left_vals, r=right_vals, t=thresholds,
+                     grid=self._grid):
+                # CDF of weighted mixture
+                cdfs = np.where(
+                    u <= t,
+                    l * u,
+                    np.array([b + r_i * (u - a) for (a, b), r_i in zip(grid, r)])
+                )
+                return float(np.dot(w, cdfs))
+
+            self.b_n = _b_n
+            self.B_n = _B_n
+
+        self.check_warning()
+
+
+class SleeperDrifter(ConformalTestMartingale):
+    """Sleeper/Drifter conformal test martingale (Algorithm 9.5 of ALRW2).
+
+    Extension of the Sleeper/Stayer that wakes experts in batches every M steps
+    and uses a drifting threshold that interpolates between the initial guess a
+    and the target b over time.
+
+    The drifting threshold for expert (i, a, b) at step n is:
+        a' = (i*M/n)*a + (1 - i*M/n)*b
+
+    This makes the martingale more sensitive to gradual distribution shifts.
+
+    Parameters
+    ----------
+    R : float
+        Wake-up rate per batch: fraction of sleeping capital allocated when
+        a new batch wakes up.
+    G : int
+        Grid resolution. The grid is {1/G, 2/G, ..., (G-1)/G}^2.
+    M : int
+        Batch interval: new experts wake up every M steps.
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, Algorithm 9.5 (Drifter). Cambridge University Press.
+
+    Examples
+    --------
+    >>> sd = SleeperDrifter(R=0.01, G=5, M=10)
+    >>> for _ in range(50):
+    ...     sd.update(0.05)
+    >>> bool(sd.M > 1.0)
+    True
+    """
+
+    def __init__(self, R=0.001, G=10, M=100, warnings=True, warning_level=100,
+                 store_p_values=True):
+        super().__init__(warnings, warning_level, store_p_values)
+        self.R = R
+        self.G = G
+        self._batch_interval = M
+
+        # Grid of (a, b) pairs
+        grid_vals = np.arange(1, G) / G
+        self._grid = [(a, b) for a in grid_vals for b in grid_vals]
+        self._n_grid = len(self._grid)
+
+        # Active experts: dict of (batch_index, grid_index) -> capital
+        self._experts = {}  # (i, j) -> capital
+        self._S_sleep = 1.0
+        self._n = 0
+        self._prune_threshold = 1e-15
+
+    def _get_drifted_threshold(self, batch_idx, grid_idx):
+        """Compute a' = (i*M/n)*a + (1 - i*M/n)*b for expert (i, a, b)."""
+        a, b = self._grid[grid_idx]
+        ratio = (batch_idx * self._batch_interval) / self._n
+        ratio = min(ratio, 1.0)  # Clamp
+        return ratio * a + (1 - ratio) * b
+
+    def update(self, p):
+        if self.store_p_values:
+            self.p_values.append(p)
+
+        self._n += 1
+
+        # Step 1: Bet — update all active experts
+        keys_to_remove = []
+        for key, capital in self._experts.items():
+            batch_idx, grid_idx = key
+            a_prime = self._get_drifted_threshold(batch_idx, grid_idx)
+            _, b = self._grid[grid_idx]
+
+            # Bet using f_{(a', b)}(p)
+            if a_prime <= 0 or a_prime >= 1:
+                bet_val = 1.0  # Degenerate case, no bet
+            else:
+                bet_val = b / a_prime if p <= a_prime else (1 - b) / (1 - a_prime)
+
+            new_capital = capital * bet_val
+            if new_capital < self._prune_threshold:
+                keys_to_remove.append(key)
+            else:
+                self._experts[key] = new_capital
+
+        for key in keys_to_remove:
+            del self._experts[key]
+
+        # Step 2: Output — total capital
+        total_active = sum(self._experts.values())
+        S_n = self._S_sleep + total_active
+        self.logM = np.log(max(S_n, 1e-300))
+        self.log_martingale_values.append(self.logM)
+
+        if self.logM > self.log_max:
+            self.log_max = self.logM
+
+        # Step 3: Wake new batch (if n is divisible by M) — prepares for next step
+        if self._n % self._batch_interval == 0:
+            batch_idx = self._n // self._batch_interval
+            transfer_per_expert = self.R * self._batch_interval * self._S_sleep / self._n_grid
+            self._S_sleep *= (1 - self.R * self._batch_interval)
+            # Clamp sleeping capital
+            self._S_sleep = max(self._S_sleep, 0.0)
+            for j in range(self._n_grid):
+                key = (batch_idx, j)
+                self._experts[key] = self._experts.get(key, 0.0) + transfer_per_expert
+
+        # Expose b_n / B_n as wealth-weighted function for next step
+        total_active = sum(self._experts.values())
+        if total_active > 0 and self._experts:
+            expert_items = list(self._experts.items())
+            total = total_active
+            n_next = self._n + 1
+
+            def _b_n(u, _items=expert_items, _total=total, _n=n_next,
+                     _grid=self._grid, _M=self._batch_interval):
+                val = 0.0
+                for (bi, gi), cap in _items:
+                    a, b = _grid[gi]
+                    ratio = min((bi * _M) / _n, 1.0)
+                    a_prime = ratio * a + (1 - ratio) * b
+                    if 0 < a_prime < 1:
+                        f = b / a_prime if u <= a_prime else (1 - b) / (1 - a_prime)
+                    else:
+                        f = 1.0
+                    val += (cap / _total) * f
+                return val
+
+            self.b_n = _b_n
+            self.B_n = lambda u: u  # No analytic CDF for drifting mixture
 
         self.check_warning()
 
@@ -1169,6 +1500,183 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
 
         self._update_b_n()
         self.check_warning()
+
+
+class CUSUMWrapper:
+    """CUSUM change-detection wrapper for any conformal test martingale.
+
+    Computes the Page CUSUM statistic as the ratio of the current martingale
+    value to its running minimum:
+
+        gamma_n = S_n / min_{i <= n} S_i
+
+    In log-space: log(gamma_n) = logM_n - min_{i <= n} logM_i
+
+    This removes any accumulated "debt" from an initial in-control period,
+    giving faster detection after the change-point. Optionally accepts a linear
+    barrier for controlling the false alarm rate over long horizons.
+
+    Parameters
+    ----------
+    martingale : ConformalTestMartingale
+        The underlying martingale to wrap.
+    barrier_slope : float or None
+        If not None, the alarm threshold grows linearly as barrier_slope * n.
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, §8.3. Cambridge University Press.
+
+    Examples
+    --------
+    >>> from online_cp.martingale import SimpleJumper, CUSUMWrapper
+    >>> sj = SimpleJumper(J=0.01)
+    >>> cusum = CUSUMWrapper(sj)
+    >>> for _ in range(10):
+    ...     cusum.update(0.5)
+    >>> cusum.gamma >= 1.0  # gamma is always >= 1 (since S_n >= min S_i is not guaranteed)
+    True
+    """
+
+    def __init__(self, martingale, barrier_slope=None):
+        self.martingale = martingale
+        self.barrier_slope = barrier_slope
+        self._log_min = 0.0  # log(S_0) = 0
+        self._n = 0
+        self._log_gamma_values = [0.0]
+
+    @property
+    def gamma(self):
+        """Current CUSUM statistic."""
+        return np.exp(self._log_gamma_values[-1])
+
+    @property
+    def log_gamma(self):
+        """Current log CUSUM statistic."""
+        return self._log_gamma_values[-1]
+
+    @property
+    def cusum_values(self):
+        """All CUSUM statistic values."""
+        return np.exp(self._log_gamma_values)
+
+    @property
+    def log_cusum_values(self):
+        """All log CUSUM statistic values."""
+        return self._log_gamma_values
+
+    def update(self, p):
+        """Update the inner martingale and recompute the CUSUM statistic."""
+        self.martingale.update(p)
+        self._n += 1
+
+        logM = self.martingale.logM
+        if logM < self._log_min:
+            self._log_min = logM
+
+        log_gamma = logM - self._log_min
+        self._log_gamma_values.append(log_gamma)
+
+    def alarm(self, threshold):
+        """Check whether gamma_n exceeds the threshold (optionally with barrier).
+
+        Parameters
+        ----------
+        threshold : float
+            The alarm threshold. If barrier_slope is set, the effective
+            threshold at step n is threshold + barrier_slope * n.
+
+        Returns
+        -------
+        bool
+            True if gamma_n exceeds the (possibly time-varying) threshold.
+        """
+        effective = threshold
+        if self.barrier_slope is not None:
+            effective = threshold + self.barrier_slope * self._n
+        return self.gamma > effective
+
+
+class ShiryaevRobertsWrapper:
+    """Shiryaev-Roberts change-detection wrapper for any conformal test martingale.
+
+    Computes the Shiryaev-Roberts statistic as:
+
+        R_n = sum_{i=1}^{n} S_n / S_i
+
+    In log-space: R_n = sum_{i=1}^{n} exp(logM_n - logM_{i-1})
+
+    This is always >= the CUSUM statistic (sum >= max), giving a slightly
+    different power/false-alarm trade-off.
+
+    Parameters
+    ----------
+    martingale : ConformalTestMartingale
+        The underlying martingale to wrap.
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, §8.3. Cambridge University Press.
+
+    Examples
+    --------
+    >>> from online_cp.martingale import SimpleJumper, ShiryaevRobertsWrapper
+    >>> sj = SimpleJumper(J=0.01)
+    >>> sr = ShiryaevRobertsWrapper(sj)
+    >>> for _ in range(10):
+    ...     sr.update(0.5)
+    >>> sr.R >= 0
+    True
+    """
+
+    def __init__(self, martingale):
+        self.martingale = martingale
+        self._n = 0
+        self._sr_values = [0.0]  # R_0 = 0 (no terms in the sum)
+        self._prev_logM = 0.0  # logM_{n-1}, starts at 0
+
+    @property
+    def R(self):
+        """Current Shiryaev-Roberts statistic."""
+        return self._sr_values[-1]
+
+    @property
+    def sr_values(self):
+        """All Shiryaev-Roberts statistic values."""
+        return self._sr_values
+
+    def update(self, p):
+        """Update the inner martingale and recompute the SR statistic.
+
+        Uses the O(1) recursive formula (eq. 8.18 of ALRW2):
+            R_n = (S_n / S_{n-1}) * (R_{n-1} + 1)
+        """
+        self.martingale.update(p)
+        self._n += 1
+
+        logM_n = self.martingale.logM
+        # S_n / S_{n-1} = exp(logM_n - logM_{n-1})
+        ratio = np.exp(logM_n - self._prev_logM)
+        R_n = ratio * (self._sr_values[-1] + 1)
+        self._sr_values.append(float(R_n))
+        self._prev_logM = logM_n
+
+    def alarm(self, threshold):
+        """Check whether R_n exceeds the threshold.
+
+        Parameters
+        ----------
+        threshold : float
+            The alarm threshold.
+
+        Returns
+        -------
+        bool
+            True if R_n exceeds the threshold.
+        """
+        return self.R > threshold
 
 
 if __name__ == "__main__":

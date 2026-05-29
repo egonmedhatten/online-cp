@@ -192,6 +192,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         label_space=None,
         distance="euclidean",
         distance_func=None,
+        aggregation="mean",
         verbose=0,
         rnd_state=None,
         n_jobs=None,
@@ -201,6 +202,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self.label_space = label_space if label_space is not None else np.array([-1, 1])
 
         self.k = k
+
+        if aggregation not in ("mean", "median"):
+            raise ValueError(f"aggregation must be 'mean' or 'median', got '{aggregation}'")
+        self.aggregation = aggregation
 
         self.distance = distance
         if distance_func is None:
@@ -267,9 +272,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         return extended
 
     def _find_nearest_distances(self, D, y=None, label_indices=None):
-        """Vectorized nearest same/different class distances for any k."""
+        """Vectorized nearest same/different class distances for any k.
+
+        Aggregates the k nearest distances using self.aggregation ('mean' or 'median').
+        This extends the 1-NN nonconformity measure of ALRW2 §2.3 to k-NN.
+        """
         n = D.shape[0]
         k = self.k
+        agg_func = np.mean if self.aggregation == "mean" else np.median
         same_label_distances = np.full(n, np.inf)
         different_label_distances = np.full(n, np.inf)
 
@@ -290,18 +300,18 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 np.fill_diagonal(D_sub, np.inf)
                 m = len(idx) - 1  # available neighbors (excluding self)
                 if m >= k:
-                    same_label_distances[idx] = np.partition(D_sub, k - 1, axis=1)[:, :k].mean(axis=1)
+                    same_label_distances[idx] = agg_func(np.partition(D_sub, k - 1, axis=1)[:, :k], axis=1)
                 else:
                     # Fewer than k same-class neighbors: use all available
-                    same_label_distances[idx] = np.sort(D_sub, axis=1)[:, :m].mean(axis=1)
+                    same_label_distances[idx] = agg_func(np.sort(D_sub, axis=1)[:, :m], axis=1)
 
             # Different-class: for points OF this label, k nearest among all other labels
             if len(idx) > 0 and len(not_idx) > 0:
                 D_sub = D[np.ix_(idx, not_idx)]
                 if len(not_idx) >= k:
-                    different_label_distances[idx] = np.partition(D_sub, k - 1, axis=1)[:, :k].mean(axis=1)
+                    different_label_distances[idx] = agg_func(np.partition(D_sub, k - 1, axis=1)[:, :k], axis=1)
                 else:
-                    different_label_distances[idx] = D_sub.mean(axis=1)
+                    different_label_distances[idx] = agg_func(D_sub, axis=1)
 
         return same_label_distances, different_label_distances
 

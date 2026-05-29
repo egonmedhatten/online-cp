@@ -396,3 +396,29 @@ class TestConformalClassifierWrapper:
 
         assert set(Gamma.elements) == {0, 1}
         assert p_values == {0: 1.0, 1: 1.0}
+
+
+class TestKNNAggregation:
+    """Tests for the configurable aggregation parameter (mean/median)."""
+
+    def test_default_is_mean(self):
+        cp = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+        assert cp.aggregation == "mean"
+
+    def test_median_aggregation(self):
+        cp = ConformalNearestNeighboursClassifier(k=3, aggregation="median", rnd_state=0)
+        assert cp.aggregation == "median"
+        # Should still produce valid predictions
+        label_space = np.array([0, 1])
+        cp = ConformalNearestNeighboursClassifier(
+            k=3, label_space=label_space, aggregation="median", rnd_state=0
+        )
+        X = np.array([[1.0], [2.0], [3.0], [10.0], [11.0], [12.0]])
+        y = np.array([0, 0, 0, 1, 1, 1])
+        cp.learn_initial_training_set(X, y)
+        Gamma, p_values = cp.predict(np.array([1.5]), return_p_values=True)
+        assert p_values[0] > p_values[1]
+
+    def test_invalid_aggregation_raises(self):
+        with pytest.raises(ValueError, match="aggregation must be"):
+            ConformalNearestNeighboursClassifier(k=3, aggregation="sum")

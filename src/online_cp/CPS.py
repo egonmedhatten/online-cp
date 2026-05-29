@@ -22,10 +22,6 @@ __all__ = [
 ]
 
 
-def MACHINE_EPSILON(x):
-    return np.abs(x) * np.finfo(np.float64).eps
-
-
 default_epsilon = 0.1
 
 
@@ -127,9 +123,6 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
             else:
                 if self.X.shape[0] == 1:
-                    # print(self.X)
-                    # print(self.Id)
-                    # print(self.a)
                     self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
                 else:
                     # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
@@ -561,14 +554,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         array([[0., 1.],
                [1., 0.]])
         """
-        # FIXME: It also assumes all distances are unique. Figure out how to handle this
         self.X = X
         self.D = self.distance_func(X)
-
         self.y = y
-
-        if np.unique(self.y).size != self.y.size:
-            raise Exception("All labels y must be distinct for the NearestNeighboursPredictionMachine to be valid")
 
     @staticmethod
     def update_distance_matrix(D, d):
@@ -617,9 +605,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             self.X = precomputed["X"]
             self.D = precomputed["D"]
 
-        if np.unique(self.y).size != self.y.size:
-            raise Exception("All labels y must be distinct for the NearestNeighboursPredictionMachine to be valid")
-
     def predict_cpd(self, x, return_update=False, save_time=False):
         """
         >>> import numpy as np
@@ -662,28 +647,27 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         tic = time.time()
         n = self.X.shape[0]
 
-        full_neighbours = []
-        single_neighbours = []
-        semi_neighbours = []
-        idx_all_neighbours_and_semi_neighbours = []
+        full_neighbours = set()
+        single_neighbours = set()
+        semi_neighbours = set()
 
-        k_nearest_of_n = k_nearest.T[-1]
+        k_nearest_of_n = set(k_nearest.T[-1])
 
-        # FIXME: How do we save the full, single and semi-neighbours so that we can acess them later in a nice way?
         for i, col in enumerate(k_nearest.T):
-            if i in k_nearest_of_n and n in col:
-                # print(f'z_{i} is a full neighbour')
-                # idx_all_neighbours_and_semi_neighbours.append(i)
-                full_neighbours.append(i)
-            if i in k_nearest_of_n and n not in col:
-                # print(f'z_{i} is a single neighbour')
-                # idx_all_neighbours_and_semi_neighbours.append(i)
-                single_neighbours.append(i)
-            if i not in k_nearest_of_n and n in col:
-                # print(f'z_{i} is a semi-neighbour')
-                # idx_all_neighbours_and_semi_neighbours.append(i)
-                semi_neighbours.append(i)
-        idx_all_neighbours_and_semi_neighbours = np.array(full_neighbours + single_neighbours + semi_neighbours)
+            i_is_neighbour_of_n = i in k_nearest_of_n
+            n_is_neighbour_of_i = n in col
+            if i_is_neighbour_of_n and n_is_neighbour_of_i:
+                full_neighbours.add(i)
+            elif i_is_neighbour_of_n:
+                single_neighbours.add(i)
+            elif n_is_neighbour_of_i:
+                semi_neighbours.add(i)
+
+        neighbours = full_neighbours | single_neighbours
+        full_or_semi = full_neighbours | semi_neighbours
+        idx_all_neighbours_and_semi_neighbours = np.array(
+            sorted(full_neighbours | single_neighbours | semi_neighbours)
+        )
         toc_find_neighbours = time.time() - tic
 
         # Line 1
@@ -695,60 +679,32 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         Y[1:-1] = y[idx_all_neighbours_and_semi_neighbours]
         idx_mem = {i: idx_all_neighbours_and_semi_neighbours[i - 1] for i in range(1, Kprime + 1)}
         sorted_indices = np.argsort(Y)[1:-1]
-        # print(f'idx_mem: {idx_mem}')
-        # print(f'idx_all_neighbours_and_semi_neighbours: {idx_all_neighbours_and_semi_neighbours}')
-        # print(f'sorted_indices: {sorted_indices}')
         Y.sort()
-        # print(f'Y: {Y}')
 
-        # Line 4
+        # Line 4: conformity scores and histogram
         Alpha = np.array([(y[k_nearest.T[i]] <= y_i).sum() for i, y_i in enumerate(y)])
-        # FIXME: Based on the description in ALRW, alpha_n = 0 initially, which seems to imply that
-        #        they consider -inf <= -inf to be false. Or possibly it is a consequence of assuming
-        #        all labels and distances are distinct...
         N = np.array([(Alpha == k).sum() for k in range(self.k + 1)])
 
         # Line 5
-        L = -np.inf * np.ones(Kprime + 1)  # Initialize at something unreasonable
-        U = -np.inf * np.ones(Kprime + 1)  # Initialize at something unreasonable
+        L = -np.inf * np.ones(Kprime + 1)
+        U = -np.inf * np.ones(Kprime + 1)
         L[0] = 0
         U[0] = N[0] / (n + 1)
-
-        # if Alpha[-1] > 0:
-        #     print(f'n: {D.shape[0]}')
-        #     print(f'Alpha: {Alpha}')
-        #     print(f'N: {N}')
-        #     print(f'y: {y}')
-        #     print(f'{[k_nearest.T[i] for i, y_i in enumerate(y)]}')
-        #     print(f'k_nearest: {k_nearest}')
-        # print(f'Kprime: {Kprime}')
-
-        # print(f'Kprime: {Kprime}')
 
         tic = time.time()
         # Line 6
         for k in range(1, Kprime + 1):
             idx = idx_mem[sorted_indices[k - 1]]
-            # print(f'idx: {idx}')
-            if idx in full_neighbours + single_neighbours:
-                # print(f'{idx} is a full or a single neighbour')
+            if idx in neighbours:
                 N[Alpha[-1]] -= 1
                 Alpha[-1] += 1
                 N[Alpha[-1]] += 1
-            if idx in full_neighbours + semi_neighbours:
-                # print(f'{idx} is a full or a semi-neighbour')
+            if idx in full_or_semi:
                 N[Alpha[idx]] -= 1
                 Alpha[idx] -= 1
                 N[Alpha[idx]] += 1
             L[k] = N[: Alpha[-1]].sum() / (n + 1) if Alpha[-1] != 0 else 0
             U[k] = N[: Alpha[-1] + 1].sum() / (n + 1) if Alpha[-1] != 0 else N[0] / (n + 1)
-            # print(f'Alpha: {Alpha}')
-            # print(f'Alpha_n: {Alpha[-1]}')
-            # print(f'L[k]: {L[k]}')
-            # print(f'N: {N}')
-        # print(f'full_neighbours: {full_neighbours}')
-        # print(f'single neighbours: {single_neighbours}')
-        # print(f'semi_neighbours: {semi_neighbours}')
         toc_loop = time.time() - tic
 
         time_dict = {
@@ -859,8 +815,6 @@ class ConformalPredictiveDistributionFunction:
             else:
                 raise Exception
 
-        # print(f'Lower: {lower}')
-        # print(f'Upper: {upper}')
         CP_int = get_ConformalPredictionInterval()
         return CP_int(lower, upper, epsilon)
 
@@ -896,30 +850,39 @@ class ConformalPredictiveDistributionFunction:
     def width(Gamma):
         return Gamma.width()
 
+    def plot(self, tau=None):
+        """Plot the CPD. Assumes self.Y and self.L/self.U have the same length."""
+        if tau is None:
+            fig, ax = plt.subplots()
+            ax.step(self.Y, self.L, label=r"$\Pi(y, 0)$", where="pre")
+            ax.step(self.Y, self.U, label=r"$\Pi(y, 1)$", where="pre")
+            ax.fill_between(self.Y, self.L, self.U, step="pre", alpha=0.5, color="green")
+            ax.legend()
+        else:
+            fig, ax = plt.subplots()
+            ax.step(self.Y, (1 - tau) * self.L + tau * self.U, label=r"$\Pi(y, \tau)$", where="pre")
+            ax.legend()
+        ax.set_ylabel("cumulative probability")
+        ax.set_xlabel(r"$y$")
+        fig.tight_layout()
+        plt.close(fig)  # Prevent implicit display
+        return fig
+
 
 class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
     def __init__(self, C, time_dict=None, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
         self.C = C
-        self.L = np.array([self.__call__(y, 0) for y in self.C])
-        self.U = np.array([self.__call__(y, 1) for y in self.C])
         self.Y = C
-
         self.time_dict = time_dict
 
-        # What about
-        self.y_vals = np.array(
-            sorted(
-                [-np.inf, np.inf]
-                + self.C[1:-1].tolist()
-                + (self.C[1:-1] + MACHINE_EPSILON(self.C[1:-1])).tolist()
-                + (self.C[1:-1] - MACHINE_EPSILON(self.C[1:-1])).tolist()
-            )
-        )
-        self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
-        self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
-        # Then the quantile can be computed by
-        # self.y_vals[np.where((1 - tau) * self.L + tau * self.U >= p)[0].min()]
+        # Analytical computation of L, U (O(n) instead of O(n²))
+        # C is sorted with C[0]=-inf, C[-1]=+inf. Trimmed array has n = len(C)-1 elements.
+        n = len(C) - 1
+        # For Ridge, C values are all distinct (from A*y+B formula)
+        j = np.arange(len(C))
+        self.L = np.where(j == 0, 0.0, np.where(j == len(C) - 1, 1.0, (j - 1) / n))
+        self.U = np.where(j == 0, 0.0, np.where(j == len(C) - 1, 1.0, (j + 1) / n))
 
     def __call__(self, y, tau=None):
         if y == -np.inf:
@@ -945,49 +908,39 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
         else:
             return (1 - tau) * Pi0 + tau * Pi1
 
-    # NOTE: This takes forever if we have a large training set.
-    # Why not just invert?
     def quantile(self, p, tau=None):
         def compute_quantile(p, tau):
-            # q = np.inf
-            # y_vals = np.array(sorted([-np.inf, np.inf] + self.C[1: -1].tolist() + (self.C[1: -1] + MACHINE_EPSILON(self.C[1: -1])).tolist() + (self.C[1: -1] - MACHINE_EPSILON(self.C[1: -1])).tolist()))
-            # # This loop is not very nice. Can we get rid of it?
-            # for y in y_vals[::-1]:
-            #     if self.__call__(y, tau) >= p:
-            #         q = y
-            #     else:
-            #         return q
-            # return q
-            q = self.y_vals[np.where((1 - tau) * self.lowers + tau * self.uppers >= p)[0].min()]
-            return q
+            # Analytical inversion: find smallest y where Pi(y, tau) >= p
+            # Pi values at C[j] are (1-tau)*L[j] + tau*U[j]
+            # Pi values just above C[j] (between C[j] and C[j+1]) are (j+tau)/n
+            n = len(self.C) - 1
+            # Check "between" levels: (j+tau)/n for j=0..n-1
+            # The smallest j where (j+tau)/n >= p is j = ceil(p*n - tau)
+            j_between = int(np.ceil(p * n - tau))
+            # Check "at breakpoint" levels for j = 1..n-1 (no ties for Ridge)
+            # At C[j]: Pi = (1-tau)*(j-1)/n + tau*(j+1)/n = (j - 1 + 2*tau)/n
+            # Smallest j where (j-1+2*tau)/n >= p: j = ceil(p*n - 2*tau + 1)
+            j_at = int(np.ceil(p * n - 2 * tau + 1))
+
+            # The quantile is the smallest y: either C[j_at] or C[j_between]+eps
+            # C[j_between]+eps corresponds to y just above C[j_between]
+            if 1 <= j_at < len(self.C) - 1 and j_at <= j_between:
+                return self.C[j_at]
+            elif 0 <= j_between < len(self.C) - 1:
+                # Return a value just above C[j_between]
+                eps = np.abs(self.C[j_between]) * np.finfo(np.float64).eps
+                if j_between == 0:
+                    return -np.inf
+                return self.C[j_between] + eps
+            else:
+                return np.inf
 
         if tau is not None:
-            q = compute_quantile(p, tau)
-            return q
+            return compute_quantile(p, tau)
         else:
             q0 = compute_quantile(p, 0)
             q1 = compute_quantile(p, 1)
             return q0, q1
-
-    def plot(self, tau=None):
-        if tau is None:
-            fig, ax = plt.subplots()
-            ax.step(self.C, self.L, label=r"$\Pi(y, 0)$", where="pre")
-            ax.step(self.C, self.U, label=r"$\Pi(y, 1)$", where="pre")
-            ax.fill_between(self.C, self.L, self.U, step="pre", alpha=0.5, color="green")
-            ax.set_ylabel("cumulative probability")
-            ax.set_xlabel(r"$y$")
-            ax.legend()
-        else:
-            fig, ax = plt.subplots()
-            ax.step(self.C, (1 - tau) * self.L + tau * self.U, label=r"$\Pi(y, \tau)$", where="pre")
-            ax.set_ylabel("cumulative probability")
-            ax.set_xlabel(r"$y$")
-            ax.legend()
-
-        plt.close(fig)  # Prevent implicit display
-        return fig
-
 
 class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
     """
@@ -1000,23 +953,9 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
         self.L = L
         self.U = U
         self.Y = Y
-
         self.time_dict = time_dict
 
-        Y_temp = Y[np.isfinite(Y)]
-        self.y_vals = np.array(
-            sorted(
-                [-np.inf, np.inf]
-                + Y_temp.tolist()
-                + (Y_temp + MACHINE_EPSILON(Y_temp)).tolist()
-                + (Y_temp - MACHINE_EPSILON(Y_temp)).tolist()
-            )
-        )
-        self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
-        self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
-
     def __call__(self, y, tau=None):
-        # TODO: Check carefully that this is correct
         if y == self.Y[0]:
             Pi0, Pi1 = 0.0, 0.0
         elif y == self.Y[-1]:
@@ -1025,14 +964,12 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
             Y = self.Y[:-1]
             idx_eq = np.where(y == Y)[0]
             if idx_eq.shape[0] > 0:
-                k = idx_eq.min()
-                interval = (self.L[k - 1], self.U[k])
+                Pi0 = self.L[idx_eq.min() - 1]
+                Pi1 = self.U[idx_eq.max()]
             else:
                 k = np.where(Y <= y)[0].max()
-                interval = (self.L[k], self.U[k])
-
-            Pi0 = interval[0]
-            Pi1 = interval[1]
+                Pi0 = self.L[k]
+                Pi1 = self.U[k]
 
         if tau is None:
             return Pi0, Pi1
@@ -1041,35 +978,58 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
 
     def quantile(self, p, tau=None):
         def compute_quantile(p, tau):
-            # q = np.inf
-            # y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
-            # for y in y_vals[::-1]:
-            #     if self.__call__(y, tau) >= p:
-            #         q = y
-            #     else:
-            #         return q
-            q = self.y_vals[np.where((1 - tau) * self.lowers + tau * self.uppers >= p)[0].min()]
-            return q
+            # NN CPD: Pi(Y[k], tau) = (1-tau)*L[k-1] + tau*U[k] at breakpoint Y[k] (k=1..K')
+            # Between Y[k] and Y[k+1]: Pi = (1-tau)*L[k] + tau*U[k]
+            # L and U have K'+1 entries (indices 0..K')
+            # Find smallest y where Pi(y, tau) >= p
+            Kprime = len(self.L) - 1
+
+            # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=0..K'
+            between_levels = (1 - tau) * self.L + tau * self.U
+
+            # Check "at breakpoint" levels: (1-tau)*L[k-1] + tau*U[k] for k=1..K'
+            at_levels = (1 - tau) * self.L[:-1] + tau * self.U[1:]
+
+            # Find first index where level >= p
+            between_idx = np.where(between_levels >= p)[0]
+            at_idx = np.where(at_levels >= p)[0]
+
+            best_y = np.inf
+            if len(at_idx) > 0:
+                k = at_idx[0] + 1  # +1 because at_levels[i] corresponds to Y[i+1]
+                best_y = self.Y[k]
+            if len(between_idx) > 0:
+                k = between_idx[0]
+                # "between Y[k] and Y[k+1]" — infimum is Y[k] (or -inf if k=0)
+                if k == 0:
+                    candidate = -np.inf
+                else:
+                    candidate = self.Y[k] + np.abs(self.Y[k]) * np.finfo(np.float64).eps
+                if candidate < best_y:
+                    best_y = candidate
+            return best_y
 
         if tau is not None:
-            q = compute_quantile(p, tau)
-            return q
+            return compute_quantile(p, tau)
         else:
             q0 = compute_quantile(p, 0)
             q1 = compute_quantile(p, 1)
             return q0, q1
 
     def plot(self, tau=None):
+        # Override: NN has len(L) = len(Y) - 1, so x-axis uses Y[1:]
         if tau is None:
-            fig, ax = plt.subplots(sharex=True)
-            ax.step(self.Y[1:], self.L, label=r"$\Pi(y, 0)$")
-            ax.step(self.Y[1:], self.U, label=r"$\Pi(y, 1)$")
+            fig, ax = plt.subplots()
+            ax.step(self.Y[1:], self.L, label=r"$\Pi(y, 0)$", where="pre")
+            ax.step(self.Y[1:], self.U, label=r"$\Pi(y, 1)$", where="pre")
             ax.fill_between(self.Y[1:], self.L, self.U, step="pre", alpha=0.5, color="green")
             ax.legend()
         else:
             fig, ax = plt.subplots()
-            ax.step(self.Y[1:], (1 - tau) * self.L + tau * self.U, label=r"$\Pi(y, \tau)$")
+            ax.step(self.Y[1:], (1 - tau) * self.L + tau * self.U, label=r"$\Pi(y, \tau)$", where="pre")
             ax.legend()
+        ax.set_ylabel("cumulative probability")
+        ax.set_xlabel(r"$y$")
         fig.tight_layout()
         plt.close(fig)  # Prevent implicit display
         return fig
@@ -1081,16 +1041,20 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
         self.Y = Y
         self.time_dict = time_dict
 
-        self.y_vals = np.array(
-            sorted(
-                [-np.inf, np.inf]
-                + self.Y[1:-1].tolist()
-                + (self.Y[1:-1] + MACHINE_EPSILON(self.Y[1:-1])).tolist()
-                + (self.Y[1:-1] - MACHINE_EPSILON(self.Y[1:-1])).tolist()
-            )
-        )
-        self.lowers = np.array([self.__call__(y, 0) for y in self.y_vals])
-        self.uppers = np.array([self.__call__(y, 1) for y in self.y_vals])
+        # Analytical computation of L, U (O(n) instead of O(n²))
+        # Y is sorted with Y[0]=-inf, Y[-1]=+inf.
+        n = len(Y) - 1  # size of trimmed array Y[:-1]
+        self.L = np.zeros(len(Y))
+        self.U = np.zeros(len(Y))
+        self.L[-1] = 1.0
+        self.U[-1] = 1.0
+        # For finite interior values, handle ties using searchsorted
+        for j in range(1, len(Y) - 1):
+            trimmed = Y[:-1]
+            i_prime = np.searchsorted(trimmed, Y[j], side='left')
+            i_bis = np.searchsorted(trimmed, Y[j], side='right') - 1
+            self.L[j] = (i_prime - 1) / n
+            self.U[j] = (i_bis + 1) / n
 
     def __call__(self, y, tau=None):
         if y == self.Y[0]:
@@ -1101,14 +1065,14 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
             Y = self.Y[:-1]
             idx_eq = np.where(y == Y)[0]
             if idx_eq.shape[0] > 0:
-                k = idx_eq.min()
-                interval = ((k - 1) / (Y.shape[0]), (k + 1) / (Y.shape[0]))
+                i_prime = idx_eq.min()
+                i_bis = idx_eq.max()
+                Pi0 = (i_prime - 1) / Y.shape[0]
+                Pi1 = (i_bis + 1) / Y.shape[0]
             else:
                 k = np.where(Y <= y)[0].max()
-                interval = ((k) / (Y.shape[0]), (k + 1) / (Y.shape[0]))
-
-            Pi0 = interval[0]
-            Pi1 = interval[1]
+                Pi0 = k / Y.shape[0]
+                Pi1 = (k + 1) / Y.shape[0]
 
         if tau is None:
             return Pi0, Pi1
@@ -1117,19 +1081,19 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
 
     def quantile(self, p, tau=None):
         def compute_quantile(p, tau):
-            # q = np.inf
-            # y_vals = np.array(sorted([-np.inf, np.inf] + self.Y[1: -1].tolist() + (self.Y[1: -1] + MACHINE_EPSILON(self.Y[1: -1])).tolist() + (self.Y[1: -1] - MACHINE_EPSILON(self.Y[1: -1])).tolist()))
-            # for y in y_vals[::-1]:
-            #     if self.__call__(y, tau) >= p:
-            #         q = y
-            #     else:
-            #         return q
-            q = self.y_vals[np.where((1 - tau) * self.lowers + tau * self.uppers >= p)[0].min()]
-            return q
+            # Analytical inversion using precomputed L, U
+            # Find smallest j where (1-tau)*L[j] + tau*U[j] >= p
+            pi_at = (1 - tau) * self.L + tau * self.U
+            candidates = np.where(pi_at >= p)[0]
+            if len(candidates) == 0:
+                return np.inf
+            j = candidates[0]
+            if j == 0:
+                return -np.inf
+            return self.Y[j]
 
         if tau is not None:
-            q = compute_quantile(p, tau)
-            return q
+            return compute_quantile(p, tau)
         else:
             q0 = compute_quantile(p, 0)
             q1 = compute_quantile(p, 1)

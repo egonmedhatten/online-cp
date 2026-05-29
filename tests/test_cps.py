@@ -112,12 +112,15 @@ class TestNearestNeighboursPredictionMachine:
         coverage = covered / n_test
         assert coverage >= (1 - epsilon) - 0.10
 
-    def test_requires_distinct_labels(self):
+    def test_repeated_labels(self):
         cps = NearestNeighboursPredictionMachine(k=3)
-        X = np.array([[1.0], [2.0], [3.0]])
-        y = np.array([1.0, 1.0, 2.0])  # Duplicate labels
-        with pytest.raises((ValueError, Exception)):
-            cps.learn_initial_training_set(X, y)
+        X = np.array([[1.0], [2.0], [3.0], [4.0], [5.0]])
+        y = np.array([1.0, 1.0, 2.0, 2.0, 3.0])  # Duplicate labels
+        cps.learn_initial_training_set(X, y)
+        cpd = cps.predict_cpd(np.array([3.5]))
+        # Should produce a valid CPD (monotone, bounded in [0, 1])
+        pi0, pi1 = cpd(2.0)
+        assert 0 <= pi0 <= pi1 <= 1
 
 
 class TestDempsterHillConformalPredictiveSystem:

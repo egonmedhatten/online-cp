@@ -163,7 +163,7 @@ print(f"Martingale: {martingale.M:.2f}")
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |
 | **Evaluation** | `progressive_val()`, `iter_progressive_val()` — streaming test-then-train |
 | **Plotting** | `plot_coverage`, `plot_martingale`, `plot_intervals`, `plot_set_sizes` |
-| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper` |
+| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper`, `SleeperStayer`, `SleeperDrifter`, `CUSUMWrapper`, `ShiryaevRobertsWrapper` |
 | **Kernels** | `GaussianKernel`, `LinearKernel`, `PolynomialKernel`, `PeriodicKernel`, `LinearCombinationKernel` |
 
 ## API pattern
@@ -194,6 +194,12 @@ Start with [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) for a 5-mi
 * [online-cp on GitHub][online-cp-on-github]
 * [online-cp on PyPI][online-cp-on-pypi]
 * [Changelog](CHANGELOG.md)
+
+## Looking for Inductive (Split) Conformal Prediction?
+
+This package focuses on **online** (transductive) conformal prediction, where models are updated one example at a time and predictions are valid without a separate calibration set.
+
+For **inductive** (split) conformal prediction — where you have a fixed pre-trained model and a held-out calibration set — we recommend the excellent [`crepes`](https://github.com/henrikbostrom/crepes) package.
 
 
 ## References

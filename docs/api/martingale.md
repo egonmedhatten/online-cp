@@ -10,6 +10,16 @@
 
 ::: online_cp.martingale.CompositeJumper
 
+::: online_cp.martingale.SleeperStayer
+
+::: online_cp.martingale.SleeperDrifter
+
+## Change-Point Detection Wrappers
+
+::: online_cp.martingale.CUSUMWrapper
+
+::: online_cp.martingale.ShiryaevRobertsWrapper
+
 ## Betting Strategies
 
 ::: online_cp.martingale.GaussianKDE
@@ -25,3 +35,5 @@
 ::: online_cp.martingale.FixedStrategy
 
 ::: online_cp.martingale.ExpertAggregationStrategy
+
+::: online_cp.martingale.PiecewiseConstantBetting

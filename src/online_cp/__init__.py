@@ -106,6 +106,21 @@ from online_cp.martingale import (
 from online_cp.martingale import (
     SimpleMixtureMartingale as SimpleMixtureMartingale,
 )
+from online_cp.martingale import (
+    SleeperStayer as SleeperStayer,
+)
+from online_cp.martingale import (
+    SleeperDrifter as SleeperDrifter,
+)
+from online_cp.martingale import (
+    CUSUMWrapper as CUSUMWrapper,
+)
+from online_cp.martingale import (
+    ShiryaevRobertsWrapper as ShiryaevRobertsWrapper,
+)
+from online_cp.martingale import (
+    PiecewiseConstantBetting as PiecewiseConstantBetting,
+)
 from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,
 )

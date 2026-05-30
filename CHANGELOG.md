@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `SleeperStayer`: Sleeper/Stayer martingale (Algorithm 9.4, ALRW2) for change-point detection.
+- `SleeperDrifter`: Sleeper/Drifter martingale (Algorithm 9.5, ALRW2) for gradual drift detection.
+- `CUSUMWrapper`: Page CUSUM wrapper for any conformal test martingale (§8.3, ALRW2).
+- `ShiryaevRobertsWrapper`: Shiryaev-Roberts wrapper for any conformal test martingale (§8.3, ALRW2).
+- `PiecewiseConstantBetting`: Piecewise-constant betting function f_{(a,b)} (§9.2, ALRW2).
+
+### Changed
+
+- CPS module refactored: removed unnecessary parameter constraints, improved performance with `solve_triangular`, improved tie handling in `NearestNeighboursPredictionMachine`.
+- `GaussianKDE` numba functions use `cache=False` to avoid stale bytecode cache issues.
+
 ## [0.2.0] — 2026-05-19
 
 ### Added

@@ -244,7 +244,7 @@ class VennAbersPredictor:
     is retrained on the augmented dataset (training + hypothesized test label)
     for each prediction.
 
-    Supports ridge regression and k-NN scoring functions.
+    Supports ridge regression, k-NN, and SVM scoring functions.
 
     >>> import numpy as np
     >>> np.random.seed(42)
@@ -266,11 +266,18 @@ class VennAbersPredictor:
         distance="euclidean",
         distance_func=None,
         aggregation="mean",
+        kernel="rbf",
+        C=1.0,
+        sigma=1.0,
+        degree=3,
+        coef0=0.0,
+        smo_tol=1e-3,
+        smo_max_iter=5000,
     ):
         """
         Parameters
         ----------
-        scorer : {'ridge', 'knn'}
+        scorer : {'ridge', 'knn', 'svm'}
             Scoring function to use.
         a : float
             Ridge regularisation parameter (for scorer='ridge').
@@ -282,9 +289,23 @@ class VennAbersPredictor:
             Custom distance function for k-NN.
         aggregation : {'mean', 'median'}
             Aggregation for k-NN distances.
+        kernel : str or Kernel instance or callable
+            Kernel for SVM scorer. Strings: 'rbf', 'linear', 'poly'.
+        C : float
+            SVM regularisation parameter (upper bound on alpha).
+        sigma : float
+            Bandwidth for RBF kernel.
+        degree : int
+            Degree for polynomial kernel.
+        coef0 : float
+            Constant term for polynomial kernel.
+        smo_tol : float
+            KKT violation tolerance for SMO solver.
+        smo_max_iter : int
+            Maximum iterations for SMO solver.
         """
-        if scorer not in ("ridge", "knn"):
-            raise ValueError(f"scorer must be 'ridge' or 'knn', got '{scorer}'")
+        if scorer not in ("ridge", "knn", "svm"):
+            raise ValueError(f"scorer must be 'ridge', 'knn', or 'svm', got '{scorer}'")
         if aggregation not in ("mean", "median"):
             raise ValueError(f"aggregation must be 'mean' or 'median', got '{aggregation}'")
 
@@ -299,6 +320,14 @@ class VennAbersPredictor:
             self.distance = "custom"
         self.aggregation = aggregation
 
+        # SVM parameters
+        self.C = C
+        self.sigma = sigma
+        self.degree = degree
+        self.coef0 = coef0
+        self.smo_tol = smo_tol
+        self.smo_max_iter = smo_max_iter
+
         self.X = None
         self.y = None
 
@@ -311,6 +340,13 @@ class VennAbersPredictor:
         self.D = None
         self._label_indices = None
 
+        # SVM state
+        self.K = None  # Gram matrix
+        if scorer == "svm":
+            self._kernel = self._resolve_kernel(kernel)
+        else:
+            self._kernel_spec = kernel  # store for later if needed
+
     def _standard_distance_func(self, X, y=None):
         X = np.atleast_2d(X)
         if y is None:
@@ -318,6 +354,26 @@ class VennAbersPredictor:
         else:
             y = np.atleast_2d(y)
             return cdist(X, y, metric=self.distance)
+
+    def _resolve_kernel(self, kernel):
+        """Resolve kernel specification to a callable."""
+        from online_cp.kernels import GaussianKernel, Kernel, LinearKernel, PolynomialKernel
+
+        if isinstance(kernel, Kernel):
+            return kernel
+        elif isinstance(kernel, str):
+            if kernel == "rbf":
+                return GaussianKernel(sigma=self.sigma)
+            elif kernel == "linear":
+                return LinearKernel()
+            elif kernel == "poly":
+                return PolynomialKernel(d=self.degree, c=self.coef0)
+            else:
+                raise ValueError(f"Unknown kernel string: '{kernel}'. Use 'rbf', 'linear', or 'poly'.")
+        elif callable(kernel):
+            return kernel
+        else:
+            raise TypeError(f"kernel must be a string, Kernel instance, or callable, got {type(kernel)}")
 
     def learn_initial_training_set(self, X, y):
         """Batch-initialize with training data.
@@ -344,6 +400,8 @@ class VennAbersPredictor:
         elif self.scorer == "knn":
             self.D = self.distance_func(X)
             self._label_indices = {0: np.flatnonzero(y == 0), 1: np.flatnonzero(y == 1)}
+        elif self.scorer == "svm":
+            self.K = self._kernel(X)
 
     def learn_one(self, x, y, precomputed=None):
         """Incrementally add one observation after the true label is revealed.
@@ -371,6 +429,8 @@ class VennAbersPredictor:
             elif self.scorer == "knn":
                 self.D = self.distance_func(self.X)
                 self._label_indices = {0: np.flatnonzero(self.y == 0), 1: np.flatnonzero(self.y == 1)}
+            elif self.scorer == "svm":
+                self.K = self._kernel(self.X)
         else:
             if self.scorer == "ridge":
                 if precomputed is not None and "XTXinv" in precomputed:
@@ -397,6 +457,22 @@ class VennAbersPredictor:
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
                 self._label_indices = {0: np.flatnonzero(self.y == 0), 1: np.flatnonzero(self.y == 1)}
+
+            elif self.scorer == "svm":
+                if precomputed is not None and "K" in precomputed:
+                    self.K = precomputed["K"]
+                else:
+                    k_row = np.atleast_1d(self._kernel(self.X, x))
+                    kappa = float(self._kernel(x.reshape(1, -1))[0, 0])
+                    n = self.K.shape[0]
+                    K_new = np.empty((n + 1, n + 1), dtype=np.float64)
+                    K_new[:n, :n] = self.K
+                    K_new[:n, n] = k_row
+                    K_new[n, :n] = k_row
+                    K_new[n, n] = kappa
+                    self.K = K_new
+                self.X = np.vstack([self.X, x.reshape(1, -1)])
+                self.y = np.append(self.y, y)
 
     def predict(self, x, return_update=False):
         """Produce a Venn-Abers multi-probability prediction.
@@ -427,6 +503,8 @@ class VennAbersPredictor:
             return self._predict_ridge(x, return_update)
         elif self.scorer == "knn":
             return self._predict_knn(x, return_update)
+        elif self.scorer == "svm":
+            return self._predict_svm(x, return_update)
 
     def _predict_ridge(self, x, return_update):
         """Ridge scoring: S(x_i) = fitted value from ridge on augmented set."""
@@ -494,6 +572,43 @@ class VennAbersPredictor:
 
         if return_update:
             return pred, {"D": D_aug}
+        return pred
+
+    def _predict_svm(self, x, return_update):
+        """SVM scoring: S(x_i) = decision function value from SVM on augmented set."""
+        from online_cp.classifiers import _smo_solve
+
+        n = self.X.shape[0]
+
+        # Augment Gram matrix with test point
+        k_row = np.atleast_1d(self._kernel(self.X, x))
+        kappa = float(self._kernel(x.reshape(1, -1))[0, 0])
+        K_aug = np.empty((n + 1, n + 1), dtype=np.float64)
+        K_aug[:n, :n] = self.K
+        K_aug[:n, n] = k_row
+        K_aug[n, :n] = k_row
+        K_aug[n, n] = kappa
+
+        test_idx = n
+
+        # For each hypothesis y ∈ {0, 1}, solve SVM and compute decision function
+        results = []
+        for y_hyp in (0, 1):
+            labels_aug = np.append(self.y, y_hyp)
+            y_binary = (2 * labels_aug - 1).astype(np.float64)  # {0,1} → {-1,+1}
+
+            alpha, b = _smo_solve(K_aug, y_binary, self.C, self.smo_tol, self.smo_max_iter)
+
+            # Decision function: f(x_i) = K_aug[i] @ (alpha * y_binary) + b
+            scores = K_aug @ (alpha * y_binary) + b
+
+            p = _isotonic_calibrate(scores, labels_aug.astype(np.float64), test_idx)
+            results.append(p)
+
+        pred = VennAbersPrediction(results[0], results[1])
+
+        if return_update:
+            return pred, {"K": K_aug}
         return pred
 
     @staticmethod

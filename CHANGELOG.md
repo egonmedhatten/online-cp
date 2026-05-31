@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `VennAbersPredictor`: Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4) producing calibrated multi-probability predictions for binary classification. Supports ridge regression and k-NN scoring functions. First known Python implementation of the full/transductive variant.
+- `VennAbersPredictor`: Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4) producing calibrated multi-probability predictions for binary classification. Supports ridge regression, k-NN, and SVM scoring functions. First known Python implementation of the full/transductive variant.
 - `VennAbersPrediction`: Output type for Venn-Abers predictions — the multiprobability pair (p0, p1).
 - `log_loss_point(p0, p1)`: Merge a Venn-Abers pair into a single probability minimising log loss (ALRW2 §6.4).
 - `brier_point(p0, p1)`: Merge a Venn-Abers pair into a single probability minimising Brier loss.

@@ -236,6 +236,82 @@ class TestVennAbersKNN:
 
 
 # ---------------------------------------------------------------------------
+# SVM scorer tests
+# ---------------------------------------------------------------------------
+
+
+class TestVennAbersSVM:
+    """Test SVM scoring function for Venn-Abers predictor."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        np.random.seed(99)
+        N = 60
+        X = np.random.randn(N, 2)
+        y = (X[:, 0] + X[:, 1] > 0).astype(int)
+        self.X, self.y = X, y
+        self.n_train = 30
+
+    def test_predictions_in_unit_interval(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        for i in range(self.n_train, self.n_train + 10):
+            pred = vap.predict(self.X[i])
+            assert 0 <= pred.p0 <= 1, f"p0={pred.p0} out of [0,1]"
+            assert 0 <= pred.p1 <= 1, f"p1={pred.p1} out of [0,1]"
+            vap.learn_one(self.X[i], self.y[i])
+
+    def test_p1_geq_p0(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        for i in range(self.n_train, self.n_train + 10):
+            pred = vap.predict(self.X[i])
+            assert pred.p1 >= pred.p0, f"p1={pred.p1} < p0={pred.p0}"
+            vap.learn_one(self.X[i], self.y[i])
+
+    def test_streaming_with_learn_one(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        for i in range(self.n_train, self.n_train + 5):
+            pred = vap.predict(self.X[i])
+            vap.learn_one(self.X[i], self.y[i])
+        assert vap.K.shape == (self.n_train + 5, self.n_train + 5)
+
+    def test_return_update_speeds_learn(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        pred, precomputed = vap.predict(self.X[self.n_train], return_update=True)
+        assert "K" in precomputed
+        assert precomputed["K"].shape == (self.n_train + 1, self.n_train + 1)
+        vap.learn_one(self.X[self.n_train], self.y[self.n_train], precomputed=precomputed)
+        assert vap.K.shape == (self.n_train + 1, self.n_train + 1)
+
+    def test_kernel_linear(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="linear", C=1.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        pred = vap.predict(self.X[self.n_train])
+        assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
+
+    def test_kernel_poly(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="poly", degree=2, C=1.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        pred = vap.predict(self.X[self.n_train])
+        assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
+
+    def test_kernel_instance(self):
+        from online_cp.kernels import GaussianKernel
+        vap = VennAbersPredictor(scorer="svm", kernel=GaussianKernel(sigma=2.0), C=5.0)
+        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        pred = vap.predict(self.X[self.n_train])
+        assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
+
+    def test_cold_start(self):
+        vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
+        pred = vap.predict(self.X[0])
+        assert pred.p0 == 0.5 and pred.p1 == 0.5
+
+
+# ---------------------------------------------------------------------------
 # Validity / calibration test (statistical)
 # ---------------------------------------------------------------------------
 
@@ -280,7 +356,7 @@ class TestVennAbersValidity:
 class TestEdgeCases:
     def test_invalid_scorer(self):
         with pytest.raises(ValueError, match="scorer must be"):
-            VennAbersPredictor(scorer="svm")
+            VennAbersPredictor(scorer="invalid")
 
     def test_invalid_aggregation(self):
         with pytest.raises(ValueError, match="aggregation must be"):

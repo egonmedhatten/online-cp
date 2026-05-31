@@ -97,7 +97,7 @@ brier_point(pred.p0, pred.p1)     # minimises Brier loss
 vap.learn_one(x_new, y_new)
 ```
 
-Also supports k-NN scoring: `VennAbersPredictor(scorer="knn", k=5)`.
+Also supports k-NN scoring (`VennAbersPredictor(scorer="knn", k=5)`) and SVM scoring (`VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)`).
 
 ### Mondrian conformal prediction
 
@@ -193,7 +193,7 @@ for p in p_values:
 |--------|-------------|
 | **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalLassoRegressor` |
 | **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
-| **Venn Predictors** | `VennAbersPredictor` (ridge and k-NN scoring), `log_loss_point`, `brier_point` |
+| **Venn Predictors** | `VennAbersPredictor` (ridge, k-NN, and SVM scoring), `log_loss_point`, `brier_point` |
 | **Mondrian CP** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage |
 | **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |

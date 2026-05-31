@@ -11,3 +11,7 @@
 ::: online_cp.kernels.LinearCombinationKernel
 
 ::: online_cp.kernels.ProductKernel
+
+::: online_cp.kernels.kernel_induced_distance
+
+::: online_cp.kernels.kernel_matrix_to_distance_matrix

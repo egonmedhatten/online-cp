@@ -73,6 +73,12 @@ from online_cp.kernels import (
 from online_cp.kernels import (
     PolynomialKernel as PolynomialKernel,
 )
+from online_cp.kernels import (
+    kernel_induced_distance as kernel_induced_distance,
+)
+from online_cp.kernels import (
+    kernel_matrix_to_distance_matrix as kernel_matrix_to_distance_matrix,
+)
 from online_cp.martingale import (
     BetaKernel as BetaKernel,
 )

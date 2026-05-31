@@ -12,6 +12,8 @@ __all__ = [
     "PolynomialKernel",
     "PeriodicKernel",
     "LinearCombinationKernel",
+    "kernel_induced_distance",
+    "kernel_matrix_to_distance_matrix",
 ]
 
 
@@ -175,6 +177,92 @@ class ProductKernel(Kernel):
     """
 
     pass
+
+
+def kernel_induced_distance(kernel):
+    """Create a distance function from a kernel, compatible with ``distance_func``.
+
+    The kernel-induced distance is:
+
+    .. math::
+        d_K(x, x') = \\sqrt{K(x,x) - 2\\,K(x,x') + K(x',x')}
+
+    Parameters
+    ----------
+    kernel : Kernel
+        A kernel object with signature ``kernel(X, y=None)``.
+
+    Returns
+    -------
+    distance_func : callable
+        A function ``distance_func(X, y=None)`` returning:
+
+        - If ``y is None``: symmetric distance matrix of shape ``(n, n)``.
+        - If ``y`` is given: column vector of distances of shape ``(n, 1)``.
+
+        Compatible with the ``distance_func`` parameter of
+        :class:`~online_cp.classifiers.ConformalNearestNeighboursClassifier` and
+        :class:`~online_cp.CPS.NearestNeighboursPredictionMachine`.
+
+    Examples
+    --------
+    >>> from online_cp.kernels import GaussianKernel, LinearKernel, kernel_induced_distance
+    >>> import numpy as np
+    >>> dist_fn = kernel_induced_distance(LinearKernel())
+    >>> X = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    >>> D = dist_fn(X)
+    >>> np.allclose(D, D.T)
+    True
+    >>> np.allclose(np.diag(D), 0.0)
+    True
+    """
+
+    def _distance(X, y=None):
+        X = np.atleast_2d(X)
+        if y is None:
+            K = kernel(X)
+            diag = np.diag(K)
+            D_sq = diag[:, None] - 2 * K + diag[None, :]
+            return np.sqrt(np.maximum(D_sq, 0.0))
+        else:
+            k_cross = kernel(X, y).ravel()
+            Kyy = kernel(np.atleast_2d(y)).item()
+            diag_X = np.array([kernel(X[i : i + 1]).item() for i in range(len(X))])
+            D_sq = diag_X - 2 * k_cross + Kyy
+            return np.sqrt(np.maximum(D_sq, 0.0)).reshape(-1, 1)
+
+    return _distance
+
+
+def kernel_matrix_to_distance_matrix(K):
+    """Convert a kernel (Gram) matrix to a distance matrix.
+
+    .. math::
+        D_{ij} = \\sqrt{K_{ii} - 2\\,K_{ij} + K_{jj}}
+
+    Parameters
+    ----------
+    K : numpy.ndarray of shape (n, n)
+        A symmetric positive semi-definite kernel matrix.
+
+    Returns
+    -------
+    D : numpy.ndarray of shape (n, n)
+        The induced distance matrix.
+
+    Examples
+    --------
+    >>> from online_cp.kernels import LinearKernel, kernel_matrix_to_distance_matrix
+    >>> import numpy as np
+    >>> X = np.array([[1.0, 0.0], [0.0, 1.0]])
+    >>> K = LinearKernel()(X)
+    >>> D = kernel_matrix_to_distance_matrix(K)
+    >>> np.allclose(D[0, 1], np.sqrt(2))
+    True
+    """
+    diag = np.diag(K)
+    D_sq = diag[:, None] - 2 * K + diag[None, :]
+    return np.sqrt(np.maximum(D_sq, 0.0))
 
 
 if __name__ == "__main__":

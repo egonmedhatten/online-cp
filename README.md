@@ -99,6 +99,23 @@ vap.learn_one(x_new, y_new)
 
 Also supports k-NN scoring (`VennAbersPredictor(scorer="knn", k=5)`) and SVM scoring (`VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)`).
 
+### Nearest-neighbours Venn predictor
+
+Taxonomy-based Venn predictor using the k-NN voting taxonomy (ALRW2 §6.2). The taxonomy categorises each example by the number of positive labels among its k nearest neighbours, yielding calibrated multiprobability output:
+
+```python
+from online_cp import NearestNeighboursVennPredictor, log_loss_point
+
+vp = NearestNeighboursVennPredictor(k=3)
+vp.learn_initial_training_set(X_train, y_train)
+
+pred = vp.predict_one(x_new)
+print(pred.p0, pred.p1)            # multiprobability pair
+log_loss_point(pred.p0, pred.p1)   # merge for decisions
+
+vp.learn_one(x_new, y_new)
+```
+
 ### Mondrian conformal prediction
 
 Group-conditional coverage via a single pooled model with category-filtered calibration:

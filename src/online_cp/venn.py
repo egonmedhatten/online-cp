@@ -24,7 +24,8 @@ except ImportError:
 
 __all__ = [
     "VennAbersPredictor",
-    "VennAbersPrediction",
+    "NearestNeighboursVennPredictor",
+    "VennPrediction",
     "log_loss_point",
     "brier_point",
 ]
@@ -132,12 +133,12 @@ def _isotonic_calibrate(scores, labels, query_idx):
 
 
 # ---------------------------------------------------------------------------
-# VennAbersPrediction output type
+# VennPrediction output type
 # ---------------------------------------------------------------------------
 
 
-class VennAbersPrediction:
-    """Multiprobability prediction from a Venn-Abers predictor.
+class VennPrediction:
+    """Multiprobability prediction from a Venn predictor.
 
     The prediction is the pair (p0, p1) — two calibrated probabilities
     of class 1 under the two possible label hypotheses. This pair IS the
@@ -159,7 +160,7 @@ class VennAbersPrediction:
         self.p1 = p1
 
     def __repr__(self):
-        return f"VennAbersPrediction(p0={self.p0:.4f}, p1={self.p1:.4f})"
+        return f"VennPrediction(p0={self.p0:.4f}, p1={self.p1:.4f})"
 
     def __str__(self):
         return f"(p0={self.p0:.4f}, p1={self.p1:.4f})"
@@ -486,15 +487,15 @@ class VennAbersPredictor:
 
         Returns
         -------
-        prediction : VennAbersPrediction
-            Contains p0, p1, and point prediction.
+        prediction : VennPrediction
+            Contains p0 and p1 multiprobability pair.
         precomputed : dict, optional
             Returned if return_update=True.
         """
         x = np.asarray(x).ravel()
 
         if self.X is None or len(self.y) == 0:
-            pred = VennAbersPrediction(0.5, 0.5)
+            pred = VennPrediction(0.5, 0.5)
             if return_update:
                 return pred, {}
             return pred
@@ -538,7 +539,7 @@ class VennAbersPredictor:
         p0 = _isotonic_calibrate(scores_0, labels_0, test_idx)
         p1 = _isotonic_calibrate(scores_1, labels_1, test_idx)
 
-        pred = VennAbersPrediction(p0, p1)
+        pred = VennPrediction(p0, p1)
 
         if return_update:
             return pred, {"XTXinv": XTXinv_aug}
@@ -568,7 +569,7 @@ class VennAbersPredictor:
             p = _isotonic_calibrate(scores, labels_aug.astype(np.float64), test_idx)
             results.append(p)
 
-        pred = VennAbersPrediction(results[0], results[1])
+        pred = VennPrediction(results[0], results[1])
 
         if return_update:
             return pred, {"D": D_aug}
@@ -605,7 +606,7 @@ class VennAbersPredictor:
             p = _isotonic_calibrate(scores, labels_aug.astype(np.float64), test_idx)
             results.append(p)
 
-        pred = VennAbersPrediction(results[0], results[1])
+        pred = VennPrediction(results[0], results[1])
 
         if return_update:
             return pred, {"K": K_aug}
@@ -672,6 +673,205 @@ class VennAbersPredictor:
                 scores[i] = d_same - d_diff  # close to 0, far from 1 → low
 
         return scores
+
+
+# ---------------------------------------------------------------------------
+# NearestNeighboursVennPredictor
+# ---------------------------------------------------------------------------
+
+
+class NearestNeighboursVennPredictor:
+    """Online Venn predictor with k-NN voting taxonomy.
+
+    Uses the k-nearest-neighbour voting taxonomy from ALRW (§6.2): for each
+    example *i* the taxonomy value is the number of positive labels among
+    the *k* nearest neighbours of *x_i* (leave-one-out). This gives *k* + 1
+    categories {0, 1, …, k}. Under each hypothesis *v* ∈ {0, 1} for the new
+    example, empirical frequencies among examples sharing the new example's
+    taxonomy category give the multiprobability output.
+
+    The output ``VennPrediction(p0, p1)`` has the same semantics as for
+    :class:`VennAbersPredictor` and is compatible with :func:`log_loss_point`
+    and :func:`brier_point`.
+
+    Parameters
+    ----------
+    k : int
+        Number of nearest neighbours for the voting taxonomy (default 1).
+    metric : str
+        Distance metric passed to ``scipy.spatial.distance`` (default
+        ``'euclidean'``).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> np.random.seed(0)
+    >>> X = np.random.randn(30, 2)
+    >>> y = (X[:, 0] + X[:, 1] > 0).astype(int)
+    >>> vp = NearestNeighboursVennPredictor(k=1)
+    >>> vp.learn_initial_training_set(X[:20], y[:20])
+    >>> pred = vp.predict_one(X[20])
+    >>> bool(0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1)
+    True
+    """
+
+    def __init__(self, k=1, metric="euclidean"):
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
+        self.k = k
+        self.metric = metric
+        self.X = None
+        self.y = None
+        self.D = None  # distance matrix (n×n)
+
+    def _distance(self, X, Y=None):
+        """Compute pairwise distances."""
+        X = np.atleast_2d(X)
+        if Y is None:
+            return squareform(pdist(X, metric=self.metric))
+        else:
+            Y = np.atleast_2d(Y)
+            return cdist(X, Y, metric=self.metric)
+
+    def learn_initial_training_set(self, X, y):
+        """Batch-initialise with training data.
+
+        Parameters
+        ----------
+        X : array-like, shape (n, d)
+            Training feature vectors.
+        y : array-like, shape (n,)
+            Binary labels in {0, 1}.
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=np.float64))
+        y = np.asarray(y, dtype=int)
+        if not np.all((y == 0) | (y == 1)):
+            raise ValueError("Labels must be binary {0, 1}")
+        self.X = X
+        self.y = y
+        self.D = self._distance(X)
+
+    def learn_one(self, x, y):
+        """Incrementally add one observation.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Feature vector.
+        y : int
+            True binary label (0 or 1).
+        """
+        x = np.asarray(x, dtype=np.float64).ravel()
+        if self.X is None:
+            self.X = x.reshape(1, -1)
+            self.y = np.array([y], dtype=int)
+            self.D = np.zeros((1, 1))
+        else:
+            d = self._distance(self.X, x.reshape(1, -1)).ravel()
+            n = self.D.shape[0]
+            D_new = np.empty((n + 1, n + 1), dtype=np.float64)
+            D_new[:n, :n] = self.D
+            D_new[:n, n] = d
+            D_new[n, :n] = d
+            D_new[n, n] = 0.0
+            self.D = D_new
+            self.X = np.vstack([self.X, x.reshape(1, -1)])
+            self.y = np.append(self.y, y)
+
+    def predict_one(self, x):
+        """Produce a Venn multiprobability prediction.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Test object.
+
+        Returns
+        -------
+        VennPrediction
+            Contains p0 and p1 multiprobability pair.
+        """
+        x = np.asarray(x, dtype=np.float64).ravel()
+
+        if self.X is None or len(self.y) == 0:
+            return VennPrediction(0.5, 0.5)
+
+        n = len(self.y)
+
+        # Augment distance matrix with the test point
+        d = self._distance(self.X, x.reshape(1, -1)).ravel()
+        D_aug = np.empty((n + 1, n + 1), dtype=np.float64)
+        D_aug[:n, :n] = self.D
+        D_aug[:n, n] = d
+        D_aug[n, :n] = d
+        D_aug[n, n] = 0.0
+
+        # Effective k (cap at n-1 since leave-one-out among n+1 points
+        # means each point has n neighbours available)
+        k_eff = min(self.k, n)
+
+        test_idx = n  # index of new example in augmented arrays
+
+        # For each hypothesis v ∈ {0, 1}, compute taxonomies and frequencies
+        results = []
+        for v in (0, 1):
+            labels_aug = np.append(self.y, v)
+
+            # Compute taxonomy for all n+1 examples (leave-one-out kNN)
+            taxonomies = self._compute_taxonomies(D_aug, labels_aug, k_eff)
+
+            # Taxonomy of the new example
+            tau_new = taxonomies[test_idx]
+
+            # Frequency of label=1 among examples with same taxonomy
+            mask = taxonomies == tau_new
+            matching_labels = labels_aug[mask]
+            s_v_1 = np.sum(matching_labels) / len(matching_labels)
+            results.append(s_v_1)
+
+        return VennPrediction(results[0], results[1])
+
+    @staticmethod
+    def _compute_taxonomies(D, labels, k):
+        """Compute kNN voting taxonomy for all examples.
+
+        For each example i, taxonomy τᵢ = sum of labels of k nearest
+        neighbours (leave-one-out).
+
+        Parameters
+        ----------
+        D : ndarray, shape (n, n)
+            Pairwise distance matrix.
+        labels : ndarray, shape (n,)
+            Binary labels.
+        k : int
+            Number of neighbours.
+
+        Returns
+        -------
+        taxonomies : ndarray, shape (n,), dtype int
+            Taxonomy value for each example (in {0, 1, ..., k}).
+        """
+        n = len(labels)
+        taxonomies = np.empty(n, dtype=int)
+
+        # Set diagonal to inf for leave-one-out
+        D_work = D.copy()
+        np.fill_diagonal(D_work, np.inf)
+
+        for i in range(n):
+            # Find k nearest neighbours
+            if k >= n - 1:
+                # Use all other points
+                nn_idx = np.arange(n)
+                nn_idx = nn_idx[nn_idx != i]
+            else:
+                # Partial sort to find k nearest
+                nn_idx = np.argpartition(D_work[i], k)[:k]
+
+            taxonomies[i] = np.sum(labels[nn_idx])
+
+        return taxonomies
 
 
 if __name__ == "__main__":

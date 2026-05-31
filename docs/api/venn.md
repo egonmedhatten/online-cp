@@ -2,4 +2,6 @@
 
 ::: online_cp.venn.VennAbersPredictor
 
-::: online_cp.venn.VennAbersPrediction
+::: online_cp.venn.NearestNeighboursVennPredictor
+
+::: online_cp.venn.VennPrediction

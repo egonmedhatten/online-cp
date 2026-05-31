@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `NearestNeighboursVennPredictor`: Online Venn predictor with k-NN voting taxonomy (ALRW2 §6.2). Produces calibrated multiprobability predictions via taxonomy-based frequency counting. Generalises the 1-NN taxonomy from the textbook to arbitrary k.
 - `VennAbersPredictor`: Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4) producing calibrated multi-probability predictions for binary classification. Supports ridge regression, k-NN, and SVM scoring functions. First known Python implementation of the full/transductive variant.
-- `VennAbersPrediction`: Output type for Venn-Abers predictions — the multiprobability pair (p0, p1).
-- `log_loss_point(p0, p1)`: Merge a Venn-Abers pair into a single probability minimising log loss (ALRW2 §6.4).
-- `brier_point(p0, p1)`: Merge a Venn-Abers pair into a single probability minimising Brier loss.
+- `VennPrediction`: Unified output type for all Venn predictors — the multiprobability pair (p0, p1).
+- `log_loss_point(p0, p1)`: Merge a Venn pair into a single probability minimising log loss (ALRW2 §6.4).
+- `brier_point(p0, p1)`: Merge a Venn pair into a single probability minimising Brier loss.
 - `ConformalNearestNeighboursRegressor`: Online conformal k-NN regressor (§2.4, ALRW2) with leave-one-out k-NN predictions, configurable k, mean/median aggregation, and custom distance functions.
 - `VilleWrapper`: Ville's inequality wrapper for any conformal test martingale — rejects when running maximum exceeds threshold (§8.4.1, ALRW2).
 - `SleeperStayer`: Sleeper/Stayer martingale (Algorithm 9.4, ALRW2) for change-point detection.
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: `VennAbersPrediction` renamed to `VennPrediction` — unified output type for all Venn predictors.
 - Martingale architecture redesigned: martingales are now pure evidence processes. Statistical decision procedures (`VilleWrapper`, `CUSUMWrapper`, `ShiryaevRobertsWrapper`) are separate wrappers.
 - CPS module refactored: removed unnecessary parameter constraints, improved performance with `solve_triangular`, improved tie handling in `NearestNeighboursPredictionMachine`.
 - `GaussianKDE` numba functions use `cache=False` to avoid stale bytecode cache issues.

@@ -12,5 +12,5 @@ do
 	[ "$module" == src/online_cp/__init__.py ] && continue
 	echo uv run python $module
 	/usr/bin/time -f "%es  (python $module)\n" \
-	python $module
+	uv run python $module
 done

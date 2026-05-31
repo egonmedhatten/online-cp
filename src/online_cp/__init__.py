@@ -157,3 +157,15 @@ from online_cp.plotting import (
 from online_cp.plotting import (
     plot_set_sizes as plot_set_sizes,
 )
+from online_cp.venn import (
+    VennAbersPrediction as VennAbersPrediction,
+)
+from online_cp.venn import (
+    VennAbersPredictor as VennAbersPredictor,
+)
+from online_cp.venn import (
+    brier_point as brier_point,
+)
+from online_cp.venn import (
+    log_loss_point as log_loss_point,
+)

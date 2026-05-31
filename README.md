@@ -77,6 +77,28 @@ result.levels        # [0.01, 0.05, 0.1, 0.2]
 result.coverage(y)   # {0.01: True, 0.05: True, 0.1: True, 0.2: False}
 ```
 
+### Venn-Abers predictor
+
+Calibrated probability predictions for binary classification via the full/transductive Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4). The prediction is a **multiprobability pair** $(p^0, p^1)$ — not a point estimate:
+
+```python
+from online_cp import VennAbersPredictor, log_loss_point, brier_point
+
+vap = VennAbersPredictor(scorer="ridge", a=1.0)
+vap.learn_initial_training_set(X_train, y_train)
+
+pred = vap.predict(x_new)
+print(pred.p0, pred.p1)  # the multiprobability pair IS the prediction
+
+# For decision-making, merge into a single probability:
+log_loss_point(pred.p0, pred.p1)  # minimises log loss
+brier_point(pred.p0, pred.p1)     # minimises Brier loss
+
+vap.learn_one(x_new, y_new)
+```
+
+Also supports k-NN scoring: `VennAbersPredictor(scorer="knn", k=5)`.
+
 ### Mondrian conformal prediction
 
 Group-conditional coverage via a single pooled model with category-filtered calibration:
@@ -171,6 +193,7 @@ for p in p_values:
 |--------|-------------|
 | **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalLassoRegressor` |
 | **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
+| **Venn Predictors** | `VennAbersPredictor` (ridge and k-NN scoring), `log_loss_point`, `brier_point` |
 | **Mondrian CP** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage |
 | **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |

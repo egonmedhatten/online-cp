@@ -29,6 +29,7 @@ nav:
   - API Reference:
     - Regressors: api/regressors.md
     - Classifiers: api/classifiers.md
+    - Venn Predictors: api/venn.md
     - Mondrian CP: api/mondrian.md
     - Predictive Systems: api/cps.md
     - Martingales: api/martingale.md

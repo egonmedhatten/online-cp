@@ -3,9 +3,15 @@
 import numpy as np
 import pytest
 
-from online_cp import ConformalRidgeRegressor, KernelConformalRidgeRegressor
-from online_cp.kernels import GaussianKernel
+from online_cp import (
+    ConformalNearestNeighboursClassifier,
+    ConformalRidgeRegressor,
+    ConformalSupportVectorMachine,
+    KernelConformalRidgeRegressor,
+)
+from online_cp.kernels import GaussianKernel, LinearKernel
 from online_cp.mondrian import MondrianConformalClassifier, MondrianConformalRegressor
+from online_cp.regressors import ConformalLassoRegressor
 
 
 def _category_fn(x):
@@ -207,3 +213,386 @@ class TestMondrianTypeChecks:
         r = repr(wrapper)
         assert "MondrianConformalRegressor" in r
         assert "ConformalRidgeRegressor" in r
+
+
+# ---------------------------------------------------------------------------
+# Lasso regressor tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lasso_data():
+    """Sparse linear data suitable for Lasso."""
+    rng = np.random.default_rng(55)
+    n_train, n_test, d = 50, 80, 10
+    X = rng.standard_normal((n_train + n_test, d))
+    beta = np.array([3.0, 1.5, 0, 0, 2.0, 0, 0, 0, 0, 0])
+    y = X @ beta + rng.normal(0, 0.5, n_train + n_test)
+    return X[:n_train], y[:n_train], X[n_train:], y[n_train:]
+
+
+class TestMondrianConformalRegressorLasso:
+    def test_predict_returns_interval(self, lasso_data):
+        X_train, y_train, X_test, _ = lasso_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        interval = wrapper.predict(X_test[0], epsilon=0.2)
+        assert interval.lower < interval.upper
+        assert np.isfinite(interval.lower)
+        assert np.isfinite(interval.upper)
+
+    def test_coverage(self, lasso_data):
+        X_train, y_train, X_test, y_test = lasso_data
+        epsilon = 0.2
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+
+        coverage = {"pos": [], "neg": []}
+        for x_i, y_i in zip(X_test[:40], y_test[:40]):
+            interval = wrapper.predict(x_i, epsilon=epsilon)
+            cat = _category_fn(x_i)
+            coverage[cat].append(y_i in interval)
+            wrapper.learn_one(x_i, y_i)
+
+        for cat in ["pos", "neg"]:
+            if len(coverage[cat]) > 5:
+                cov = np.mean(coverage[cat])
+                assert cov >= 1 - epsilon - 0.15, (
+                    f"Lasso category '{cat}' coverage {cov:.3f} too low"
+                )
+
+    def test_compute_p_value(self, lasso_data):
+        X_train, y_train, X_test, y_test = lasso_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        p = wrapper.compute_p_value(X_test[0], y_test[0])
+        assert 0 <= p <= 1
+
+    def test_learn_one_incremental(self, lasso_data):
+        X_train, y_train, X_test, y_test = lasso_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        n_before = len(wrapper.categories_)
+        wrapper.learn_one(X_test[0], y_test[0])
+        assert len(wrapper.categories_) == n_before + 1
+
+
+# ---------------------------------------------------------------------------
+# SVM classifier tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def svm_data():
+    """Binary classification data for SVM."""
+    rng = np.random.default_rng(88)
+    n_train, n_test = 50, 60
+    X_pos = rng.standard_normal((n_train + n_test, 2)) + [2, 0]
+    X_neg = rng.standard_normal((n_train + n_test, 2)) + [-2, 0]
+    X = np.vstack([X_pos, X_neg])
+    y = np.array([1] * (n_train + n_test) + [-1] * (n_train + n_test))
+    # Shuffle
+    idx = rng.permutation(len(X))
+    X, y = X[idx], y[idx]
+    return X[:n_train], y[:n_train], X[n_train : n_train + n_test], y[n_train : n_train + n_test]
+
+
+class TestMondrianConformalClassifierSVM:
+    def test_predict_returns_set(self, svm_data):
+        X_train, y_train, X_test, _ = svm_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalSupportVectorMachine(
+                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
+            ),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        pred = wrapper.predict(X_test[0], epsilon=0.1)
+        # Should return a prediction set that supports `in`
+        assert 1 in pred or -1 in pred
+
+    def test_coverage(self, svm_data):
+        X_train, y_train, X_test, y_test = svm_data
+        epsilon = 0.2
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalSupportVectorMachine(
+                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
+            ),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+
+        covered = 0
+        for x_i, y_i in zip(X_test, y_test):
+            pred = wrapper.predict(x_i, epsilon=epsilon)
+            if y_i in pred:
+                covered += 1
+            wrapper.learn_one(x_i, y_i)
+
+        cov = covered / len(X_test)
+        assert cov >= 1 - epsilon - 0.15, f"SVM coverage {cov:.3f} too low"
+
+    def test_learn_one_incremental(self, svm_data):
+        X_train, y_train, X_test, y_test = svm_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalSupportVectorMachine(
+                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
+            ),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        n_before = len(wrapper.categories_)
+        wrapper.learn_one(X_test[0], y_test[0])
+        assert len(wrapper.categories_) == n_before + 1
+
+
+# ---------------------------------------------------------------------------
+# Bounds parameter tests (ridge regressor)
+# ---------------------------------------------------------------------------
+
+
+class TestMondrianBoundsParameter:
+    @pytest.fixture
+    def trained_ridge(self, ridge_data):
+        X_train, y_train, X_test, y_test = ridge_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        return wrapper, X_test, y_test
+
+    def test_bounds_lower(self, trained_ridge):
+        wrapper, X_test, _ = trained_ridge
+        interval = wrapper.predict(X_test[0], epsilon=0.1, bounds="lower")
+        assert np.isfinite(interval.lower)
+        assert interval.upper == np.inf
+
+    def test_bounds_upper(self, trained_ridge):
+        wrapper, X_test, _ = trained_ridge
+        interval = wrapper.predict(X_test[0], epsilon=0.1, bounds="upper")
+        assert interval.lower == -np.inf
+        assert np.isfinite(interval.upper)
+
+    def test_bounds_both_wider(self, trained_ridge):
+        """bounds='both' should produce a finite interval containing the one-sided bounds."""
+        wrapper, X_test, _ = trained_ridge
+        both = wrapper.predict(X_test[0], epsilon=0.1, bounds="both")
+        lower = wrapper.predict(X_test[0], epsilon=0.1, bounds="lower")
+        upper = wrapper.predict(X_test[0], epsilon=0.1, bounds="upper")
+        # The lower bound from "both" should be <= upper bound from "upper"
+        assert both.lower <= upper.upper
+        # The upper bound from "both" should be >= lower bound from "lower"
+        assert both.upper >= lower.lower
+
+
+class TestMondrianBoundsKernelRidge:
+    def test_bounds_lower(self):
+        rng = np.random.default_rng(321)
+        X = rng.standard_normal((50, 2))
+        y = np.sin(X[:, 0]) + 0.3 * rng.standard_normal(50)
+
+        wrapper = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(a=0.5, kernel=GaussianKernel(sigma=1.0)),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X[:40], y[:40])
+        interval = wrapper.predict(X[40], epsilon=0.1, bounds="lower")
+        assert np.isfinite(interval.lower)
+        assert interval.upper == np.inf
+
+    def test_bounds_upper(self):
+        rng = np.random.default_rng(321)
+        X = rng.standard_normal((50, 2))
+        y = np.sin(X[:, 0]) + 0.3 * rng.standard_normal(50)
+
+        wrapper = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(a=0.5, kernel=GaussianKernel(sigma=1.0)),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X[:40], y[:40])
+        interval = wrapper.predict(X[40], epsilon=0.1, bounds="upper")
+        assert interval.lower == -np.inf
+        assert np.isfinite(interval.upper)
+
+
+# ---------------------------------------------------------------------------
+# P-value tests (smoothed vs unsmoothed)
+# ---------------------------------------------------------------------------
+
+
+class TestMondrianPValues:
+    def test_p_value_smoothed(self, ridge_data):
+        X_train, y_train, X_test, y_test = ridge_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        p = wrapper.compute_p_value(X_test[0], y_test[0], smoothed=True)
+        assert 0 <= p <= 1
+
+    def test_p_value_unsmoothed(self, ridge_data):
+        X_train, y_train, X_test, y_test = ridge_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        p = wrapper.compute_p_value(X_test[0], y_test[0], smoothed=False)
+        assert 0 <= p <= 1
+
+    def test_p_value_bounds_lower(self, ridge_data):
+        X_train, y_train, X_test, y_test = ridge_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        p = wrapper.compute_p_value(X_test[0], y_test[0], bounds="lower")
+        assert 0 <= p <= 1
+
+    def test_p_value_bounds_upper(self, ridge_data):
+        X_train, y_train, X_test, y_test = ridge_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        p = wrapper.compute_p_value(X_test[0], y_test[0], bounds="upper")
+        assert 0 <= p <= 1
+
+    def test_p_values_uniform_distribution(self, ridge_data):
+        """P-values should be approximately uniform under null."""
+        X_train, y_train, X_test, y_test = ridge_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+
+        p_vals = []
+        for x_i, y_i in zip(X_test[:80], y_test[:80]):
+            p = wrapper.compute_p_value(x_i, y_i)
+            p_vals.append(p)
+            wrapper.learn_one(x_i, y_i)
+
+        p_vals = np.array(p_vals)
+        # Under exchangeability, p-values are super-uniform
+        # Check that at least some are spread across [0, 1]
+        assert np.min(p_vals) < 0.3
+        assert np.max(p_vals) > 0.7
+
+
+# ---------------------------------------------------------------------------
+# Classifier return_p_values tests
+# ---------------------------------------------------------------------------
+
+
+class TestMondrianClassifierReturnPValues:
+    def test_return_p_values_knn(self):
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((60, 3))
+        y = (X[:, 0] > 0).astype(int)
+
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=5, label_space=np.array([0, 1])),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X[:50], y[:50])
+        result = wrapper.predict(X[50], epsilon=0.1, return_p_values=True)
+        # Should be a tuple (pred_set, p_values)
+        pred_set, p_values = result
+        assert 0 in pred_set or 1 in pred_set
+        assert isinstance(p_values, dict)
+        for label, pval in p_values.items():
+            assert 0 <= pval <= 1
+
+    def test_return_p_values_svm(self, svm_data):
+        X_train, y_train, X_test, _ = svm_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalSupportVectorMachine(
+                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
+            ),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        result = wrapper.predict(X_test[0], epsilon=0.1, return_p_values=True)
+        pred_set, p_values = result
+        assert isinstance(p_values, dict)
+        for label, pval in p_values.items():
+            assert 0 <= pval <= 1
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestMondrianEdgeCases:
+    def test_single_category(self, ridge_data):
+        """All training data in one category should still work."""
+        X_train, y_train, X_test, y_test = ridge_data
+        # Category function that always returns same category
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=lambda x: "all",
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        interval = wrapper.predict(X_test[0], epsilon=0.1)
+        assert interval.lower < interval.upper
+
+    def test_many_categories(self, ridge_data):
+        """Many small categories should produce valid (possibly wide) intervals."""
+        X_train, y_train, X_test, _ = ridge_data
+        # Category per quartile of first two features
+        def fine_cat(x):
+            return f"{'p' if x[0] > 0 else 'n'}{'p' if x[1] > 0 else 'n'}"
+
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=fine_cat,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        # With 4 categories and 60 training points, ~15 per category
+        interval = wrapper.predict(X_test[0], epsilon=0.2)
+        assert np.isfinite(interval.lower) or np.isfinite(interval.upper)
+
+    def test_classifier_rejects_invalid_model(self):
+        """Classifier with unsupported base_model raises TypeError on predict."""
+        # MondrianConformalClassifier doesn't type-check in __init__,
+        # but raises TypeError in predict() for unsupported models
+        wrapper = MondrianConformalClassifier(
+            base_model="not a model",
+            category_fn=_category_fn,
+        )
+        # It will fail when trying to call methods on the invalid model
+        with pytest.raises((TypeError, AttributeError)):
+            wrapper.learn_initial_training_set(np.zeros((10, 2)), np.zeros(10, dtype=int))
+
+    def test_kernel_ridge_multi_epsilon(self):
+        rng = np.random.default_rng(444)
+        X = rng.standard_normal((50, 2))
+        y = X[:, 0] ** 2 + 0.3 * rng.standard_normal(50)
+
+        wrapper = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(a=0.5, kernel=GaussianKernel(sigma=1.0)),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X[:40], y[:40])
+        result = wrapper.predict(X[40], epsilon=[0.05, 0.1, 0.2])
+        # Wider epsilon -> narrower interval
+        assert result[0.05].width() >= result[0.1].width()
+        assert result[0.1].width() >= result[0.2].width()

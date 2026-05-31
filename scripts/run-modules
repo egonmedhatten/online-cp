@@ -10,7 +10,7 @@ set -e
 for module in src/online_cp/*.py
 do
 	[ "$module" == src/online_cp/__init__.py ] && continue
-	echo python $module
+	echo uv run python $module
 	/usr/bin/time -f "%es  (python $module)\n" \
 	python $module
 done

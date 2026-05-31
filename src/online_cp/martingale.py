@@ -1611,6 +1611,7 @@ class VilleWrapper:
         self.threshold = threshold
         self._log_max = 0.0
         self._n = 0
+        self._rejection_time = None
 
     @property
     def log_max(self):
@@ -1627,12 +1628,19 @@ class VilleWrapper:
         """Whether the exchangeability hypothesis has been rejected."""
         return self._log_max >= np.log(self.threshold)
 
+    @property
+    def rejection_time(self):
+        """Step at which the hypothesis was first rejected, or None."""
+        return self._rejection_time
+
     def update(self, p):
         """Update the inner martingale and track the running maximum."""
         self.martingale.update(p)
         self._n += 1
         if self.martingale.logM > self._log_max:
             self._log_max = self.martingale.logM
+        if self._rejection_time is None and self._log_max >= np.log(self.threshold):
+            self._rejection_time = self._n
 
     def alarm(self, threshold=None):
         """Check whether max(S_n) exceeds the threshold.

@@ -160,3 +160,116 @@ class TestPlotting:
         ax = plot_martingale(mart)
         assert ax is not None
         assert len(ax.lines) >= 1
+
+    def test_plot_detector_ville(self, uniform_p_values):
+        import matplotlib
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_detector
+        from online_cp import SimpleJumper, VilleWrapper
+
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=20)
+        for p in uniform_p_values[:50]:
+            ville.update(p)
+
+        ax = plot_detector(ville)
+        assert ax is not None
+        assert len(ax.lines) >= 2  # trajectory + running max + threshold
+
+    def test_plot_detector_ville_with_alarm(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_detector
+        from online_cp import SimpleJumper, VilleWrapper
+
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=5)
+        # Feed very small p-values to trigger alarm
+        for _ in range(50):
+            ville.update(0.01)
+
+        assert ville.rejected
+        assert ville.rejection_time is not None
+        ax = plot_detector(ville, change_point=10)
+        assert ax is not None
+
+    def test_plot_detector_cusum(self, uniform_p_values):
+        import matplotlib
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_detector
+        from online_cp import SimpleJumper, CUSUMWrapper
+
+        sj = SimpleJumper(J=0.1)
+        cusum = CUSUMWrapper(sj)
+        for p in uniform_p_values[:50]:
+            cusum.update(p)
+
+        ax = plot_detector(cusum, threshold=100)
+        assert ax is not None
+        assert len(ax.lines) >= 1
+
+    def test_plot_detector_cusum_with_barrier(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_detector
+        from online_cp import SimpleJumper, CUSUMWrapper
+
+        sj = SimpleJumper(J=0.1)
+        cusum = CUSUMWrapper(sj, barrier_slope=0.01)
+        for _ in range(50):
+            cusum.update(0.5)
+
+        ax = plot_detector(cusum, threshold=100)
+        assert ax is not None
+
+    def test_plot_detector_sr(self, uniform_p_values):
+        import matplotlib
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_detector
+        from online_cp import SimpleJumper, ShiryaevRobertsWrapper
+
+        sj = SimpleJumper(J=0.1)
+        sr = ShiryaevRobertsWrapper(sj)
+        for p in uniform_p_values[:50]:
+            sr.update(p)
+
+        ax = plot_detector(sr, threshold=100)
+        assert ax is not None
+        assert len(ax.lines) >= 1
+
+    def test_plot_detector_sr_with_alarm(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_detector
+        from online_cp import SimpleJumper, ShiryaevRobertsWrapper
+
+        sj = SimpleJumper(J=0.1)
+        sr = ShiryaevRobertsWrapper(sj)
+        # Small p-values to trigger alarm
+        for _ in range(50):
+            sr.update(0.01)
+
+        ax = plot_detector(sr, threshold=20, change_point=5)
+        assert ax is not None
+
+    def test_plot_detector_invalid_type(self):
+        from online_cp.plotting import plot_detector
+        with pytest.raises(TypeError, match="Expected VilleWrapper"):
+            plot_detector("not a wrapper")
+
+    def test_ville_rejection_time(self):
+        from online_cp import SimpleJumper, VilleWrapper
+
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=5)
+        # Uniform p-values → no rejection
+        rng = np.random.default_rng(123)
+        for p in rng.uniform(size=20):
+            ville.update(p)
+        assert ville.rejection_time is None
+
+        # Now push small values
+        for _ in range(100):
+            ville.update(0.01)
+        assert ville.rejected
+        assert 21 <= ville.rejection_time <= 120  # fires within small-p region

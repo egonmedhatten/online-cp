@@ -143,6 +143,9 @@ from online_cp.plotting import (
     plot_coverage as plot_coverage,
 )
 from online_cp.plotting import (
+    plot_detector as plot_detector,
+)
+from online_cp.plotting import (
     plot_intervals as plot_intervals,
 )
 from online_cp.plotting import (

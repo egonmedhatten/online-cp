@@ -314,8 +314,9 @@ class _BadShapeProbLearner(_ToyProbLearner):
 
 class TestConformalClassifierWrapper:
     def test_soft_whitelist_warns_for_non_recommended_estimator(self):
-        with pytest.warns(UserWarning, match="not in the recommended set"):
+        with pytest.warns(UserWarning) as record:
             ConformalClassifierWrapper(_ToyProbLearner(), label_space=np.array([10, 20]), rnd_state=0)
+        assert any("not in the recommended set" in str(w.message) for w in record)
 
     def test_recommended_name_does_not_emit_support_tier_warning(self):
         with warnings.catch_warnings(record=True) as caught:
@@ -375,8 +376,9 @@ class TestConformalClassifierWrapper:
             cp = ConformalClassifierWrapper(_BadNormalizedProbLearner(), label_space=np.array([0, 1]), rnd_state=0)
 
         cp.learn_initial_training_set(X, y)
-        with pytest.warns(UserWarning, match="not normalized"):
+        with pytest.warns(UserWarning) as record:
             Gamma, p_values = cp.predict(np.array([3.0]), return_p_values=True)
+        assert any("not normalized" in str(w.message) for w in record)
 
         assert set(p_values.keys()) == {0, 1}
         assert set(Gamma.elements).issubset({0, 1})

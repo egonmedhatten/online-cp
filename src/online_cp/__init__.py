@@ -128,6 +128,9 @@ from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,
 )
 from online_cp.regressors import (
+    ConformalNearestNeighboursRegressor as ConformalNearestNeighboursRegressor,
+)
+from online_cp.regressors import (
     ConformalRidgeRegressor as ConformalRidgeRegressor,
 )
 from online_cp.regressors import (

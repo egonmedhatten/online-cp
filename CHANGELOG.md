@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ConformalNearestNeighboursRegressor`: Online conformal k-NN regressor (§2.4, ALRW2) with leave-one-out k-NN predictions, configurable k, mean/median aggregation, and custom distance functions.
 - `VilleWrapper`: Ville's inequality wrapper for any conformal test martingale — rejects when running maximum exceeds threshold (§8.4.1, ALRW2).
 - `SleeperStayer`: Sleeper/Stayer martingale (Algorithm 9.4, ALRW2) for change-point detection.
 - `SleeperDrifter`: Sleeper/Drifter martingale (Algorithm 9.5, ALRW2) for gradual drift detection.

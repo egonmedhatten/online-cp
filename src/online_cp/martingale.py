@@ -1602,7 +1602,7 @@ class VilleWrapper:
     >>> ville = VilleWrapper(sj, threshold=20)
     >>> for _ in range(10):
     ...     ville.update(0.5)
-    >>> ville.rejected
+    >>> bool(ville.rejected)
     False
     """
 

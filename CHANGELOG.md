@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `VilleWrapper`: Ville's inequality wrapper for any conformal test martingale — rejects when running maximum exceeds threshold (§8.4.1, ALRW2).
 - `SleeperStayer`: Sleeper/Stayer martingale (Algorithm 9.4, ALRW2) for change-point detection.
 - `SleeperDrifter`: Sleeper/Drifter martingale (Algorithm 9.5, ALRW2) for gradual drift detection.
 - `CUSUMWrapper`: Page CUSUM wrapper for any conformal test martingale (§8.3, ALRW2).
@@ -17,8 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Martingale architecture redesigned: martingales are now pure evidence processes. Statistical decision procedures (`VilleWrapper`, `CUSUMWrapper`, `ShiryaevRobertsWrapper`) are separate wrappers.
 - CPS module refactored: removed unnecessary parameter constraints, improved performance with `solve_triangular`, improved tie handling in `NearestNeighboursPredictionMachine`.
 - `GaussianKDE` numba functions use `cache=False` to avoid stale bytecode cache issues.
+
+### Removed
+
+- `update_martingale_value()` alias — use `.update(p)` directly.
+- `warnings` and `warning_level` parameters removed from all martingale constructors.
+- `check_warning()`, `.max`, `.log_max` removed from martingale base class (use `VilleWrapper` instead).
 
 ## [0.2.0] — 2026-05-19
 

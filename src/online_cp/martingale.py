@@ -7,10 +7,11 @@ particle filter, expert aggregation) for constructing the martingale.
 
 import math
 import warnings
+from copy import deepcopy
 
 import numpy as np
 from scipy.integrate import quad
-from scipy.optimize import minimize, minimize_scalar
+from scipy.optimize import brentq, minimize, minimize_scalar
 from scipy.special import betaln, gammainc, gammaln, logsumexp
 from scipy.stats import beta, norm, uniform
 
@@ -37,6 +38,7 @@ __all__ = [
     "SimpleMixtureMartingale",
     "SleeperStayer",
     "SleeperDrifter",
+    "VilleWrapper",
     "CUSUMWrapper",
     "ShiryaevRobertsWrapper",
     "PiecewiseConstantBetting",
@@ -879,25 +881,81 @@ class ConformalTestMartingale:
         Protection function (CDF) for the next step.
     """
 
-    def __init__(self, warnings=True, warning_level=100, store_p_values=True):
+    def __init__(self, store_p_values=True):
         self.logM = 0.0
-        self.log_max = 0.0
         self.p_values = []
         self.store_p_values = store_p_values
         self.log_martingale_values = [0.0]
-        self.warning_level = warning_level
-        self.warnings = warnings
-        self._warned = False
-        self.b_n = lambda x: 1.0
-        self.B_n = lambda x: x
+        self._b_n_cache = lambda x: 1.0
+        self._B_n_cache = lambda x: x
+        self._B_n_inv_cache = None
+        self._b_n_stale = False
+
+    def _mark_stale(self):
+        """Invalidate all cached betting/protection functions."""
+        self._b_n_stale = True
+        self._B_n_inv_cache = None
+
+    @property
+    def b_n(self):
+        """Betting function for the next step (lazily computed)."""
+        if self._b_n_stale:
+            self._B_n_inv_cache = None
+            self._update_exposed_functions()
+            self._b_n_stale = False
+        return self._b_n_cache
+
+    @b_n.setter
+    def b_n(self, value):
+        self._b_n_cache = value
+        self._b_n_stale = False
+
+    @property
+    def B_n(self):
+        """Protection function (CDF) for the next step (lazily computed)."""
+        if self._b_n_stale:
+            self._B_n_inv_cache = None
+            self._update_exposed_functions()
+            self._b_n_stale = False
+        return self._B_n_cache
+
+    @B_n.setter
+    def B_n(self, value):
+        self._B_n_cache = value
+        self._b_n_stale = False
+
+    @property
+    def B_n_inv(self):
+        """Inverse protection function (lazily computed with numerical fallback)."""
+        if self._b_n_stale:
+            self._B_n_inv_cache = None
+            self._update_exposed_functions()
+            self._b_n_stale = False
+        if self._B_n_inv_cache is None:
+            # Numerical fallback: invert the current B_n via brentq
+            B_n_frozen = self._B_n_cache
+
+            def _inv(x, _B=B_n_frozen):
+                if x <= 0.0:
+                    return 0.0
+                if x >= 1.0:
+                    return 1.0
+                return brentq(lambda u: _B(u) - x, 0.0, 1.0)
+
+            self._B_n_inv_cache = _inv
+        return self._B_n_inv_cache
+
+    @B_n_inv.setter
+    def B_n_inv(self, value):
+        self._B_n_inv_cache = value
+
+    def _update_exposed_functions(self):
+        """Compute and cache b_n/B_n. Subclasses override this."""
+        pass
 
     @property
     def M(self):
         return np.exp(self.logM)
-
-    @property
-    def max(self):
-        return np.exp(self.log_max)
 
     @property
     def martingale_values(self):
@@ -907,21 +965,9 @@ class ConformalTestMartingale:
     def log10_martingale_values(self):
         return [logM / np.log(10) for logM in self.log_martingale_values]
 
-    def check_warning(self):
-        if self.log_max >= np.log(self.warning_level) and self.warnings and not self._warned:
-            warnings.warn(
-                f"Exchangeability assumption likely violated: Max martingale value is {self.max}", stacklevel=2
-            )
-            self._warned = True
-
     def update(self, p):
         """Incorporate a new p-value. Subclasses must implement this."""
         raise NotImplementedError
-
-    # Backward compatibility alias
-    def update_martingale_value(self, p):
-        """Deprecated: use update(p) instead."""
-        return self.update(p)
 
 
 class PluginMartingale(ConformalTestMartingale):
@@ -964,12 +1010,10 @@ class PluginMartingale(ConformalTestMartingale):
         self,
         betting_strategy=GaussianKDE,
         min_sample_size=100,
-        warnings=True,
-        warning_level=100,
         store_p_values=True,
         **kwargs,
     ):
-        super().__init__(warnings, warning_level, store_p_values)
+        super().__init__(store_p_values)
         self.min_sample_size = min_sample_size
         self._n = 0
 
@@ -991,12 +1035,12 @@ class PluginMartingale(ConformalTestMartingale):
     def _update_exposed_functions(self):
         """Set b_n and B_n for the *next* step (using current strategy state)."""
         lam = self._mixing_parameter(self._n)
-        strategy = self.strategy
+        strategy_snapshot = deepcopy(self.strategy)
 
-        def b_n(x, _lam=lam, _s=strategy):
+        def b_n(x, _lam=lam, _s=strategy_snapshot):
             return _lam * _s.bet(x) + (1 - _lam)
 
-        def B_n(x, _lam=lam, _s=strategy):
+        def B_n(x, _lam=lam, _s=strategy_snapshot):
             return _lam * _s.integrate(x) + (1 - _lam) * x
 
         self.b_n = b_n
@@ -1022,13 +1066,8 @@ class PluginMartingale(ConformalTestMartingale):
         self._n += 1
         self.strategy.update(p)
 
-        # 5. Expose next step's functions
-        self._update_exposed_functions()
-
-        if self.logM > self.log_max:
-            self.log_max = self.logM
-
-        self.check_warning()
+        # 5. Mark b_n/B_n stale (lazy recomputation on access)
+        self._mark_stale()
 
 
 class SimpleJumper(ConformalTestMartingale):
@@ -1059,8 +1098,8 @@ class SimpleJumper(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, J=0.01, E=None, warning_level=100, warnings=True, store_p_values=True, **kwargs):
-        super().__init__(warnings, warning_level, store_p_values)
+    def __init__(self, J=0.01, E=None, store_p_values=True, **kwargs):
+        super().__init__(store_p_values)
         self.J = J
         if E is None:
             self.E = [-1, -0.5, 0, 0.5, 1]
@@ -1099,7 +1138,11 @@ class SimpleJumper(ConformalTestMartingale):
         self.logM = self.log_C
         self.log_martingale_values.append(self.logM)
 
-        # Effective betting function for next step: wealth-weighted mixture
+        # Mark b_n/B_n stale (lazy recomputation on access)
+        self._mark_stale()
+
+    def _update_exposed_functions(self):
+        """Compute wealth-weighted effective betting function for next step."""
         # b_n(u) = sum_eps w_eps * (1 + eps*(u - 0.5))
         #        = 1 + eps_bar * (u - 0.5)
         # where eps_bar = (1-J) * sum_eps eps * exp(log_C_eps - log_C)
@@ -1115,11 +1158,6 @@ class SimpleJumper(ConformalTestMartingale):
             else u
         )
 
-        if self.logM > self.log_max:
-            self.log_max = self.logM
-
-        self.check_warning()
-
 
 class CompositeJumper(ConformalTestMartingale):
     """Composite Jumper that averages over multiple jump rates.
@@ -1133,14 +1171,14 @@ class CompositeJumper(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, J=None, warnings=True, warning_level=100, store_p_values=True):
-        super().__init__(warnings, warning_level, store_p_values)
+    def __init__(self, J=None, store_p_values=True):
+        super().__init__(store_p_values)
         if J is None:
             self.J = [10 ** (-4), 10 ** (-3), 10 ** (-2), 10 ** (-1), 1]
         else:
             self.J = J
 
-        self.Jumpers = {j: SimpleJumper(J=j, warnings=False, store_p_values=False) for j in self.J}
+        self.Jumpers = {j: SimpleJumper(J=j, store_p_values=False) for j in self.J}
 
     def update(self, p):
         if self.store_p_values:
@@ -1154,7 +1192,12 @@ class CompositeJumper(ConformalTestMartingale):
 
         self.log_martingale_values.append(self.logM)
 
-        # Wealth-weighted betting function
+        # Mark b_n/B_n stale (lazy recomputation on access)
+        self._mark_stale()
+
+    def _update_exposed_functions(self):
+        """Compute wealth-weighted betting function from sub-jumpers."""
+        log_M_values = [m.logM for m in self.Jumpers.values()]
         log_sum_M = self.logM + np.log(len(self.Jumpers))
         weights = np.exp(np.array(log_M_values) - log_sum_M)
 
@@ -1163,11 +1206,6 @@ class CompositeJumper(ConformalTestMartingale):
 
         self.b_n = lambda u: np.dot(weights, [f(u) for f in current_b_ns])
         self.B_n = lambda u: np.dot(weights, [F(u) for F in current_B_ns])
-
-        if self.logM > self.log_max:
-            self.log_max = self.logM
-
-        self.check_warning()
 
 
 class SleeperStayer(ConformalTestMartingale):
@@ -1202,8 +1240,8 @@ class SleeperStayer(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, R=0.001, G=10, warnings=True, warning_level=100, store_p_values=True):
-        super().__init__(warnings, warning_level, store_p_values)
+    def __init__(self, R=0.001, G=10, store_p_values=True):
+        super().__init__(store_p_values)
         self.R = R
         self.G = G
 
@@ -1212,14 +1250,18 @@ class SleeperStayer(ConformalTestMartingale):
         self._grid = [(a, b) for a in grid_vals for b in grid_vals]
         self._n_experts = len(self._grid)
 
-        # Precompute betting values for each expert: left = b/a, right = (1-b)/(1-a)
+        # Precompute betting values for each expert in log-space
         self._left = np.array([b / a for a, b in self._grid])
         self._right = np.array([(1 - b) / (1 - a) for a, b in self._grid])
+        self._log_left = np.log(self._left)
+        self._log_right = np.log(self._right)
         self._thresholds = np.array([a for a, _ in self._grid])
 
-        # Capital: all starts in sleeping account
-        self._S_active = np.zeros(self._n_experts)
-        self._S_sleep = 1.0
+        # Capital in log-space: all starts in sleeping account
+        self._log_S_active = np.full(self._n_experts, -np.inf)  # no capital yet
+        self._log_S_sleep = 0.0  # log(1) = 0
+        self._log_1_minus_R = math.log(1.0 - R)
+        self._log_R_div_n = math.log(R / self._n_experts)
         self._n = 0
 
     def update(self, p):
@@ -1228,29 +1270,31 @@ class SleeperStayer(ConformalTestMartingale):
 
         self._n += 1
 
-        # Step 1: Bet — multiply each active expert by f_{(a,b)}(p)
-        # (Only experts that received capital in previous steps bet)
-        bets = np.where(p <= self._thresholds, self._left, self._right)
-        self._S_active *= bets
+        # Step 1: Bet — add log(bet) to each active expert's log-capital
+        log_bets = np.where(p <= self._thresholds, self._log_left, self._log_right)
+        self._log_S_active += log_bets
 
-        # Step 2: Output — total capital is the martingale value
-        S_n = self._S_sleep + self._S_active.sum()
-        self.logM = np.log(max(S_n, 1e-300))
+        # Step 2: Output — total capital = exp(log_S_sleep) + sum(exp(log_S_active))
+        # Compute in log-space via logsumexp
+        log_active_sum = logsumexp(self._log_S_active)
+        self.logM = np.logaddexp(self._log_S_sleep, log_active_sum)
         self.log_martingale_values.append(self.logM)
 
-        if self.logM > self.log_max:
-            self.log_max = self.logM
-
         # Step 3: Redistribute — move fraction R of sleeping capital to active experts
-        # (prepares experts for next step's bet)
-        transfer = self.R * self._S_sleep / self._n_experts
-        self._S_active += transfer
-        self._S_sleep *= (1 - self.R)
+        # log(transfer) = log(R / n_experts) + log_S_sleep
+        log_transfer = self._log_R_div_n + self._log_S_sleep
+        self._log_S_active = np.logaddexp(self._log_S_active, log_transfer)
+        self._log_S_sleep += self._log_1_minus_R
 
-        # Expose b_n / B_n as wealth-weighted combination of active experts
-        total_active = self._S_active.sum()
-        if total_active > 0:
-            weights = self._S_active / total_active
+        # Mark b_n/B_n stale (lazy recomputation on access)
+        self._mark_stale()
+
+    def _update_exposed_functions(self):
+        """Set b_n/B_n as wealth-weighted combination of active experts."""
+        log_active_sum = logsumexp(self._log_S_active)
+        if np.isfinite(log_active_sum):
+            log_weights = self._log_S_active - log_active_sum
+            weights = np.exp(log_weights)
             left_vals = self._left
             right_vals = self._right
             thresholds = self._thresholds
@@ -1271,8 +1315,6 @@ class SleeperStayer(ConformalTestMartingale):
 
             self.b_n = _b_n
             self.B_n = _B_n
-
-        self.check_warning()
 
 
 class SleeperDrifter(ConformalTestMartingale):
@@ -1311,9 +1353,8 @@ class SleeperDrifter(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, R=0.001, G=10, M=100, warnings=True, warning_level=100,
-                 store_p_values=True):
-        super().__init__(warnings, warning_level, store_p_values)
+    def __init__(self, R=0.001, G=10, M=100, store_p_values=True):
+        super().__init__(store_p_values)
         self.R = R
         self.G = G
         self._batch_interval = M
@@ -1323,11 +1364,11 @@ class SleeperDrifter(ConformalTestMartingale):
         self._grid = [(a, b) for a in grid_vals for b in grid_vals]
         self._n_grid = len(self._grid)
 
-        # Active experts: dict of (batch_index, grid_index) -> capital
-        self._experts = {}  # (i, j) -> capital
-        self._S_sleep = 1.0
+        # Active experts: dict of (batch_index, grid_index) -> log-capital
+        self._experts = {}  # (i, j) -> log_capital
+        self._log_S_sleep = 0.0  # log(1) = 0
         self._n = 0
-        self._prune_threshold = 1e-15
+        self._log_prune_threshold = math.log(1e-15)
 
     def _get_drifted_threshold(self, batch_idx, grid_idx):
         """Compute a' = (i*M/n)*a + (1 - i*M/n)*b for expert (i, a, b)."""
@@ -1342,59 +1383,73 @@ class SleeperDrifter(ConformalTestMartingale):
 
         self._n += 1
 
-        # Step 1: Bet — update all active experts
+        # Step 1: Bet — update all active experts in log-space
         keys_to_remove = []
-        for key, capital in self._experts.items():
+        for key, log_capital in self._experts.items():
             batch_idx, grid_idx = key
             a_prime = self._get_drifted_threshold(batch_idx, grid_idx)
             _, b = self._grid[grid_idx]
 
             # Bet using f_{(a', b)}(p)
             if a_prime <= 0 or a_prime >= 1:
-                bet_val = 1.0  # Degenerate case, no bet
+                log_bet_val = 0.0  # log(1) = no bet
             else:
                 bet_val = b / a_prime if p <= a_prime else (1 - b) / (1 - a_prime)
+                log_bet_val = math.log(bet_val)
 
-            new_capital = capital * bet_val
-            if new_capital < self._prune_threshold:
+            new_log_capital = log_capital + log_bet_val
+            if new_log_capital < self._log_prune_threshold:
                 keys_to_remove.append(key)
             else:
-                self._experts[key] = new_capital
+                self._experts[key] = new_log_capital
 
         for key in keys_to_remove:
             del self._experts[key]
 
-        # Step 2: Output — total capital
-        total_active = sum(self._experts.values())
-        S_n = self._S_sleep + total_active
-        self.logM = np.log(max(S_n, 1e-300))
+        # Step 2: Output — total capital in log-space
+        if self._experts:
+            log_active_sum = logsumexp(list(self._experts.values()))
+            self.logM = np.logaddexp(self._log_S_sleep, log_active_sum)
+        else:
+            self.logM = self._log_S_sleep
         self.log_martingale_values.append(self.logM)
-
-        if self.logM > self.log_max:
-            self.log_max = self.logM
 
         # Step 3: Wake new batch (if n is divisible by M) — prepares for next step
         if self._n % self._batch_interval == 0:
             batch_idx = self._n // self._batch_interval
-            transfer_per_expert = self.R * self._batch_interval * self._S_sleep / self._n_grid
-            self._S_sleep *= (1 - self.R * self._batch_interval)
-            # Clamp sleeping capital
-            self._S_sleep = max(self._S_sleep, 0.0)
+            # log(transfer_per_expert) = log(R * M) + log_S_sleep - log(n_grid)
+            log_transfer = (math.log(self.R * self._batch_interval)
+                           + self._log_S_sleep
+                           - math.log(self._n_grid))
+            # S_sleep *= (1 - R*M), clamped to avoid negative
+            rm = self.R * self._batch_interval
+            if rm >= 1.0:
+                self._log_S_sleep = -np.inf
+            else:
+                self._log_S_sleep += math.log(1.0 - rm)
             for j in range(self._n_grid):
                 key = (batch_idx, j)
-                self._experts[key] = self._experts.get(key, 0.0) + transfer_per_expert
+                if key in self._experts:
+                    self._experts[key] = np.logaddexp(self._experts[key], log_transfer)
+                else:
+                    self._experts[key] = log_transfer
 
-        # Expose b_n / B_n as wealth-weighted function for next step
-        total_active = sum(self._experts.values())
-        if total_active > 0 and self._experts:
+        # Mark b_n/B_n stale (lazy recomputation on access)
+        self._mark_stale()
+
+    def _update_exposed_functions(self):
+        """Set b_n/B_n as wealth-weighted function for next step."""
+        if self._experts:
+            log_vals = list(self._experts.values())
+            log_total_active = logsumexp(log_vals)
             expert_items = list(self._experts.items())
-            total = total_active
+            log_total = log_total_active
             n_next = self._n + 1
 
-            def _b_n(u, _items=expert_items, _total=total, _n=n_next,
+            def _b_n(u, _items=expert_items, _log_total=log_total, _n=n_next,
                      _grid=self._grid, _M=self._batch_interval):
                 val = 0.0
-                for (bi, gi), cap in _items:
+                for (bi, gi), log_cap in _items:
                     a, b = _grid[gi]
                     ratio = min((bi * _M) / _n, 1.0)
                     a_prime = ratio * a + (1 - ratio) * b
@@ -1402,13 +1457,32 @@ class SleeperDrifter(ConformalTestMartingale):
                         f = b / a_prime if u <= a_prime else (1 - b) / (1 - a_prime)
                     else:
                         f = 1.0
-                    val += (cap / _total) * f
+                    val += math.exp(log_cap - _log_total) * f
+                return val
+
+            def _B_n(u, _items=expert_items, _log_total=log_total, _n=n_next,
+                     _grid=self._grid, _M=self._batch_interval):
+                if u <= 0.0:
+                    return 0.0
+                if u >= 1.0:
+                    return 1.0
+                val = 0.0
+                for (bi, gi), log_cap in _items:
+                    a, b = _grid[gi]
+                    ratio = min((bi * _M) / _n, 1.0)
+                    a_prime = ratio * a + (1 - ratio) * b
+                    w = math.exp(log_cap - _log_total)
+                    if 0 < a_prime < 1:
+                        if u <= a_prime:
+                            val += w * (b / a_prime) * u
+                        else:
+                            val += w * (b + (1 - b) / (1 - a_prime) * (u - a_prime))
+                    else:
+                        val += w * u
                 return val
 
             self.b_n = _b_n
-            self.B_n = lambda u: u  # No analytic CDF for drifting mixture
-
-        self.check_warning()
+            self.B_n = _B_n
 
 
 class SimpleMixtureMartingale(ConformalTestMartingale):
@@ -1456,7 +1530,7 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
             log_incomplete_gamma = log_gamma_n_plus_1 + np.log(val_gammainc)
         return -L + log_incomplete_gamma - (n + 1) * np.log(arg)
 
-    def _update_b_n(self):
+    def _update_exposed_functions(self):
         """Set analytic b_n and B_n for the next step.
 
         b_n(p) = M(n+1, sum_log_p + log(p)) / M(n, sum_log_p)
@@ -1495,11 +1569,86 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
             self.p_values.append(p)
         self.log_martingale_values.append(self.logM)
 
-        if self.logM > self.log_max:
-            self.log_max = self.logM
+        self._mark_stale()
 
-        self._update_b_n()
-        self.check_warning()
+
+class VilleWrapper:
+    """Ville's inequality procedure for change-point detection.
+
+    The simplest test based on a conformal test martingale: reject the
+    exchangeability hypothesis when the running maximum of the martingale
+    exceeds a threshold c. By Ville's inequality:
+
+        P(∃n : S_n >= c) <= 1/c
+
+    So threshold c = 20 gives a 5% significance level, c = 100 gives 1%, etc.
+
+    Parameters
+    ----------
+    martingale : ConformalTestMartingale
+        The underlying martingale to wrap.
+    threshold : float
+        Default alarm threshold (default 20, i.e. 5% significance).
+
+    References
+    ----------
+    Vovk, Gammerman & Shafer (2022). *Algorithmic Learning in a Random World*,
+    2nd edition, §8.4.1 (The Ville Procedure). Cambridge University Press.
+
+    Examples
+    --------
+    >>> from online_cp.martingale import SimpleJumper, VilleWrapper
+    >>> sj = SimpleJumper(J=0.1)
+    >>> ville = VilleWrapper(sj, threshold=20)
+    >>> for _ in range(10):
+    ...     ville.update(0.5)
+    >>> ville.rejected
+    False
+    """
+
+    def __init__(self, martingale, threshold=20):
+        self.martingale = martingale
+        self.threshold = threshold
+        self._log_max = 0.0
+        self._n = 0
+
+    @property
+    def log_max(self):
+        """Log of the running maximum of the martingale."""
+        return self._log_max
+
+    @property
+    def max(self):
+        """Running maximum of the martingale."""
+        return np.exp(self._log_max)
+
+    @property
+    def rejected(self):
+        """Whether the exchangeability hypothesis has been rejected."""
+        return self._log_max >= np.log(self.threshold)
+
+    def update(self, p):
+        """Update the inner martingale and track the running maximum."""
+        self.martingale.update(p)
+        self._n += 1
+        if self.martingale.logM > self._log_max:
+            self._log_max = self.martingale.logM
+
+    def alarm(self, threshold=None):
+        """Check whether max(S_n) exceeds the threshold.
+
+        Parameters
+        ----------
+        threshold : float or None
+            Override threshold. If None, uses the threshold set at construction.
+
+        Returns
+        -------
+        bool
+            True if the running maximum exceeds the threshold.
+        """
+        t = threshold if threshold is not None else self.threshold
+        return self._log_max >= np.log(t)
 
 
 class CUSUMWrapper:

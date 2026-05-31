@@ -18,6 +18,7 @@ from online_cp.martingale import (
     SimpleMixtureMartingale,
     SleeperDrifter,
     SleeperStayer,
+    VilleWrapper,
 )
 
 # ─── Base martingale properties ───────────────────────────────────────────────
@@ -29,11 +30,11 @@ class TestMartingaleBaseProperties:
     @pytest.mark.parametrize(
         "MartingaleClass,kwargs",
         [
-            (SimpleJumper, {"warnings": False}),
-            (CompositeJumper, {"warnings": False}),
-            (SimpleMixtureMartingale, {"warnings": False}),
-            (SleeperStayer, {"warnings": False, "R": 0.01, "G": 5}),
-            (SleeperDrifter, {"warnings": False, "R": 0.01, "G": 5, "M": 10}),
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
         ],
     )
     def test_starts_at_one(self, MartingaleClass, kwargs):
@@ -45,11 +46,11 @@ class TestMartingaleBaseProperties:
     @pytest.mark.parametrize(
         "MartingaleClass,kwargs",
         [
-            (SimpleJumper, {"warnings": False}),
-            (CompositeJumper, {"warnings": False}),
-            (SimpleMixtureMartingale, {"warnings": False}),
-            (SleeperStayer, {"warnings": False, "R": 0.01, "G": 5}),
-            (SleeperDrifter, {"warnings": False, "R": 0.01, "G": 5, "M": 10}),
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
         ],
     )
     def test_M_equals_exp_logM(self, MartingaleClass, kwargs, uniform_p_values):
@@ -58,21 +59,62 @@ class TestMartingaleBaseProperties:
             m.update(p)
         assert np.isclose(m.M, np.exp(m.logM))
 
-    @pytest.mark.parametrize(
-        "MartingaleClass,kwargs",
-        [
-            (SimpleJumper, {"warnings": False}),
-            (CompositeJumper, {"warnings": False}),
-            (SimpleMixtureMartingale, {"warnings": False}),
-            (SleeperStayer, {"warnings": False, "R": 0.01, "G": 5}),
-            (SleeperDrifter, {"warnings": False, "R": 0.01, "G": 5, "M": 10}),
-        ],
-    )
-    def test_max_geq_current(self, MartingaleClass, kwargs, uniform_p_values):
-        m = MartingaleClass(**kwargs)
+
+# ─── VilleWrapper ─────────────────────────────────────────────────────────────
+
+
+class TestVilleWrapper:
+    def test_starts_not_rejected(self):
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=20)
+        assert not ville.rejected
+        assert ville.max == 1.0
+
+    def test_tracks_running_max(self, uniform_p_values):
+        """VilleWrapper.max should track the running maximum."""
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=100)
+        prev_max = ville.max
         for p in uniform_p_values[:50]:
-            m.update(p)
-            assert m.log_max >= m.logM
+            ville.update(p)
+            assert ville.max >= prev_max or np.isclose(ville.max, prev_max)
+            prev_max = ville.max
+        # Max should always be >= current value
+        assert ville.log_max >= sj.logM
+
+    def test_detects_changepoint(self):
+        """Under strong alternative, Ville should reject."""
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=20)
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.3, 2, size=200):
+            ville.update(p)
+        assert ville.rejected
+        assert ville.alarm(20)
+
+    def test_alarm_custom_threshold(self):
+        """alarm(threshold) should override the default."""
+        sj = SimpleJumper(J=0.1)
+        ville = VilleWrapper(sj, threshold=1e100)  # impossibly high default
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.3, 2, size=200):
+            ville.update(p)
+        assert not ville.rejected  # default threshold too high
+        assert ville.alarm(20)  # override with reasonable threshold
+
+    def test_no_false_alarm_under_null(self):
+        """Under H0 (uniform), should not reject at 5% level over short horizon."""
+        rng = np.random.default_rng(123)
+        rejections = 0
+        for _ in range(20):
+            sj = SimpleJumper(J=0.1)
+            ville = VilleWrapper(sj, threshold=20)
+            for p in rng.uniform(size=200):
+                ville.update(p)
+            if ville.rejected:
+                rejections += 1
+        # Should rarely reject (Ville guarantees <= 5% per run)
+        assert rejections <= 5  # Allow generous margin for 20 runs
 
 
 # ─── SimpleJumper ─────────────────────────────────────────────────────────────
@@ -81,7 +123,7 @@ class TestMartingaleBaseProperties:
 class TestSimpleJumper:
     def test_grows_under_alternative(self, skewed_p_values):
         """Under H1 (skewed towards 0), martingale should grow."""
-        m = SimpleJumper(J=0.1, warnings=False)
+        m = SimpleJumper(J=0.1)
         for p in skewed_p_values:
             m.update(p)
         assert m.logM > 0, f"Expected growth under H1, got logM={m.logM}"
@@ -91,7 +133,7 @@ class TestSimpleJumper:
         rng = np.random.default_rng(123)
         final_logMs = []
         for _ in range(20):
-            m = SimpleJumper(J=0.1, warnings=False)
+            m = SimpleJumper(J=0.1)
             pvals = rng.uniform(size=200)
             for p in pvals:
                 m.update(p)
@@ -101,7 +143,7 @@ class TestSimpleJumper:
 
     def test_B_n_boundary_values(self, uniform_p_values):
         """B_n(0) should be 0, B_n(1) should be 1."""
-        m = SimpleJumper(J=0.1, warnings=False)
+        m = SimpleJumper(J=0.1)
         for p in uniform_p_values[:20]:
             m.update(p)
         assert np.isclose(m.B_n(0), 0, atol=1e-10)
@@ -109,7 +151,7 @@ class TestSimpleJumper:
 
     def test_B_n_monotone(self, uniform_p_values):
         """B_n should be monotone increasing on [0, 1]."""
-        m = SimpleJumper(J=0.1, warnings=False)
+        m = SimpleJumper(J=0.1)
         for p in uniform_p_values[:30]:
             m.update(p)
         xs = np.linspace(0, 1, 50)
@@ -119,7 +161,7 @@ class TestSimpleJumper:
 
     def test_b_n_nonnegative(self, uniform_p_values):
         """b_n should be non-negative on [0,1]."""
-        m = SimpleJumper(J=0.1, warnings=False)
+        m = SimpleJumper(J=0.1)
         for p in uniform_p_values[:30]:
             m.update(p)
         xs = np.linspace(0, 1, 50)
@@ -127,7 +169,7 @@ class TestSimpleJumper:
             assert m.b_n(x) >= -1e-10
 
     def test_p_values_stored(self, uniform_p_values):
-        m = SimpleJumper(warnings=False)
+        m = SimpleJumper()
         for p in uniform_p_values[:10]:
             m.update(p)
         assert len(m.p_values) == 10
@@ -139,14 +181,14 @@ class TestSimpleJumper:
 
 class TestCompositeJumper:
     def test_grows_under_alternative(self, skewed_p_values):
-        m = CompositeJumper(warnings=False)
+        m = CompositeJumper()
         for p in skewed_p_values:
             m.update(p)
         assert m.logM > 0
 
     def test_M_is_mean_of_sub_jumpers(self, uniform_p_values):
         """M should equal the arithmetic mean of sub-jumper Ms."""
-        m = CompositeJumper(warnings=False)
+        m = CompositeJumper()
         for p in uniform_p_values[:30]:
             m.update(p)
         sub_Ms = [j.M for j in m.Jumpers.values()]
@@ -154,7 +196,7 @@ class TestCompositeJumper:
         assert np.isclose(m.M, expected_M, rtol=1e-8)
 
     def test_default_jump_rates(self):
-        m = CompositeJumper(warnings=False)
+        m = CompositeJumper()
         assert m.J == [1e-4, 1e-3, 1e-2, 1e-1, 1]
 
 
@@ -165,7 +207,7 @@ class TestPluginMartingale:
     @pytest.mark.parametrize("strategy_cls", [GaussianKDE, BetaMoments, BetaMLE])
     def test_grows_under_alternative(self, strategy_cls, skewed_p_values):
         strategy = strategy_cls()
-        m = PluginMartingale(betting_strategy=strategy, min_sample_size=10, warnings=False)
+        m = PluginMartingale(betting_strategy=strategy, min_sample_size=10)
         for p in skewed_p_values[:200]:
             m.update(p)
         assert m.logM > 0, f"{strategy_cls.__name__}: expected growth, got logM={m.logM}"
@@ -173,17 +215,17 @@ class TestPluginMartingale:
     def test_fixed_strategy(self):
         """FixedStrategy with pdf=2*(1-x) should grow on small p-values."""
         fs = FixedStrategy(pdf=lambda x: 2 * (1 - x), check_integration=False)
-        m = PluginMartingale(betting_strategy=fs, min_sample_size=0, warnings=False)
+        m = PluginMartingale(betting_strategy=fs, min_sample_size=0)
         for _ in range(20):
             m.update(0.1)
         assert m.logM > 0
 
     def test_default_strategy_is_gaussian_kde(self):
-        m = PluginMartingale(warnings=False)
+        m = PluginMartingale()
         assert isinstance(m.strategy, GaussianKDE)
 
     def test_p_values_stored(self, uniform_p_values):
-        m = PluginMartingale(warnings=False)
+        m = PluginMartingale()
         for p in uniform_p_values[:10]:
             m.update(p)
         assert len(m.p_values) == 10
@@ -194,7 +236,7 @@ class TestPluginMartingale:
 
 class TestSimpleMixtureMartingale:
     def test_grows_under_alternative(self, skewed_p_values):
-        m = SimpleMixtureMartingale(warnings=False)
+        m = SimpleMixtureMartingale()
         for p in skewed_p_values:
             m.update(p)
         assert m.logM > 0
@@ -203,7 +245,7 @@ class TestSimpleMixtureMartingale:
         rng = np.random.default_rng(77)
         final_logMs = []
         for _ in range(20):
-            m = SimpleMixtureMartingale(warnings=False)
+            m = SimpleMixtureMartingale()
             for p in rng.uniform(size=100):
                 m.update(p)
             final_logMs.append(m.logM)
@@ -374,7 +416,7 @@ class TestPiecewiseConstantBetting:
 class TestSleeperStayer:
     def test_grows_under_alternative(self, skewed_p_values):
         """Under H1, martingale should grow."""
-        m = SleeperStayer(R=0.01, G=5, warnings=False)
+        m = SleeperStayer(R=0.01, G=5)
         for p in skewed_p_values:
             m.update(p)
         assert m.logM > 0, f"Expected growth under H1, got logM={m.logM}"
@@ -384,14 +426,14 @@ class TestSleeperStayer:
         rng = np.random.default_rng(42)
         final_logMs = []
         for _ in range(10):
-            m = SleeperStayer(R=0.01, G=5, warnings=False)
+            m = SleeperStayer(R=0.01, G=5)
             for p in rng.uniform(size=200):
                 m.update(p)
             final_logMs.append(m.logM)
         assert np.mean(final_logMs) < 5.0
 
     def test_b_n_nonnegative(self, skewed_p_values):
-        m = SleeperStayer(R=0.01, G=5, warnings=False)
+        m = SleeperStayer(R=0.01, G=5)
         for p in skewed_p_values[:50]:
             m.update(p)
         xs = np.linspace(0.01, 0.99, 20)
@@ -405,7 +447,7 @@ class TestSleeperStayer:
 class TestSleeperDrifter:
     def test_grows_under_alternative(self, skewed_p_values):
         """Under H1, martingale should grow."""
-        m = SleeperDrifter(R=0.01, G=5, M=10, warnings=False)
+        m = SleeperDrifter(R=0.01, G=5, M=10)
         for p in skewed_p_values:
             m.update(p)
         assert m.logM > 0, f"Expected growth under H1, got logM={m.logM}"
@@ -415,7 +457,7 @@ class TestSleeperDrifter:
         rng = np.random.default_rng(42)
         final_logMs = []
         for _ in range(10):
-            m = SleeperDrifter(R=0.01, G=5, M=10, warnings=False)
+            m = SleeperDrifter(R=0.01, G=5, M=10)
             for p in rng.uniform(size=200):
                 m.update(p)
             final_logMs.append(m.logM)
@@ -423,7 +465,7 @@ class TestSleeperDrifter:
 
     def test_experts_wake_in_batches(self):
         """Experts should only exist after multiples of M."""
-        m = SleeperDrifter(R=0.01, G=3, M=5, warnings=False)
+        m = SleeperDrifter(R=0.01, G=3, M=5)
         rng = np.random.default_rng(99)
         # After 4 steps, no experts should be active
         for _ in range(4):
@@ -439,13 +481,13 @@ class TestSleeperDrifter:
 
 class TestCUSUMWrapper:
     def test_starts_at_one(self):
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj)
         assert np.isclose(cusum.gamma, 1.0)
 
     def test_gamma_geq_one_initially(self, uniform_p_values):
         """CUSUM gamma is always >= 1 when martingale starts at 1."""
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj)
         for p in uniform_p_values[:50]:
             cusum.update(p)
@@ -455,7 +497,7 @@ class TestCUSUMWrapper:
 
     def test_detects_changepoint(self):
         """After a shift, CUSUM should fire alarm."""
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj)
         rng = np.random.default_rng(42)
         # Null phase
@@ -467,7 +509,7 @@ class TestCUSUMWrapper:
         assert cusum.alarm(10)
 
     def test_cusum_values_length(self, uniform_p_values):
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj)
         for p in uniform_p_values[:20]:
             cusum.update(p)
@@ -475,7 +517,7 @@ class TestCUSUMWrapper:
 
     def test_barrier_slope(self):
         """With a steep barrier, alarm should not fire under null."""
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj, barrier_slope=1.0)
         rng = np.random.default_rng(42)
         for p in rng.uniform(size=100):
@@ -489,14 +531,14 @@ class TestCUSUMWrapper:
 
 class TestShiryaevRobertsWrapper:
     def test_starts_at_zero(self):
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         sr = ShiryaevRobertsWrapper(sj)
         assert sr.R == 0.0
 
     def test_sr_geq_cusum(self):
         """SR statistic should always be >= CUSUM statistic (sum >= max)."""
-        sj1 = SimpleJumper(J=0.1, warnings=False)
-        sj2 = SimpleJumper(J=0.1, warnings=False)
+        sj1 = SimpleJumper(J=0.1)
+        sj2 = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj1)
         sr = ShiryaevRobertsWrapper(sj2)
         rng = np.random.default_rng(42)
@@ -512,7 +554,7 @@ class TestShiryaevRobertsWrapper:
 
     def test_detects_changepoint(self):
         """After a shift, SR should fire alarm."""
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         sr = ShiryaevRobertsWrapper(sj)
         rng = np.random.default_rng(42)
         # Null phase
@@ -524,7 +566,7 @@ class TestShiryaevRobertsWrapper:
         assert sr.alarm(10)
 
     def test_sr_values_length(self, uniform_p_values):
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         sr = ShiryaevRobertsWrapper(sj)
         for p in uniform_p_values[:20]:
             sr.update(p)
@@ -539,7 +581,7 @@ class TestSleeperStayerOrdering:
 
     def test_first_step_gives_one(self):
         """At step 1, all capital is sleeping, so S_1 = 1 (no active betting yet)."""
-        m = SleeperStayer(R=0.01, G=5, warnings=False)
+        m = SleeperStayer(R=0.01, G=5)
         m.update(0.3)
         # After first step: active experts had 0 capital, so betting produces 0.
         # S_1 = S_sleep(initial=1) + 0 = 1
@@ -552,7 +594,7 @@ class TestSleeperDrifterOrdering:
     def test_first_M_steps_give_one(self):
         """Before first batch wakes (steps 1..M-1), no experts bet, so S_n=1."""
         M = 5
-        m = SleeperDrifter(R=0.01, G=3, M=M, warnings=False)
+        m = SleeperDrifter(R=0.01, G=3, M=M)
         rng = np.random.default_rng(42)
         for i in range(M - 1):
             m.update(rng.uniform())
@@ -566,13 +608,13 @@ class TestSimpleJumperConfigurable:
 
     def test_default_five_experts(self):
         """Default expert set should be [-1, -0.5, 0, 0.5, 1]."""
-        m = SimpleJumper(J=0.1, warnings=False)
+        m = SimpleJumper(J=0.1)
         assert m.E == [-1, -0.5, 0, 0.5, 1]
         assert m._n_experts == 5
 
     def test_custom_expert_set(self):
         """Custom E should work."""
-        m = SimpleJumper(J=0.1, E=[-1, 0, 1], warnings=False)
+        m = SimpleJumper(J=0.1, E=[-1, 0, 1])
         assert m.E == [-1, 0, 1]
         assert m._n_experts == 3
         # Should still grow under alternative
@@ -582,7 +624,7 @@ class TestSimpleJumperConfigurable:
 
     def test_backward_compat_three_experts(self, skewed_p_values):
         """Using E=[-1,0,1] should reproduce the old 3-expert behavior."""
-        m = SimpleJumper(J=0.1, E=[-1, 0, 1], warnings=False)
+        m = SimpleJumper(J=0.1, E=[-1, 0, 1])
         for p in skewed_p_values[:100]:
             m.update(p)
         assert m.logM > 0
@@ -593,7 +635,7 @@ class TestShiryaevRobertsRecursive:
 
     def test_recursive_matches_naive(self):
         """Recursive R_n should match sum_{i=1}^{n} S_n/S_{i-1}."""
-        sj = SimpleJumper(J=0.1, warnings=False)
+        sj = SimpleJumper(J=0.1)
         sr = ShiryaevRobertsWrapper(sj)
         rng = np.random.default_rng(42)
         pvals = rng.beta(0.7, 2, size=30)

@@ -113,6 +113,9 @@ from online_cp.martingale import (
     SleeperDrifter as SleeperDrifter,
 )
 from online_cp.martingale import (
+    VilleWrapper as VilleWrapper,
+)
+from online_cp.martingale import (
     CUSUMWrapper as CUSUMWrapper,
 )
 from online_cp.martingale import (

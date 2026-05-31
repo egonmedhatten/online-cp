@@ -153,7 +153,7 @@ class TestPlotting:
         from online_cp import PluginMartingale, FixedStrategy
 
         fs = FixedStrategy(pdf=lambda x: 2 * (1 - x), check_integration=False)
-        mart = PluginMartingale(betting_strategy=fs, min_sample_size=0, warnings=False)
+        mart = PluginMartingale(betting_strategy=fs, min_sample_size=0)
         for p in uniform_p_values[:50]:
             mart.update(p)
 

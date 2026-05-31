@@ -16,6 +16,8 @@
 
 ## Change-Point Detection Wrappers
 
+::: online_cp.martingale.VilleWrapper
+
 ::: online_cp.martingale.CUSUMWrapper
 
 ::: online_cp.martingale.ShiryaevRobertsWrapper

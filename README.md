@@ -145,11 +145,24 @@ from online_cp import PluginMartingale, GaussianKDE
 martingale = PluginMartingale(betting_strategy=GaussianKDE())
 for i in range(n_train, N):
     p = cp.compute_p_value(X[i], y[i])
-    martingale.update_martingale_value(p)
+    martingale.update(p)
     cp.learn_one(X[i], y[i])
 
 # If martingale grows large → evidence against exchangeability
 print(f"Martingale: {martingale.M:.2f}")
+```
+
+Use `VilleWrapper` to turn any martingale into a statistical test with Ville's inequality ($P(\exists n: M_n \geq c) \leq 1/c$):
+
+```python
+from online_cp import SimpleJumper, VilleWrapper
+
+ville = VilleWrapper(SimpleJumper(), threshold=20)  # 5% significance
+for p in p_values:
+    ville.update(p)
+    if ville.rejected:
+        print(f"Exchangeability rejected at observation {ville.martingale.n}")
+        break
 ```
 
 ## Features
@@ -163,7 +176,8 @@ print(f"Martingale: {martingale.M:.2f}")
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |
 | **Evaluation** | `progressive_val()`, `iter_progressive_val()` — streaming test-then-train |
 | **Plotting** | `plot_coverage`, `plot_martingale`, `plot_intervals`, `plot_set_sizes` |
-| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper`, `SleeperStayer`, `SleeperDrifter`, `CUSUMWrapper`, `ShiryaevRobertsWrapper` |
+| **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper`, `SleeperStayer`, `SleeperDrifter` |  
+| **Detection Wrappers** | `VilleWrapper`, `CUSUMWrapper`, `ShiryaevRobertsWrapper` |
 | **Kernels** | `GaussianKernel`, `LinearKernel`, `PolynomialKernel`, `PeriodicKernel`, `LinearCombinationKernel` |
 
 ## API pattern

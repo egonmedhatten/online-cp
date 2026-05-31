@@ -276,3 +276,26 @@ class TestKernelDistanceIntegration:
             # Should return a predictive distribution; verify it's callable
             assert cpd is not None
             cps.learn_one(X[i], y[i])
+
+    def test_regressor_with_kernel_distance(self):
+        """Conformal k-NN regressor works with kernel-induced distance."""
+        from online_cp import ConformalNearestNeighboursRegressor
+
+        rng = np.random.default_rng(7)
+        X = rng.uniform(0, 1, (60, 2))
+        y = np.sin(2 * np.pi * X[:, 0]) + 0.1 * rng.normal(size=60)
+
+        dist_fn = kernel_induced_distance(GaussianKernel(sigma=1.0))
+        cp = ConformalNearestNeighboursRegressor(
+            k=5, distance_func=dist_fn, rnd_state=0, epsilon=0.1
+        )
+        cp.learn_initial_training_set(X[:40], y[:40])
+
+        covered = 0
+        for i in range(40, 60):
+            interval = cp.predict(X[i])
+            covered += int(y[i] in interval)
+            cp.learn_one(X[i], y[i])
+
+        # Validity: coverage should be near 1 - epsilon = 0.9
+        assert covered >= 15  # at least 75% of 20 (generous for small sample)

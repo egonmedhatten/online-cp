@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MulticlassVennPrediction`: Output type for multiclass Venn predictors — a |Y| × |Y| multiprobability matrix with `.point` aggregation property.
+- `NearestNeighboursVennPredictor`: now supports multiclass labels (|Y| > 2) using same-class-count taxonomy. Binary behaviour unchanged. Accepts optional `label_space` constructor argument.
 - `NearestNeighboursVennPredictor`: Online Venn predictor with k-NN voting taxonomy (ALRW2 §6.2). Produces calibrated multiprobability predictions via taxonomy-based frequency counting. Generalises the 1-NN taxonomy from the textbook to arbitrary k.
 - `VennAbersPredictor`: Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4) producing calibrated multi-probability predictions for binary classification. Supports ridge regression, k-NN, and SVM scoring functions. First known Python implementation of the full/transductive variant.
 - `VennPrediction`: Unified output type for all Venn predictors — the multiprobability pair (p0, p1).
@@ -24,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: `VennPrediction` is now a unified class for binary *and* multiclass predictions. Binary predictions use `VennPrediction.binary(p0, p1)` factory method; multiclass use `VennPrediction(probs, label_space)` constructor directly. `MulticlassVennPrediction` is retained as an alias.
+- **BREAKING**: Label-space policy for `NearestNeighboursVennPredictor` and conformal classifiers (`ConformalNearestNeighboursClassifier`, `ConformalClassifierWrapper`, `ConformalSupportVectorMachine`): default is now `label_space=None` (adaptive — infer from data). Pass explicit `label_space=[...]` to lock; `learn_one` raises `ValueError` on unknown labels when fixed.
 - **BREAKING**: `VennAbersPrediction` renamed to `VennPrediction` — unified output type for all Venn predictors.
 - Martingale architecture redesigned: martingales are now pure evidence processes. Statistical decision procedures (`VilleWrapper`, `CUSUMWrapper`, `ShiryaevRobertsWrapper`) are separate wrappers.
 - CPS module refactored: removed unnecessary parameter constraints, improved performance with `solve_triangular`, improved tie handling in `NearestNeighboursPredictionMachine`.

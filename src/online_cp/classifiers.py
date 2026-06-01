@@ -199,7 +199,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         epsilon=default_epsilon,
     ):
         super().__init__(epsilon=epsilon)
-        self.label_space = label_space if label_space is not None else np.array([-1, 1])
+        self._label_space_fixed = label_space is not None
+        self.label_space = np.asarray(label_space) if label_space is not None else None
 
         self.k = k
 
@@ -246,6 +247,19 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.y = y
             self.D = self.distance_func(X)
             self._label_indices = self._build_label_indices(y)
+            if self._label_space_fixed:
+                unknown = set(np.unique(y)) - set(self.label_space)
+                if unknown:
+                    raise ValueError(
+                        f"Labels {sorted(unknown)} not in declared label_space "
+                        f"{self.label_space.tolist()}"
+                    )
+            elif self.label_space is None:
+                self.label_space = np.unique(y)
+            else:
+                self.label_space = np.sort(
+                    np.unique(np.concatenate([self.label_space, np.unique(y)]))
+                )
 
     @staticmethod
     def update_distance_matrix(D, d):
@@ -317,6 +331,18 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
     def learn_one(self, x, y, D=None):
         new_index = 0 if self.X is None else self.X.shape[0]
+
+        # Enforce label-space policy
+        if self._label_space_fixed:
+            if y not in self.label_space:
+                raise ValueError(
+                    f"Label {y} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.array([y])
+        elif y not in self.label_space:
+            self.label_space = np.sort(np.append(self.label_space, y))
 
         # Learn label y
         self.y = np.append(self.y, y)
@@ -513,7 +539,8 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         self.learner = learner
 
-        self.label_space = label_space if label_space is not None else np.array([-1, 1])
+        self._label_space_fixed = label_space is not None
+        self.label_space = np.asarray(label_space) if label_space is not None else None
 
         self.y = np.empty(0)
         self.X = None
@@ -544,6 +571,18 @@ class ConformalClassifierWrapper(ConformalClassifier):
         )
 
     def learn_one(self, x, y, D=None):
+        # Enforce label-space policy
+        if self._label_space_fixed:
+            if y not in self.label_space:
+                raise ValueError(
+                    f"Label {y} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.array([y])
+        elif y not in self.label_space:
+            self.label_space = np.sort(np.append(self.label_space, y))
+
         # Learn label y
         self.y = np.append(self.y, y)
         # Learn object
@@ -556,6 +595,19 @@ class ConformalClassifierWrapper(ConformalClassifier):
         if X.shape[0] > 0:
             self.X = X
             self.y = y
+            if self._label_space_fixed:
+                unknown = set(np.unique(y)) - set(self.label_space)
+                if unknown:
+                    raise ValueError(
+                        f"Labels {sorted(unknown)} not in declared label_space "
+                        f"{self.label_space.tolist()}"
+                    )
+            elif self.label_space is None:
+                self.label_space = np.unique(y)
+            else:
+                self.label_space = np.sort(
+                    np.unique(np.concatenate([self.label_space, np.unique(y)]))
+                )
 
     def _align_probabilities(self, Prob, classes):
         """Align predict_proba columns to self.label_space order."""
@@ -746,7 +798,8 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     ):
         super().__init__(epsilon=epsilon)
         self.C = C
-        self.label_space = label_space if label_space is not None else np.array([-1, 1])
+        self._label_space_fixed = label_space is not None
+        self.label_space = np.asarray(label_space) if label_space is not None else None
         self.sigma = sigma
         self.degree = degree
         self.coef0 = coef0
@@ -795,6 +848,19 @@ class ConformalSupportVectorMachine(ConformalClassifier):
 
     def learn_initial_training_set(self, X, y):
         """Store training data and precompute Gram matrix."""
+        if self._label_space_fixed:
+            unknown = set(np.unique(y)) - set(self.label_space)
+            if unknown:
+                raise ValueError(
+                    f"Labels {sorted(unknown)} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.unique(y)
+        else:
+            self.label_space = np.sort(
+                np.unique(np.concatenate([self.label_space, np.unique(y)]))
+            )
         self.X = X.copy()
         self.y = y.copy().astype(float)
         self.K = self._compute_gram(X)
@@ -802,6 +868,19 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     def learn_one(self, x, y):
         """Learn a new example, updating stored data and Gram matrix."""
         x = np.atleast_1d(x).ravel()
+
+        # Enforce label-space policy
+        if self._label_space_fixed:
+            if y not in self.label_space:
+                raise ValueError(
+                    f"Label {y} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.array([y])
+        elif y not in self.label_space:
+            self.label_space = np.sort(np.append(self.label_space, y))
+
         if self.X is None:
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=float)

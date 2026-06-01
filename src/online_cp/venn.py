@@ -26,6 +26,7 @@ __all__ = [
     "VennAbersPredictor",
     "NearestNeighboursVennPredictor",
     "VennPrediction",
+    "MulticlassVennPrediction",
     "log_loss_point",
     "brier_point",
 ]
@@ -138,32 +139,94 @@ def _isotonic_calibrate(scores, labels, query_idx):
 
 
 class VennPrediction:
-    """Multiprobability prediction from a Venn predictor.
+    """Multiprobability prediction from a Venn predictor (ALRW2 §6.2).
 
-    The prediction is the pair (p0, p1) — two calibrated probabilities
-    of class 1 under the two possible label hypotheses. This pair IS the
-    prediction; it is not an interval or a point estimate.
+    Represents the family P = {P^v : v ∈ Y} of probability distributions
+    over the label space Y, one for each hypothesis about the test label.
+    Internally stored as a |Y| × |Y| matrix where row v gives P^v.
 
-    To merge into a single probability for decision-making, use the
-    standalone functions :func:`log_loss_point` or :func:`brier_point`.
+    For binary classification (|Y| = 2 with labels {0, 1}), the convenient
+    ``.p0`` and ``.p1`` properties give the calibrated P(y=1) under each
+    hypothesis, compatible with :func:`log_loss_point` and :func:`brier_point`.
 
     Attributes
     ----------
-    p0 : float
-        Calibrated P(y=1) under the hypothesis that the true label is 0.
-    p1 : float
-        Calibrated P(y=1) under the hypothesis that the true label is 1.
+    probs : ndarray, shape (|Y|, |Y|)
+        ``probs[i, j]`` = P^{label_space[i]}(label_space[j]).
+    label_space : ndarray
+        Sorted array of distinct labels.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> pred = VennPrediction.binary(0.2, 0.8)
+    >>> pred.p0, pred.p1
+    (0.2, 0.8)
+    >>> pred.probs.shape
+    (2, 2)
+    >>> pred.point
+    array([0.5, 0.5])
     """
 
-    def __init__(self, p0, p1):
-        self.p0 = p0
-        self.p1 = p1
+    def __init__(self, probs, label_space):
+        self.probs = np.asarray(probs, dtype=np.float64)
+        self.label_space = np.asarray(label_space)
+
+    @classmethod
+    def binary(cls, p0, p1):
+        """Create a binary VennPrediction from p0 and p1.
+
+        Parameters
+        ----------
+        p0 : float
+            P(y=1) under hypothesis y=0.
+        p1 : float
+            P(y=1) under hypothesis y=1.
+        """
+        probs = np.array([[1.0 - p0, p0], [1.0 - p1, p1]])
+        return cls(probs, np.array([0, 1]))
+
+    @property
+    def p0(self):
+        """P(y=1) under hypothesis y=0. Only valid for binary (|Y|=2)."""
+        if len(self.label_space) != 2:
+            raise AttributeError(
+                "p0 is only defined for binary predictions (|Y|=2)"
+            )
+        return float(self.probs[0, 1])
+
+    @property
+    def p1(self):
+        """P(y=1) under hypothesis y=1. Only valid for binary (|Y|=2)."""
+        if len(self.label_space) != 2:
+            raise AttributeError(
+                "p1 is only defined for binary predictions (|Y|=2)"
+            )
+        return float(self.probs[1, 1])
+
+    @property
+    def point(self):
+        """Aggregate point prediction: normalized mean of all hypothesis rows."""
+        mean = self.probs.mean(axis=0)
+        s = mean.sum()
+        if s > 0:
+            return mean / s
+        return np.full(len(self.label_space), 1.0 / len(self.label_space))
 
     def __repr__(self):
-        return f"VennPrediction(p0={self.p0:.4f}, p1={self.p1:.4f})"
+        if len(self.label_space) == 2:
+            return f"VennPrediction(p0={self.p0:.4f}, p1={self.p1:.4f})"
+        n = len(self.label_space)
+        return f"VennPrediction(|Y|={n}, labels={self.label_space.tolist()})"
 
     def __str__(self):
-        return f"(p0={self.p0:.4f}, p1={self.p1:.4f})"
+        if len(self.label_space) == 2:
+            return f"(p0={self.p0:.4f}, p1={self.p1:.4f})"
+        return f"VennPrediction\n{self.probs}"
+
+
+# Backward-compatible alias
+MulticlassVennPrediction = VennPrediction
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +629,7 @@ class VennAbersPredictor:
         x = np.asarray(x).ravel()
 
         if self.X is None or len(self.y) == 0:
-            pred = VennPrediction(0.5, 0.5)
+            pred = VennPrediction.binary(0.5, 0.5)
             if return_update:
                 return pred, {}
             return pred
@@ -612,7 +675,7 @@ class VennAbersPredictor:
         p0 = _isotonic_calibrate(scores_0, labels_0, test_idx)
         p1 = _isotonic_calibrate(scores_1, labels_1, test_idx)
 
-        pred = VennPrediction(p0, p1)
+        pred = VennPrediction.binary(p0, p1)
 
         if return_update:
             return pred, {"XTXinv": XTXinv_aug}
@@ -642,7 +705,7 @@ class VennAbersPredictor:
         p0 = _isotonic_calibrate(scores_0, labels_0, test_idx)
         p1 = _isotonic_calibrate(scores_1, labels_1, test_idx)
 
-        pred = VennPrediction(p0, p1)
+        pred = VennPrediction.binary(p0, p1)
 
         if return_update:
             return pred, {"K": K_aug, "Ka_inv": Ka_inv_aug}
@@ -672,7 +735,7 @@ class VennAbersPredictor:
             p = _isotonic_calibrate(scores, labels_aug.astype(np.float64), test_idx)
             results.append(p)
 
-        pred = VennPrediction(results[0], results[1])
+        pred = VennPrediction.binary(results[0], results[1])
 
         if return_update:
             return pred, {"D": D_aug}
@@ -709,7 +772,7 @@ class VennAbersPredictor:
             p = _isotonic_calibrate(scores, labels_aug.astype(np.float64), test_idx)
             results.append(p)
 
-        pred = VennPrediction(results[0], results[1])
+        pred = VennPrediction.binary(results[0], results[1])
 
         if return_update:
             return pred, {"K": K_aug}
@@ -793,9 +856,11 @@ class NearestNeighboursVennPredictor:
     example, empirical frequencies among examples sharing the new example's
     taxonomy category give the multiprobability output.
 
-    The output ``VennPrediction(p0, p1)`` has the same semantics as for
-    :class:`VennAbersPredictor` and is compatible with :func:`log_loss_point`
-    and :func:`brier_point`.
+    For binary labels (|Y| = 2), the output is ``VennPrediction(p0, p1)``
+    compatible with :func:`log_loss_point` and :func:`brier_point`.
+    For multiclass labels (|Y| > 2), the output is a
+    :class:`MulticlassVennPrediction` containing the full |Y| × |Y|
+    multiprobability matrix.
 
     Parameters
     ----------
@@ -804,6 +869,9 @@ class NearestNeighboursVennPredictor:
     metric : str
         Distance metric passed to ``scipy.spatial.distance`` (default
         ``'euclidean'``).
+    label_space : array-like or None
+        Explicit set of possible labels. If None, inferred from training
+        data. Useful when the initial training set may not contain all labels.
 
     Examples
     --------
@@ -818,11 +886,17 @@ class NearestNeighboursVennPredictor:
     True
     """
 
-    def __init__(self, k=1, metric="euclidean"):
+    def __init__(self, k=1, metric="euclidean", label_space=None):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
         self.k = k
         self.metric = metric
+        self._label_space_fixed = label_space is not None
+        self.label_space = (
+            np.asarray(sorted(label_space), dtype=int)
+            if label_space is not None
+            else None
+        )
         self.X = None
         self.y = None
         self.D = None  # distance matrix (n×n)
@@ -844,12 +918,23 @@ class NearestNeighboursVennPredictor:
         X : array-like, shape (n, d)
             Training feature vectors.
         y : array-like, shape (n,)
-            Binary labels in {0, 1}.
+            Integer labels (binary {0, 1} or multiclass).
         """
         X = np.atleast_2d(np.asarray(X, dtype=np.float64))
         y = np.asarray(y, dtype=int)
-        if not np.all((y == 0) | (y == 1)):
-            raise ValueError("Labels must be binary {0, 1}")
+        if self._label_space_fixed:
+            unknown = set(np.unique(y)) - set(self.label_space)
+            if unknown:
+                raise ValueError(
+                    f"Labels {sorted(unknown)} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.unique(y)
+        else:
+            self.label_space = np.sort(
+                np.unique(np.concatenate([self.label_space, np.unique(y)]))
+            )
         self.X = X
         self.y = y
         self.D = self._distance(X)
@@ -862,9 +947,26 @@ class NearestNeighboursVennPredictor:
         x : array-like, shape (d,)
             Feature vector.
         y : int
-            True binary label (0 or 1).
+            True label.
+
+        Raises
+        ------
+        ValueError
+            If ``label_space`` was declared at construction and ``y`` is not
+            in it.
         """
         x = np.asarray(x, dtype=np.float64).ravel()
+        y = int(y)
+        if self._label_space_fixed:
+            if y not in self.label_space:
+                raise ValueError(
+                    f"Label {y} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.array([y], dtype=int)
+        elif y not in self.label_space:
+            self.label_space = np.sort(np.append(self.label_space, y))
         if self.X is None:
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=int)
@@ -891,13 +993,20 @@ class NearestNeighboursVennPredictor:
 
         Returns
         -------
-        VennPrediction
-            Contains p0 and p1 multiprobability pair.
+        VennPrediction or MulticlassVennPrediction
+            Binary: VennPrediction(p0, p1).
+            Multiclass: MulticlassVennPrediction with |Y| × |Y| matrix.
         """
         x = np.asarray(x, dtype=np.float64).ravel()
 
         if self.X is None or len(self.y) == 0:
-            return VennPrediction(0.5, 0.5)
+            if self.label_space is not None and len(self.label_space) > 2:
+                n_labels = len(self.label_space)
+                uniform = np.full(
+                    (n_labels, n_labels), 1.0 / n_labels
+                )
+                return VennPrediction(uniform, self.label_space)
+            return VennPrediction.binary(0.5, 0.5)
 
         n = len(self.y)
 
@@ -915,24 +1024,45 @@ class NearestNeighboursVennPredictor:
 
         test_idx = n  # index of new example in augmented arrays
 
-        # For each hypothesis v ∈ {0, 1}, compute taxonomies and frequencies
+        if len(self.label_space) <= 2:
+            return self._predict_binary(D_aug, k_eff, test_idx)
+        else:
+            return self._predict_multiclass(D_aug, k_eff, test_idx)
+
+    def _predict_binary(self, D_aug, k_eff, test_idx):
+        """Binary prediction path (backward-compatible)."""
         results = []
         for v in (0, 1):
             labels_aug = np.append(self.y, v)
-
-            # Compute taxonomy for all n+1 examples (leave-one-out kNN)
             taxonomies = self._compute_taxonomies(D_aug, labels_aug, k_eff)
-
-            # Taxonomy of the new example
             tau_new = taxonomies[test_idx]
-
-            # Frequency of label=1 among examples with same taxonomy
             mask = taxonomies == tau_new
             matching_labels = labels_aug[mask]
             s_v_1 = np.sum(matching_labels) / len(matching_labels)
             results.append(s_v_1)
+        return VennPrediction.binary(results[0], results[1])
 
-        return VennPrediction(results[0], results[1])
+    def _predict_multiclass(self, D_aug, k_eff, test_idx):
+        """Multiclass prediction path (|Y| > 2)."""
+        n_labels = len(self.label_space)
+        probs = np.empty((n_labels, n_labels), dtype=np.float64)
+
+        for i, v in enumerate(self.label_space):
+            labels_aug = np.append(self.y, v)
+            taxonomies = self._compute_taxonomies_multiclass(
+                D_aug, labels_aug, k_eff
+            )
+            tau_new = taxonomies[test_idx]
+            mask = taxonomies == tau_new
+            matching_labels = labels_aug[mask]
+
+            # Frequency of each label among matching examples
+            for j, y_prime in enumerate(self.label_space):
+                probs[i, j] = np.sum(matching_labels == y_prime) / len(
+                    matching_labels
+                )
+
+        return VennPrediction(probs, self.label_space)
 
     @staticmethod
     def _compute_taxonomies(D, labels, k):
@@ -973,6 +1103,44 @@ class NearestNeighboursVennPredictor:
                 nn_idx = np.argpartition(D_work[i], k)[:k]
 
             taxonomies[i] = np.sum(labels[nn_idx])
+
+        return taxonomies
+
+    @staticmethod
+    def _compute_taxonomies_multiclass(D, labels, k):
+        """Compute same-class-count taxonomy for multiclass labels.
+
+        For each example i, taxonomy τᵢ = number of k nearest neighbours
+        that share the same label as example i (leave-one-out).
+
+        Parameters
+        ----------
+        D : ndarray, shape (n, n)
+            Pairwise distance matrix.
+        labels : ndarray, shape (n,)
+            Integer labels.
+        k : int
+            Number of neighbours.
+
+        Returns
+        -------
+        taxonomies : ndarray, shape (n,), dtype int
+            Taxonomy value for each example (in {0, 1, ..., k}).
+        """
+        n = len(labels)
+        taxonomies = np.empty(n, dtype=int)
+
+        D_work = D.copy()
+        np.fill_diagonal(D_work, np.inf)
+
+        for i in range(n):
+            if k >= n - 1:
+                nn_idx = np.arange(n)
+                nn_idx = nn_idx[nn_idx != i]
+            else:
+                nn_idx = np.argpartition(D_work[i], k)[:k]
+
+            taxonomies[i] = np.sum(labels[nn_idx] == labels[i])
 
         return taxonomies
 

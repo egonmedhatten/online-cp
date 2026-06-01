@@ -5,6 +5,7 @@ import pytest
 
 from online_cp.venn import (
     VennPrediction,
+    MulticlassVennPrediction,
     VennAbersPredictor,
     _isotonic_calibrate,
     _pava_inplace,
@@ -86,23 +87,23 @@ class TestIsotonicCalibrate:
 
 class TestVennPrediction:
     def test_pair_attributes(self):
-        pred = VennPrediction(0.2, 0.8)
+        pred = VennPrediction.binary(0.2, 0.8)
         assert pred.p0 == 0.2
         assert pred.p1 == 0.8
 
-    def test_no_point_attribute(self):
-        pred = VennPrediction(0.2, 0.8)
-        assert not hasattr(pred, "point")
+    def test_point_prediction(self):
+        pred = VennPrediction.binary(0.2, 0.8)
+        point = pred.point
+        assert point.shape == (2,)
+        assert np.isclose(point.sum(), 1.0)
 
     def test_repr(self):
-        pred = VennPrediction(0.1, 0.9)
+        pred = VennPrediction.binary(0.1, 0.9)
         assert "VennPrediction" in repr(pred)
-        assert "point" not in repr(pred)
 
     def test_str(self):
-        pred = VennPrediction(0.1, 0.9)
+        pred = VennPrediction.binary(0.1, 0.9)
         assert "p0=" in str(pred) and "p1=" in str(pred)
-        assert "point" not in str(pred)
 
 
 # ---------------------------------------------------------------------------
@@ -626,13 +627,14 @@ class TestNearestNeighboursVennPredictor:
             NearestNeighboursVennPredictor(k=0)
 
     def test_non_binary_labels(self):
-        """Non-binary labels raise ValueError."""
+        """Non-binary labels are accepted (multiclass support)."""
         vp = NearestNeighboursVennPredictor(k=1)
-        with pytest.raises(ValueError, match="binary"):
-            vp.learn_initial_training_set(
-                np.array([[0, 0], [1, 1], [2, 2]]),
-                np.array([0, 1, 2]),
-            )
+        vp.learn_initial_training_set(
+            np.array([[0, 0], [1, 1], [2, 2]]),
+            np.array([0, 1, 2]),
+        )
+        pred = vp.predict_one(np.array([0.5, 0.5]))
+        assert isinstance(pred, MulticlassVennPrediction)
 
     def test_output_type(self):
         """predict_one returns VennPrediction."""
@@ -702,3 +704,235 @@ class TestNearestNeighboursVennValidity:
         # the average L and U (validity property).
         # Use generous tolerance since sample is finite.
         assert avg_lower - 0.05 <= error_rate <= avg_upper + 0.05
+
+
+# ===========================================================================
+# Multiclass NearestNeighboursVennPredictor tests
+# ===========================================================================
+
+from online_cp.venn import NearestNeighboursVennPredictor
+
+
+class TestMulticlassNearestNeighboursVenn:
+    """Tests for multiclass extension of NearestNeighboursVennPredictor."""
+
+    def _make_3class_data(self, rng, n=90):
+        """Well-separated 3-class Gaussian data, shuffled."""
+        n_per = n // 3
+        centers = np.array([[0, 0], [4, 0], [2, 4]])
+        X = np.vstack([rng.normal(c, 0.5, size=(n_per, 2)) for c in centers])
+        y = np.array([0] * n_per + [1] * n_per + [2] * n_per)
+        perm = rng.permutation(len(y))
+        return X[perm], y[perm]
+
+    def test_output_type_multiclass(self):
+        """Multiclass returns MulticlassVennPrediction."""
+        rng = np.random.default_rng(42)
+        X, y = self._make_3class_data(rng)
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:40], y[:40])
+        pred = vp.predict_one(X[40])
+        assert isinstance(pred, MulticlassVennPrediction)
+
+    def test_output_type_binary(self):
+        """Binary data still returns VennPrediction (backward compat)."""
+        rng = np.random.default_rng(42)
+        X = rng.normal(size=(30, 2))
+        y = (X[:, 0] > 0).astype(int)
+        vp = NearestNeighboursVennPredictor(k=1)
+        vp.learn_initial_training_set(X[:20], y[:20])
+        pred = vp.predict_one(X[20])
+        assert isinstance(pred, VennPrediction)
+
+    def test_rows_sum_to_one(self):
+        """Each row of the multiprobability matrix sums to 1."""
+        rng = np.random.default_rng(7)
+        X, y = self._make_3class_data(rng)
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:40], y[:40])
+
+        for i in range(40, 50):
+            pred = vp.predict_one(X[i])
+            row_sums = pred.probs.sum(axis=1)
+            np.testing.assert_allclose(row_sums, 1.0, atol=1e-12)
+
+    def test_probabilities_non_negative(self):
+        """All entries in the matrix are >= 0."""
+        rng = np.random.default_rng(8)
+        X, y = self._make_3class_data(rng)
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:40], y[:40])
+
+        for i in range(40, 50):
+            pred = vp.predict_one(X[i])
+            assert np.all(pred.probs >= 0)
+
+    def test_diagonal_dominance_well_separated(self):
+        """On well-separated data, diagonal entries should be largest in row."""
+        rng = np.random.default_rng(9)
+        X, y = self._make_3class_data(rng, n=90)
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:60], y[:60])
+
+        # Most predictions should have diagonal dominance
+        diag_dominant_count = 0
+        for i in range(60, 90):
+            pred = vp.predict_one(X[i])
+            for row_idx in range(3):
+                if pred.probs[row_idx, row_idx] == pred.probs[row_idx].max():
+                    diag_dominant_count += 1
+
+        # At least 80% of (hypothesis, prediction) pairs should be diag-dominant
+        assert diag_dominant_count >= 0.8 * (30 * 3)
+
+    def test_streaming(self):
+        """predict_one → learn_one loop works correctly."""
+        rng = np.random.default_rng(10)
+        X, y = self._make_3class_data(rng, n=60)
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:30], y[:30])
+
+        for i in range(30, 50):
+            pred = vp.predict_one(X[i])
+            assert isinstance(pred, MulticlassVennPrediction)
+            assert pred.probs.shape == (3, 3)
+            vp.learn_one(X[i], y[i])
+
+        # After streaming, internal state should have grown
+        assert vp.X.shape[0] == 50
+
+    def test_point_prediction(self):
+        """Point prediction is a valid probability vector."""
+        rng = np.random.default_rng(11)
+        X, y = self._make_3class_data(rng)
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:40], y[:40])
+
+        pred = vp.predict_one(X[40])
+        point = pred.point
+        assert point.shape == (3,)
+        assert np.all(point >= 0)
+        np.testing.assert_allclose(point.sum(), 1.0, atol=1e-12)
+
+    def test_5class(self):
+        """Works with 5 classes."""
+        rng = np.random.default_rng(12)
+        n_per_class = 20
+        centers = rng.normal(size=(5, 3)) * 5
+        X = np.vstack(
+            [rng.normal(c, 0.3, size=(n_per_class, 3)) for c in centers]
+        )
+        y = np.repeat(np.arange(5), n_per_class)
+        perm = rng.permutation(len(y))
+        X, y = X[perm], y[perm]
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:80], y[:80])
+
+        pred = vp.predict_one(X[80])
+        assert isinstance(pred, MulticlassVennPrediction)
+        assert pred.probs.shape == (5, 5)
+        np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
+
+    def test_explicit_label_space(self):
+        """Explicit label_space handles missing labels in training data."""
+        rng = np.random.default_rng(13)
+        X = rng.normal(size=(30, 2))
+        # Training data only has labels 0, 1 but label_space declares 0,1,2
+        y_train = (X[:20, 0] > 0).astype(int)
+        vp = NearestNeighboursVennPredictor(k=3, label_space=[0, 1, 2])
+        vp.learn_initial_training_set(X[:20], y_train)
+
+        pred = vp.predict_one(X[20])
+        assert isinstance(pred, MulticlassVennPrediction)
+        assert pred.probs.shape == (3, 3)
+        np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
+
+    def test_label_space_expanded_by_learn_one(self):
+        """learn_one with unseen label expands label_space."""
+        rng = np.random.default_rng(14)
+        X = rng.normal(size=(25, 2))
+        y = np.zeros(20, dtype=int)
+        y[10:] = 1
+
+        vp = NearestNeighboursVennPredictor(k=3)
+        vp.learn_initial_training_set(X[:20], y)
+        assert len(vp.label_space) == 2
+
+        # Add a new class via learn_one
+        vp.learn_one(X[20], 2)
+        assert 2 in vp.label_space
+        assert len(vp.label_space) == 3
+
+        pred = vp.predict_one(X[21])
+        assert isinstance(pred, MulticlassVennPrediction)
+        assert pred.probs.shape == (3, 3)
+
+    def test_cold_start(self):
+        """Works from empty state with learn_one only."""
+        rng = np.random.default_rng(15)
+        X = rng.normal(size=(15, 2))
+        y = np.array([0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2])
+
+        vp = NearestNeighboursVennPredictor(k=2, label_space=[0, 1, 2])
+        # Cold start prediction
+        pred = vp.predict_one(X[0])
+        assert isinstance(pred, MulticlassVennPrediction)
+
+        # Build up from scratch
+        for i in range(10):
+            vp.learn_one(X[i], y[i])
+
+        pred = vp.predict_one(X[10])
+        assert isinstance(pred, MulticlassVennPrediction)
+        assert pred.probs.shape == (3, 3)
+        np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
+
+    def test_k_greater_than_n(self):
+        """k > n doesn't crash; uses all available neighbours."""
+        rng = np.random.default_rng(16)
+        X = rng.normal(size=(10, 2))
+        y = np.array([0, 1, 2, 0, 1, 2, 0, 1, 2, 0])
+
+        vp = NearestNeighboursVennPredictor(k=20)  # k > n
+        vp.learn_initial_training_set(X[:5], y[:5])
+
+        pred = vp.predict_one(X[5])
+        assert isinstance(pred, MulticlassVennPrediction)
+        np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
+
+
+class TestLabelSpacePolicy:
+    """Label-space policy: explicit = fixed (rejects unknowns), implicit = adaptive."""
+
+    def test_fixed_rejects_unknown_learn_one(self):
+        """Fixed label_space raises ValueError on unknown label in learn_one."""
+        vp = NearestNeighboursVennPredictor(k=1, label_space=[0, 1])
+        vp.learn_one(np.array([1.0, 0.0]), 0)
+        with pytest.raises(ValueError, match="not in declared label_space"):
+            vp.learn_one(np.array([2.0, 0.0]), 2)
+
+    def test_fixed_rejects_unknown_learn_initial(self):
+        """Fixed label_space raises ValueError on unknown label in learn_initial_training_set."""
+        vp = NearestNeighboursVennPredictor(k=1, label_space=[0, 1])
+        with pytest.raises(ValueError, match="not in declared label_space"):
+            vp.learn_initial_training_set(
+                np.array([[0, 0], [1, 1], [2, 2]], dtype=float),
+                np.array([0, 1, 2]),
+            )
+
+    def test_adaptive_expands(self):
+        """Adaptive label_space grows on new labels."""
+        vp = NearestNeighboursVennPredictor(k=1)
+        vp.learn_one(np.array([0.0, 0.0]), 0)
+        assert list(vp.label_space) == [0]
+        vp.learn_one(np.array([1.0, 1.0]), 1)
+        assert list(vp.label_space) == [0, 1]
+        vp.learn_one(np.array([2.0, 2.0]), 5)
+        assert list(vp.label_space) == [0, 1, 5]
+
+    def test_fixed_flag_set(self):
+        """_label_space_fixed reflects construction argument."""
+        vp_fixed = NearestNeighboursVennPredictor(k=1, label_space=[0, 1, 2])
+        assert vp_fixed._label_space_fixed is True
+        vp_adapt = NearestNeighboursVennPredictor(k=1)
+        assert vp_adapt._label_space_fixed is False

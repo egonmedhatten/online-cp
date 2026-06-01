@@ -101,17 +101,23 @@ Also supports k-NN scoring (`VennAbersPredictor(scorer="knn", k=5)`) and SVM sco
 
 ### Nearest-neighbours Venn predictor
 
-Taxonomy-based Venn predictor using the k-NN voting taxonomy (ALRW2 §6.2). The taxonomy categorises each example by the number of positive labels among its k nearest neighbours, yielding calibrated multiprobability output:
+Taxonomy-based Venn predictor using the k-NN voting taxonomy (ALRW2 §6.2). Supports **binary and multiclass** labels. The taxonomy categorises each example by the number of same-class labels among its k nearest neighbours:
 
 ```python
 from online_cp import NearestNeighboursVennPredictor, log_loss_point
 
+# Binary
 vp = NearestNeighboursVennPredictor(k=3)
 vp.learn_initial_training_set(X_train, y_train)
-
 pred = vp.predict_one(x_new)
 print(pred.p0, pred.p1)            # multiprobability pair
 log_loss_point(pred.p0, pred.p1)   # merge for decisions
+
+# Multiclass (label_space inferred from data, or pass explicitly)
+vp = NearestNeighboursVennPredictor(k=5, label_space=[0, 1, 2])
+vp.learn_initial_training_set(X_train, y_train)
+pred = vp.predict_one(x_new)
+print(pred.point)                  # calibrated class probabilities
 
 vp.learn_one(x_new, y_new)
 ```
@@ -210,7 +216,7 @@ for p in p_values:
 |--------|-------------|
 | **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalLassoRegressor` |
 | **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
-| **Venn Predictors** | `VennAbersPredictor` (ridge, k-NN, and SVM scoring), `log_loss_point`, `brier_point` |
+| **Venn Predictors** | `VennAbersPredictor` (ridge, k-NN, SVM scoring), `NearestNeighboursVennPredictor` (binary & multiclass), `log_loss_point`, `brier_point` |
 | **Mondrian CP** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage |
 | **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |

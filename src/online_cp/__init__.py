@@ -167,6 +167,9 @@ from online_cp.venn import (
     VennPrediction as VennPrediction,
 )
 from online_cp.venn import (
+    MulticlassVennPrediction as MulticlassVennPrediction,
+)
+from online_cp.venn import (
     VennAbersPredictor as VennAbersPredictor,
 )
 from online_cp.venn import (

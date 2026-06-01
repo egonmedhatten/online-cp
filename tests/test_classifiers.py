@@ -399,6 +399,21 @@ class TestConformalClassifierWrapper:
         assert set(Gamma.elements) == {0, 1}
         assert p_values == {0: 1.0, 1: 1.0}
 
+    def test_wrapper_infers_label_space_from_data(self):
+        """With label_space=None, wrapper infers from learn_initial_training_set."""
+        X = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
+        y = np.array([10, 20, 10])
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(_ToyProbLearner(), rnd_state=0)
+
+        assert cp.label_space is None
+        cp.learn_initial_training_set(X, y)
+        assert set(cp.label_space) == {10, 20}
+
+        Gamma, p_values = cp.predict(np.array([3.0, 3.0]), return_p_values=True)
+        assert set(p_values.keys()) == {10, 20}
+
 
 class TestKNNAggregation:
     """Tests for the configurable aggregation parameter (mean/median)."""

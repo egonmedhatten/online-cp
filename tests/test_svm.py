@@ -220,13 +220,13 @@ class TestConformalSVM:
 
     def test_empty_training_set(self):
         """Prediction with no training data should return all labels."""
-        svm = ConformalSupportVectorMachine(kernel="linear", rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel="linear", label_space=np.array([-1, 1]), rnd_state=0)
         Gamma = svm.predict(np.array([1.0, 2.0]))
         assert -1 in Gamma and 1 in Gamma
 
     def test_compute_p_value_empty_training_set(self):
         """compute_p_value should return 1.0 with no training data."""
-        svm = ConformalSupportVectorMachine(kernel="linear", rnd_state=0)
+        svm = ConformalSupportVectorMachine(kernel="linear", label_space=np.array([-1, 1]), rnd_state=0)
         assert svm.compute_p_value(np.array([1.0, 2.0]), 1) == 1.0
 
     def test_compute_p_value_binary_in_unit_interval(self, separable_data):

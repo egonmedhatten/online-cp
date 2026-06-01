@@ -166,7 +166,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
     """
     Classifier using nearest neighbours as the nonconformity measure.
 
-    >>> cp = ConformalNearestNeighboursClassifier(k=1, rnd_state=1337, epsilon=0.1)
+    >>> cp = ConformalNearestNeighboursClassifier(k=1, label_space=[-1, 1], rnd_state=1337, epsilon=0.1)
     >>> Gamma, p_values = cp.predict(3, return_p_values=True)
     >>> Gamma  # predict both labels, as this is the first
     array([-1,  1])

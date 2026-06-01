@@ -338,6 +338,7 @@ class VennAbersPredictor:
         coef0=0.0,
         smo_tol=1e-3,
         smo_max_iter=5000,
+        label_space=None,
     ):
         """
         Parameters
@@ -369,6 +370,11 @@ class VennAbersPredictor:
             KKT violation tolerance for SMO solver.
         smo_max_iter : int
             Maximum iterations for SMO solver.
+        label_space : array-like or None
+            Explicit set of possible labels. If None, inferred from data.
+            When provided, the label space is fixed and labels outside it
+            are rejected. When None (default), binary {0,1} is inferred
+            for backward compatibility unless multiclass labels appear.
         """
         if scorer not in ("ridge", "kernel_ridge", "knn", "svm"):
             raise ValueError(
@@ -395,6 +401,14 @@ class VennAbersPredictor:
         self.coef0 = coef0
         self.smo_tol = smo_tol
         self.smo_max_iter = smo_max_iter
+
+        # Label-space policy
+        self._label_space_fixed = label_space is not None
+        self.label_space = (
+            np.asarray(sorted(label_space), dtype=int)
+            if label_space is not None
+            else None
+        )
 
         self.X = None
         self.y = None
@@ -493,12 +507,25 @@ class VennAbersPredictor:
         X : ndarray, shape (n, d)
             Training feature vectors.
         y : ndarray, shape (n,)
-            Binary labels, must be in {0, 1}.
+            Integer labels. Binary {0, 1} or multiclass.
         """
         X = np.atleast_2d(X)
         y = np.asarray(y, dtype=int)
-        if not np.all((y == 0) | (y == 1)):
-            raise ValueError("Labels must be binary {0, 1}")
+
+        # Label-space policy
+        if self._label_space_fixed:
+            unknown = set(np.unique(y)) - set(self.label_space)
+            if unknown:
+                raise ValueError(
+                    f"Labels {sorted(unknown)} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.unique(y)
+        else:
+            self.label_space = np.sort(
+                np.unique(np.concatenate([self.label_space, np.unique(y)]))
+            )
 
         self.X = X
         self.y = y
@@ -528,7 +555,7 @@ class VennAbersPredictor:
         x : array-like, shape (d,)
             Feature vector.
         y : int
-            True binary label (0 or 1).
+            True label.
         precomputed : dict, optional
             Cached state from predict(return_update=True).
             For ridge: {'XTXinv': ...}
@@ -536,6 +563,19 @@ class VennAbersPredictor:
             For knn: {'D': ...}
         """
         x = np.asarray(x).ravel()
+        y = int(y)
+
+        # Label-space policy
+        if self._label_space_fixed:
+            if y not in self.label_space:
+                raise ValueError(
+                    f"Label {y} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.array([y], dtype=int)
+        elif y not in self.label_space:
+            self.label_space = np.sort(np.append(self.label_space, y))
 
         if self.X is None:
             self.X = x.reshape(1, -1)
@@ -622,17 +662,33 @@ class VennAbersPredictor:
         Returns
         -------
         prediction : VennPrediction
-            Contains p0 and p1 multiprobability pair.
+            Binary: contains p0, p1. Multiclass: |Y|×|Y| probs matrix.
         precomputed : dict, optional
             Returned if return_update=True.
         """
         x = np.asarray(x).ravel()
 
         if self.X is None or len(self.y) == 0:
-            pred = VennPrediction.binary(0.5, 0.5)
+            if self.label_space is not None and len(self.label_space) > 2:
+                n_labels = len(self.label_space)
+                uniform = np.full((n_labels, n_labels), 1.0 / n_labels)
+                pred = VennPrediction(uniform, self.label_space)
+            else:
+                pred = VennPrediction.binary(0.5, 0.5)
             if return_update:
                 return pred, {}
             return pred
+
+        # Dispatch: binary vs multiclass
+        if self.label_space is not None and len(self.label_space) > 2:
+            if self.scorer == "ridge":
+                return self._predict_multiclass_ridge(x, return_update)
+            elif self.scorer == "kernel_ridge":
+                return self._predict_multiclass_kernel_ridge(x, return_update)
+            elif self.scorer == "knn":
+                return self._predict_multiclass_knn(x, return_update)
+            elif self.scorer == "svm":
+                return self._predict_multiclass_svm(x, return_update)
 
         if self.scorer == "ridge":
             return self._predict_ridge(x, return_update)
@@ -777,6 +833,252 @@ class VennAbersPredictor:
         if return_update:
             return pred, {"K": K_aug}
         return pred
+
+    # ------------------------------------------------------------------
+    # Multiclass prediction methods (OVR isotonic calibration)
+    # ------------------------------------------------------------------
+
+    def _predict_multiclass_ridge(self, x, return_update):
+        """Multiclass ridge: 2|Y| PAVA calls via hat-matrix decomposition."""
+        n = self.X.shape[0]
+        n_labels = len(self.label_space)
+
+        # Augment X with test point
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+
+        # Sherman-Morrison update for augmented XTXinv
+        XTXinv_aug = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (
+            1 + x.T @ self.XTXinv @ x
+        )
+
+        # Hat matrix last column (shared across all target classes)
+        h_col = X_aug @ XTXinv_aug @ X_aug[-1]
+
+        test_idx = n
+        probs = np.empty((n_labels, n_labels), dtype=np.float64)
+
+        for j, y_prime in enumerate(self.label_space):
+            # Indicator for target class y' (test point = 0 for off-diagonal)
+            ind_train = (self.y == y_prime).astype(np.float64)
+            ind_off = np.append(ind_train, 0.0)
+            ind_on = np.append(ind_train, 1.0)
+
+            # Base scores (hypothesis v ≠ y': test entry contributes 0)
+            base_scores = X_aug @ XTXinv_aug @ X_aug.T @ ind_off
+
+            # Diagonal scores (hypothesis v = y': test entry contributes 1)
+            scores_on = base_scores + h_col
+
+            # Off-diagonal: all v ≠ y' share the same calibrated value
+            p_off = _isotonic_calibrate(base_scores, ind_off, test_idx)
+            # Diagonal: v = y'
+            p_on = _isotonic_calibrate(scores_on, ind_on, test_idx)
+
+            for i, v in enumerate(self.label_space):
+                if v == y_prime:
+                    probs[i, j] = p_on
+                else:
+                    probs[i, j] = p_off
+
+        # Normalize rows
+        row_sums = probs.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        probs /= row_sums
+
+        pred = VennPrediction(probs, self.label_space)
+
+        if return_update:
+            return pred, {"XTXinv": XTXinv_aug}
+        return pred
+
+    def _predict_multiclass_kernel_ridge(self, x, return_update):
+        """Multiclass kernel ridge: 2|Y| PAVA calls via kernel hat-matrix."""
+        n = self.X.shape[0]
+        n_labels = len(self.label_space)
+
+        # Augment Gram and inverse
+        K_aug, Ka_inv_aug = self._augment_kernel_state(x)
+
+        # Hat matrix last column (shared)
+        h_col = K_aug @ Ka_inv_aug[:, -1]
+
+        test_idx = n
+        probs = np.empty((n_labels, n_labels), dtype=np.float64)
+
+        for j, y_prime in enumerate(self.label_space):
+            ind_train = (self.y == y_prime).astype(np.float64)
+            ind_off = np.append(ind_train, 0.0)
+            ind_on = np.append(ind_train, 1.0)
+
+            base_scores = K_aug @ Ka_inv_aug @ ind_off
+            scores_on = base_scores + h_col
+
+            p_off = _isotonic_calibrate(base_scores, ind_off, test_idx)
+            p_on = _isotonic_calibrate(scores_on, ind_on, test_idx)
+
+            for i, v in enumerate(self.label_space):
+                if v == y_prime:
+                    probs[i, j] = p_on
+                else:
+                    probs[i, j] = p_off
+
+        row_sums = probs.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        probs /= row_sums
+
+        pred = VennPrediction(probs, self.label_space)
+
+        if return_update:
+            return pred, {"K": K_aug, "Ka_inv": Ka_inv_aug}
+        return pred
+
+    def _predict_multiclass_knn(self, x, return_update):
+        """Multiclass kNN: 2|Y| score computations via OVR binarization."""
+        n = self.X.shape[0]
+        n_labels = len(self.label_space)
+        k = self.k
+        agg_func = np.mean if self.aggregation == "mean" else np.median
+
+        # Augment distance matrix
+        d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
+        D_aug = np.empty((n + 1, n + 1), dtype=np.float64)
+        D_aug[:n, :n] = self.D
+        D_aug[:n, n] = d
+        D_aug[n, :n] = d
+        D_aug[n, n] = 0.0
+
+        test_idx = n
+        probs = np.empty((n_labels, n_labels), dtype=np.float64)
+
+        for j, y_prime in enumerate(self.label_space):
+            # Binarize: 1 if label == y', 0 otherwise
+            ind_train = (self.y == y_prime).astype(np.float64)
+            ind_off = np.append(ind_train, 0.0)  # test point NOT in class y'
+            ind_on = np.append(ind_train, 1.0)  # test point IN class y'
+
+            # Compute OVR kNN scores for both variants
+            scores_off = self._compute_knn_scores_binary(D_aug, ind_off, k, agg_func)
+            scores_on = self._compute_knn_scores_binary(D_aug, ind_on, k, agg_func)
+
+            p_off = _isotonic_calibrate(scores_off, ind_off, test_idx)
+            p_on = _isotonic_calibrate(scores_on, ind_on, test_idx)
+
+            for i, v in enumerate(self.label_space):
+                if v == y_prime:
+                    probs[i, j] = p_on
+                else:
+                    probs[i, j] = p_off
+
+        row_sums = probs.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        probs /= row_sums
+
+        pred = VennPrediction(probs, self.label_space)
+
+        if return_update:
+            return pred, {"D": D_aug}
+        return pred
+
+    def _predict_multiclass_svm(self, x, return_update):
+        """Multiclass SVM: 2|Y| SVM solves via OVR binarization."""
+        from online_cp.classifiers import _smo_solve
+
+        n = self.X.shape[0]
+        n_labels = len(self.label_space)
+
+        # Augment Gram matrix
+        k_row = np.atleast_1d(self._kernel(self.X, x))
+        kappa = float(self._kernel(x.reshape(1, -1))[0, 0])
+        K_aug = np.empty((n + 1, n + 1), dtype=np.float64)
+        K_aug[:n, :n] = self.K
+        K_aug[:n, n] = k_row
+        K_aug[n, :n] = k_row
+        K_aug[n, n] = kappa
+
+        test_idx = n
+        probs = np.empty((n_labels, n_labels), dtype=np.float64)
+
+        for j, y_prime in enumerate(self.label_space):
+            ind_train = (self.y == y_prime).astype(np.float64)
+            ind_off = np.append(ind_train, 0.0)
+            ind_on = np.append(ind_train, 1.0)
+
+            # OVR SVM: labels {-1, +1} from indicator
+            y_bin_off = (2 * ind_off - 1).astype(np.float64)
+            y_bin_on = (2 * ind_on - 1).astype(np.float64)
+
+            alpha_off, b_off = _smo_solve(
+                K_aug, y_bin_off, self.C, self.smo_tol, self.smo_max_iter
+            )
+            scores_off = K_aug @ (alpha_off * y_bin_off) + b_off
+
+            alpha_on, b_on = _smo_solve(
+                K_aug, y_bin_on, self.C, self.smo_tol, self.smo_max_iter
+            )
+            scores_on = K_aug @ (alpha_on * y_bin_on) + b_on
+
+            p_off = _isotonic_calibrate(scores_off, ind_off, test_idx)
+            p_on = _isotonic_calibrate(scores_on, ind_on, test_idx)
+
+            for i, v in enumerate(self.label_space):
+                if v == y_prime:
+                    probs[i, j] = p_on
+                else:
+                    probs[i, j] = p_off
+
+        row_sums = probs.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        probs /= row_sums
+
+        pred = VennPrediction(probs, self.label_space)
+
+        if return_update:
+            return pred, {"K": K_aug}
+        return pred
+
+    @staticmethod
+    def _compute_knn_scores_binary(D, labels, k, agg_func):
+        """Compute binary kNN scores for OVR isotonic calibration.
+
+        For each point i with binary labels (0/1), compute:
+        score = agg(d_to_class_0) - agg(d_to_class_1)
+        Higher score → more likely to be class 1 (monotone for PAVA).
+        """
+        n = len(labels)
+        k_use = min(k, n - 1)
+        if k_use == 0:
+            return np.zeros(n)
+
+        scores = np.empty(n, dtype=np.float64)
+        D_work = D.copy()
+        np.fill_diagonal(D_work, np.inf)
+
+        idx_0 = np.flatnonzero(labels == 0)
+        idx_1 = np.flatnonzero(labels == 1)
+
+        for i in range(n):
+            # Distance to class 0
+            others_0 = idx_0[idx_0 != i]
+            if len(others_0) == 0:
+                d_to_0 = np.inf
+            else:
+                d_0_all = D_work[i, others_0]
+                k_0 = min(k_use, len(others_0))
+                d_to_0 = agg_func(np.partition(d_0_all, k_0 - 1)[:k_0])
+
+            # Distance to class 1
+            others_1 = idx_1[idx_1 != i]
+            if len(others_1) == 0:
+                d_to_1 = 0.0
+            else:
+                d_1_all = D_work[i, others_1]
+                k_1 = min(k_use, len(others_1))
+                d_to_1 = agg_func(np.partition(d_1_all, k_1 - 1)[:k_1])
+
+            # Higher score → more likely class 1 (monotone)
+            scores[i] = d_to_0 - d_to_1
+
+        return scores
 
     @staticmethod
     def _compute_knn_scores(D, labels, k, agg_func):

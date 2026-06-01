@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `VennAbersPredictor`: now supports multiclass labels (|Y| > 2) using OVR isotonic calibration with 2|Y| PAVA calls per prediction. All 4 scorers (ridge, kernel_ridge, knn, svm) supported. Binary behaviour unchanged. Accepts optional `label_space` constructor argument.
 - `MulticlassVennPrediction`: Output type for multiclass Venn predictors — a |Y| × |Y| multiprobability matrix with `.point` aggregation property.
 - `NearestNeighboursVennPredictor`: now supports multiclass labels (|Y| > 2) using same-class-count taxonomy. Binary behaviour unchanged. Accepts optional `label_space` constructor argument.
 - `NearestNeighboursVennPredictor`: Online Venn predictor with k-NN voting taxonomy (ALRW2 §6.2). Produces calibrated multiprobability predictions via taxonomy-based frequency counting. Generalises the 1-NN taxonomy from the textbook to arbitrary k.

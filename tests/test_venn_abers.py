@@ -450,11 +450,13 @@ class TestEdgeCases:
             VennAbersPredictor(scorer="knn", aggregation="sum")
 
     def test_non_binary_labels(self):
+        """Multiclass labels are now accepted (adaptive label_space)."""
         vap = VennAbersPredictor(scorer="ridge", a=1.0)
-        with pytest.raises(ValueError, match="binary"):
-            vap.learn_initial_training_set(
-                np.random.randn(10, 2), np.array([0, 1, 2, 0, 1, 2, 0, 1, 2, 0])
-            )
+        X = np.random.randn(10, 2)
+        y = np.array([0, 1, 2, 0, 1, 2, 0, 1, 2, 0])
+        vap.learn_initial_training_set(X, y)
+        assert len(vap.label_space) == 3
+        np.testing.assert_array_equal(vap.label_space, [0, 1, 2])
 
 
 # ---------------------------------------------------------------------------
@@ -936,3 +938,219 @@ class TestLabelSpacePolicy:
         assert vp_fixed._label_space_fixed is True
         vp_adapt = NearestNeighboursVennPredictor(k=1)
         assert vp_adapt._label_space_fixed is False
+
+
+# ===========================================================================
+# Multiclass VennAbersPredictor tests
+# ===========================================================================
+
+
+class TestMulticlassVennAbersPredictor:
+    """Tests for multiclass extension of VennAbersPredictor."""
+
+    def _make_3class_data(self, rng, n=90):
+        """Well-separated 3-class Gaussian data, shuffled."""
+        n_per = n // 3
+        centers = np.array([[0, 0], [4, 0], [2, 4]])
+        X = np.vstack([rng.normal(c, 0.5, size=(n_per, 2)) for c in centers])
+        y = np.array([0] * n_per + [1] * n_per + [2] * n_per)
+        perm = rng.permutation(len(y))
+        return X[perm], y[perm]
+
+    @pytest.mark.parametrize("scorer", ["ridge", "kernel_ridge", "knn", "svm"])
+    def test_output_type_multiclass(self, scorer):
+        """Multiclass returns VennPrediction with |Y|×|Y| matrix."""
+        rng = np.random.default_rng(42)
+        X, y = self._make_3class_data(rng)
+        kwargs = {"scorer": scorer, "label_space": [0, 1, 2]}
+        if scorer == "ridge":
+            kwargs["a"] = 1.0
+        elif scorer == "kernel_ridge":
+            kwargs["a"] = 1.0
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+        elif scorer == "knn":
+            kwargs["k"] = 3
+        elif scorer == "svm":
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+            kwargs["C"] = 1.0
+        vap = VennAbersPredictor(**kwargs)
+        vap.learn_initial_training_set(X[:40], y[:40])
+        pred = vap.predict(X[40])
+        assert isinstance(pred, VennPrediction)
+        assert pred.probs.shape == (3, 3)
+
+    @pytest.mark.parametrize("scorer", ["ridge", "kernel_ridge", "knn", "svm"])
+    def test_rows_sum_to_one(self, scorer):
+        """Each row of the probs matrix sums to 1."""
+        rng = np.random.default_rng(7)
+        X, y = self._make_3class_data(rng)
+        kwargs = {"scorer": scorer, "label_space": [0, 1, 2]}
+        if scorer == "ridge":
+            kwargs["a"] = 1.0
+        elif scorer == "kernel_ridge":
+            kwargs["a"] = 1.0
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+        elif scorer == "knn":
+            kwargs["k"] = 3
+        elif scorer == "svm":
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+            kwargs["C"] = 1.0
+        vap = VennAbersPredictor(**kwargs)
+        vap.learn_initial_training_set(X[:40], y[:40])
+        for i in range(40, 45):
+            pred = vap.predict(X[i])
+            np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-10)
+
+    @pytest.mark.parametrize("scorer", ["ridge", "kernel_ridge", "knn", "svm"])
+    def test_probabilities_non_negative(self, scorer):
+        """All entries in the probs matrix are >= 0."""
+        rng = np.random.default_rng(8)
+        X, y = self._make_3class_data(rng)
+        kwargs = {"scorer": scorer, "label_space": [0, 1, 2]}
+        if scorer == "ridge":
+            kwargs["a"] = 1.0
+        elif scorer == "kernel_ridge":
+            kwargs["a"] = 1.0
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+        elif scorer == "knn":
+            kwargs["k"] = 3
+        elif scorer == "svm":
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+            kwargs["C"] = 1.0
+        vap = VennAbersPredictor(**kwargs)
+        vap.learn_initial_training_set(X[:40], y[:40])
+        for i in range(40, 45):
+            pred = vap.predict(X[i])
+            assert np.all(pred.probs >= -1e-12)
+
+    @pytest.mark.parametrize("scorer", ["ridge", "kernel_ridge", "knn", "svm"])
+    def test_streaming(self, scorer):
+        """predict → learn_one loop works correctly."""
+        rng = np.random.default_rng(10)
+        X, y = self._make_3class_data(rng, n=60)
+        kwargs = {"scorer": scorer, "label_space": [0, 1, 2]}
+        if scorer == "ridge":
+            kwargs["a"] = 1.0
+        elif scorer == "kernel_ridge":
+            kwargs["a"] = 1.0
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+        elif scorer == "knn":
+            kwargs["k"] = 3
+        elif scorer == "svm":
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+            kwargs["C"] = 1.0
+        vap = VennAbersPredictor(**kwargs)
+        vap.learn_initial_training_set(X[:30], y[:30])
+        for i in range(30, 45):
+            pred = vap.predict(X[i])
+            assert pred.probs.shape == (3, 3)
+            np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-10)
+            vap.learn_one(X[i], y[i])
+        assert vap.X.shape[0] == 45
+
+    @pytest.mark.parametrize("scorer", ["ridge", "kernel_ridge", "knn", "svm"])
+    def test_return_update(self, scorer):
+        """return_update=True returns precomputed dict."""
+        rng = np.random.default_rng(11)
+        X, y = self._make_3class_data(rng)
+        kwargs = {"scorer": scorer, "label_space": [0, 1, 2]}
+        if scorer == "ridge":
+            kwargs["a"] = 1.0
+        elif scorer == "kernel_ridge":
+            kwargs["a"] = 1.0
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+        elif scorer == "knn":
+            kwargs["k"] = 3
+        elif scorer == "svm":
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+            kwargs["C"] = 1.0
+        vap = VennAbersPredictor(**kwargs)
+        vap.learn_initial_training_set(X[:40], y[:40])
+        result = vap.predict(X[40], return_update=True)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        pred, precomputed = result
+        assert isinstance(pred, VennPrediction)
+        assert isinstance(precomputed, dict)
+
+    def test_cold_start_multiclass(self):
+        """Cold-start returns uniform probs matrix."""
+        vap = VennAbersPredictor(scorer="ridge", a=1.0, label_space=[0, 1, 2])
+        pred = vap.predict(np.array([1.0, 2.0]))
+        assert pred.probs.shape == (3, 3)
+        np.testing.assert_allclose(pred.probs, 1.0 / 3)
+
+    def test_binary_backward_compat(self):
+        """Binary data without label_space still gives binary VennPrediction."""
+        rng = np.random.default_rng(99)
+        X = rng.normal(size=(30, 2))
+        y = (X[:, 0] > 0).astype(int)
+        vap = VennAbersPredictor(scorer="ridge", a=1.0)
+        vap.learn_initial_training_set(X[:20], y[:20])
+        pred = vap.predict(X[20])
+        assert isinstance(pred, VennPrediction)
+        # Should still have p0/p1 since label_space=[0,1]
+        assert 0 <= pred.p0 <= 1
+        assert 0 <= pred.p1 <= 1
+
+    def test_label_space_policy_fixed_rejects(self):
+        """Fixed label_space rejects unknown labels."""
+        vap = VennAbersPredictor(scorer="ridge", a=1.0, label_space=[0, 1, 2])
+        vap.learn_initial_training_set(
+            np.random.randn(9, 2), np.array([0, 1, 2, 0, 1, 2, 0, 1, 2])
+        )
+        with pytest.raises(ValueError, match="not in declared label_space"):
+            vap.learn_one(np.array([0.0, 0.0]), 5)
+
+    def test_label_space_policy_adaptive_expands(self):
+        """Adaptive label_space grows when new labels arrive."""
+        vap = VennAbersPredictor(scorer="ridge", a=1.0)
+        vap.learn_initial_training_set(
+            np.random.randn(6, 2), np.array([0, 1, 0, 1, 0, 1])
+        )
+        assert list(vap.label_space) == [0, 1]
+        vap.learn_one(np.array([0.0, 0.0]), 2)
+        assert 2 in vap.label_space
+
+    @pytest.mark.parametrize("scorer", ["ridge", "kernel_ridge"])
+    def test_binary_uses_binary_path(self, scorer):
+        """With binary data and no explicit label_space, binary path is used."""
+        rng = np.random.default_rng(77)
+        X = rng.normal(size=(30, 2))
+        y = (X[:, 0] > 0).astype(int)
+
+        kwargs = {"scorer": scorer, "a": 1.0}
+        if scorer == "kernel_ridge":
+            kwargs["kernel"] = "rbf"
+            kwargs["sigma"] = 1.0
+        vap = VennAbersPredictor(**kwargs)
+        vap.learn_initial_training_set(X[:20], y[:20])
+        pred = vap.predict(X[20])
+        # label_space should be [0,1] (inferred) → binary path
+        assert len(vap.label_space) == 2
+        assert 0 <= pred.p0 <= 1
+        assert 0 <= pred.p1 <= 1
+        # Rows must sum to 1
+        np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
+
+    def test_point_prediction(self):
+        """Point prediction is a valid probability vector."""
+        rng = np.random.default_rng(12)
+        X, y = self._make_3class_data(rng)
+        vap = VennAbersPredictor(scorer="ridge", a=1.0, label_space=[0, 1, 2])
+        vap.learn_initial_training_set(X[:40], y[:40])
+        pred = vap.predict(X[40])
+        point = pred.point
+        assert point.shape == (3,)
+        assert np.all(point >= 0)
+        np.testing.assert_allclose(point.sum(), 1.0, atol=1e-12)

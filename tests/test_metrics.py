@@ -12,8 +12,12 @@ from online_cp.metrics import (
     ObservedFuzziness,
     SetSize,
     WinklerScore,
+    BrierScore,
+    LogLoss,
+    Width,
 )
 from online_cp.regressors import ConformalPredictionInterval
+from online_cp.venn import VennPrediction
 
 
 class TestErrorRate:
@@ -192,3 +196,131 @@ class TestMetrics:
         m.update(y=1, Gamma=Gamma_hit)
         expected = np.array([0.0, 0.5, 1 / 3])
         np.testing.assert_allclose(m.cumulative_mean(), expected)
+
+
+# ---------------------------------------------------------------------------
+# Venn prediction metrics
+# ---------------------------------------------------------------------------
+
+
+class TestBrierScore:
+    def test_perfect_binary_prediction(self):
+        # Predict y=1 with certainty: point = [0, 1]
+        venn = VennPrediction.binary(1.0, 1.0)
+        m = BrierScore()
+        result = m.update(y=1, venn=venn)
+        assert np.isclose(result, 0.0)
+
+    def test_worst_binary_prediction(self):
+        # Predict y=0 with certainty when y=1: point = [1, 0]
+        venn = VennPrediction.binary(0.0, 0.0)
+        m = BrierScore()
+        result = m.update(y=1, venn=venn)
+        # Brier = (0-1)^2 + (1-0)^2 = 2.0
+        assert np.isclose(result, 2.0)
+
+    def test_uniform_binary(self):
+        # p0=0.5, p1=0.5 → point = [0.5, 0.5]
+        venn = VennPrediction.binary(0.5, 0.5)
+        m = BrierScore()
+        result = m.update(y=1, venn=venn)
+        # Brier = (0.5-0)^2 + (0.5-1)^2 = 0.25 + 0.25 = 0.5
+        assert np.isclose(result, 0.5)
+
+    def test_multiclass(self):
+        # 3-class, hypothesis rows all predict [0.2, 0.3, 0.5]
+        probs = np.array([[0.2, 0.3, 0.5]] * 3)
+        venn = VennPrediction(probs, np.array([0, 1, 2]))
+        m = BrierScore()
+        result = m.update(y=2, venn=venn)
+        # point = [0.2, 0.3, 0.5], indicator = [0, 0, 1]
+        # Brier = (0.2)^2 + (0.3)^2 + (0.5-1)^2 = 0.04 + 0.09 + 0.25 = 0.38
+        assert np.isclose(result, 0.38)
+
+    def test_requires_venn_kwarg(self):
+        m = BrierScore()
+        with pytest.raises(ValueError, match="requires venn"):
+            m.update(y=1)
+
+
+class TestLogLoss:
+    def test_perfect_prediction(self):
+        venn = VennPrediction.binary(1.0, 1.0)
+        m = LogLoss()
+        result = m.update(y=1, venn=venn)
+        assert np.isclose(result, 0.0, atol=1e-10)
+
+    def test_uniform_binary(self):
+        venn = VennPrediction.binary(0.5, 0.5)
+        m = LogLoss()
+        result = m.update(y=1, venn=venn)
+        assert np.isclose(result, np.log(2))
+
+    def test_near_zero_clips(self):
+        # Predicts p(y=1) ≈ 0 when y=1 → should not be inf
+        venn = VennPrediction.binary(0.0, 0.0)
+        m = LogLoss()
+        result = m.update(y=1, venn=venn)
+        assert np.isfinite(result)
+        assert result > 30  # -log(1e-15) ≈ 34.5
+
+    def test_multiclass(self):
+        probs = np.array([[0.2, 0.3, 0.5]] * 3)
+        venn = VennPrediction(probs, np.array([0, 1, 2]))
+        m = LogLoss()
+        result = m.update(y=2, venn=venn)
+        # point = [0.2, 0.3, 0.5], -log(0.5) = log(2)
+        assert np.isclose(result, np.log(2))
+
+    def test_requires_venn_kwarg(self):
+        m = LogLoss()
+        with pytest.raises(ValueError, match="requires venn"):
+            m.update(y=0)
+
+
+class TestWidth:
+    def test_binary_sharp(self):
+        # p0 = p1 = 0.7 → width = 0
+        venn = VennPrediction.binary(0.7, 0.7)
+        m = Width()
+        result = m.update(y=1, venn=venn)
+        assert np.isclose(result, 0.0)
+
+    def test_binary_wide(self):
+        # p0=0.2, p1=0.9 → probs = [[0.8, 0.2], [0.1, 0.9]]
+        # col 0: max=0.8, min=0.1, width=0.7
+        # col 1: max=0.9, min=0.2, width=0.7
+        # mean = 0.7
+        venn = VennPrediction.binary(0.2, 0.9)
+        m = Width()
+        result = m.update(y=1, venn=venn)
+        assert np.isclose(result, 0.7)
+
+    def test_multiclass(self):
+        probs = np.array([
+            [0.5, 0.3, 0.2],
+            [0.1, 0.6, 0.3],
+            [0.2, 0.2, 0.6],
+        ])
+        venn = VennPrediction(probs, np.array([0, 1, 2]))
+        m = Width()
+        result = m.update(y=0, venn=venn)
+        # col 0: max=0.5, min=0.1 → 0.4
+        # col 1: max=0.6, min=0.2 → 0.4
+        # col 2: max=0.6, min=0.2 → 0.4
+        # mean = 0.4
+        assert np.isclose(result, 0.4)
+
+    def test_requires_venn_kwarg(self):
+        m = Width()
+        with pytest.raises(ValueError, match="requires venn"):
+            m.update(y=0)
+
+    def test_composable_with_other_venn_metrics(self):
+        venn = VennPrediction.binary(0.3, 0.8)
+        metric = BrierScore() + LogLoss() + Width()
+        metric.update(y=1, venn=venn)
+        result = metric.get()
+        assert "BrierScore" in result
+        assert "LogLoss" in result
+        assert "Width" in result

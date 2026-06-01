@@ -21,11 +21,13 @@ Example
 """
 
 if __name__ != "__main__":
-    from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS
+    from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS, BrierScore, LogLoss, Width
 
 __all__ = [
     "progressive_val",
     "iter_progressive_val",
+    "progressive_val_venn",
+    "iter_progressive_val_venn",
 ]
 
 
@@ -41,6 +43,13 @@ def _needs_cpd(metric):
     if isinstance(metric, Metrics):
         return any(_needs_cpd(m) for m in metric)
     return isinstance(metric, CRPS)
+
+
+def _needs_venn(metric):
+    """Check if any metric in the composite requires a VennPrediction."""
+    if isinstance(metric, Metrics):
+        return any(_needs_venn(m) for m in metric)
+    return isinstance(metric, (BrierScore, LogLoss, Width))
 
 
 def _iter_data(X_or_stream, y=None):
@@ -204,6 +213,100 @@ def iter_progressive_val(model, X, y=None, *, epsilon=None, metric=None, learn=T
             kw["epsilon"] = epsilon
 
         metric.update(y=y_i, Gamma=Gamma, **kw)
+
+        if _should_learn(learn, i, x_i, y_i):
+            model.learn_one(x_i, y_i)
+
+        if (i + 1) % step == 0:
+            if isinstance(metric, Metrics):
+                snapshot = {"step": i + 1, "t": t_i}
+                snapshot.update(metric.get())
+            else:
+                snapshot = {"step": i + 1, "t": t_i, metric.name: metric.get()}
+            yield snapshot
+
+
+# ---------------------------------------------------------------------------
+# Venn predictor evaluation
+# ---------------------------------------------------------------------------
+
+
+def progressive_val_venn(model, X, y=None, *, metric=None, learn=True, print_every=0):
+    """Run progressive validation for Venn predictors.
+
+    Same test-then-train protocol as ``progressive_val``, but adapted for
+    Venn predictors that return ``VennPrediction`` objects (no epsilon).
+
+    Parameters
+    ----------
+    model : Venn predictor
+        Must implement ``predict(x)`` returning a ``VennPrediction`` and
+        ``learn_one(x, y)``.
+    X : array-like or iterable
+        Feature vectors as array of shape (n_samples, n_features), OR an
+        iterable of ``(x, y)`` tuples or ``(x, y, t)`` triples for streaming.
+    y : array-like, optional
+        True labels. Required when X is an array; omitted for streaming.
+    metric : Metric or Metrics, optional
+        Metric(s) to update at each step. Defaults to ``BrierScore()``.
+    learn : bool or callable, optional
+        Whether the model learns from each example (default: True).
+        If callable, called as ``learn(i, x, y) -> bool``.
+    print_every : int, optional
+        Print metric summary every N steps. 0 = no printing.
+
+    Returns
+    -------
+    metric : Metric or Metrics
+        The same metric object, updated in place.
+    """
+    if metric is None:
+        metric = BrierScore()
+
+    for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
+        venn_pred = model.predict(x_i)
+        metric.update(y=y_i, Gamma=None, venn=venn_pred)
+
+        if _should_learn(learn, i, x_i, y_i):
+            model.learn_one(x_i, y_i)
+
+        if print_every > 0 and (i + 1) % print_every == 0:
+            print(f"[{i + 1}] {metric}")
+
+    return metric
+
+
+def iter_progressive_val_venn(model, X, y=None, *, metric=None, learn=True, step=1):
+    """Iterate progressive validation for Venn predictors, yielding checkpoints.
+
+    Parameters
+    ----------
+    model : Venn predictor
+        Must implement ``predict(x)`` returning a ``VennPrediction`` and
+        ``learn_one(x, y)``.
+    X : array-like or iterable
+        Feature vectors as array, or iterable of ``(x, y)`` / ``(x, y, t)`` tuples.
+    y : array-like, optional
+        True labels. Required when X is an array; omitted for streaming.
+    metric : Metric or Metrics, optional
+        Metric(s) to update. Defaults to ``BrierScore()``.
+    learn : bool or callable, optional
+        Whether the model learns from each example. If callable, called as
+        ``learn(i, x, y) -> bool``.
+    step : int
+        Yield every ``step`` samples.
+
+    Yields
+    ------
+    dict
+        Contains ``"step"``, ``"t"``, and metric values.
+    """
+    if metric is None:
+        metric = BrierScore()
+
+    for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
+        venn_pred = model.predict(x_i)
+        metric.update(y=y_i, Gamma=None, venn=venn_pred)
 
         if _should_learn(learn, i, x_i, y_i):
             model.learn_one(x_i, y_i)

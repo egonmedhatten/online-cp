@@ -24,6 +24,9 @@ __all__ = [
     "IntervalWidth",
     "WinklerScore",
     "CRPS",
+    "BrierScore",
+    "LogLoss",
+    "Width",
 ]
 
 
@@ -254,3 +257,67 @@ class CRPS(Metric):
 
         vals = cpd.y_vals[1:-1]
         return float(np.trapz([integrand(x) for x in vals], vals))
+
+
+# ---------------------------------------------------------------------------
+# Venn prediction metrics
+# ---------------------------------------------------------------------------
+
+
+class BrierScore(Metric):
+    """Brier score for Venn predictor outputs.
+
+    Evaluates the aggregated point probability from a ``VennPrediction``
+    using the standard Brier score: :math:`(p_{\\text{point}} - \\mathbf{1}\\{y = k\\})^2`
+    summed over all labels.
+
+    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+    """
+
+    def _score(self, y, Gamma=None, *, venn=None, **kw):
+        if venn is None:
+            raise ValueError("BrierScore requires venn keyword argument")
+        point = venn.point  # shape (|Y|,), sums to 1
+        label_idx = np.searchsorted(venn.label_space, y)
+        indicator = np.zeros(len(venn.label_space))
+        indicator[label_idx] = 1.0
+        return float(np.sum((point - indicator) ** 2))
+
+
+class LogLoss(Metric):
+    """Log loss for Venn predictor outputs.
+
+    Evaluates the aggregated point probability from a ``VennPrediction``
+    using negative log-likelihood: :math:`-\\log(p_{\\text{point}}[y])`.
+
+    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+    """
+
+    _EPS = 1e-15  # clip to avoid log(0)
+
+    def _score(self, y, Gamma=None, *, venn=None, **kw):
+        if venn is None:
+            raise ValueError("LogLoss requires venn keyword argument")
+        point = venn.point
+        label_idx = np.searchsorted(venn.label_space, y)
+        prob_y = np.clip(point[label_idx], self._EPS, 1.0 - self._EPS)
+        return float(-np.log(prob_y))
+
+
+class Width(Metric):
+    """Width (sharpness) of a Venn multiprobability prediction.
+
+    For binary predictions: :math:`p_1 - p_0`.
+    For multiclass: mean over labels of (max − min) probability across
+    hypotheses.
+
+    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+    """
+
+    def _score(self, y, Gamma=None, *, venn=None, **kw):
+        if venn is None:
+            raise ValueError("Width requires venn keyword argument")
+        probs = venn.probs  # shape (|Y|, |Y|)
+        # For each label (column), compute max - min across hypotheses (rows)
+        widths = probs.max(axis=0) - probs.min(axis=0)
+        return float(widths.mean())

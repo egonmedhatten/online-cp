@@ -17,3 +17,11 @@
 ::: online_cp.metrics.WinklerScore
 
 ::: online_cp.metrics.CRPS
+
+## Venn Prediction Metrics
+
+::: online_cp.metrics.BrierScore
+
+::: online_cp.metrics.LogLoss
+
+::: online_cp.metrics.Width

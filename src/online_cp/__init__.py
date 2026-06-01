@@ -58,6 +58,21 @@ from online_cp.metrics import (
 from online_cp.metrics import (
     WinklerScore as WinklerScore,
 )
+from online_cp.metrics import (
+    BrierScore as BrierScore,
+)
+from online_cp.metrics import (
+    LogLoss as LogLoss,
+)
+from online_cp.metrics import (
+    Width as Width,
+)
+from online_cp.evaluate import (
+    progressive_val_venn as progressive_val_venn,
+)
+from online_cp.evaluate import (
+    iter_progressive_val_venn as iter_progressive_val_venn,
+)
 from online_cp.kernels import (
     GaussianKernel as GaussianKernel,
 )

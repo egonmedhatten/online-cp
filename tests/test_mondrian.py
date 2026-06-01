@@ -596,3 +596,113 @@ class TestMondrianEdgeCases:
         # Wider epsilon -> narrower interval
         assert result[0.05].width() >= result[0.1].width()
         assert result[0.1].width() >= result[0.2].width()
+
+
+# ---------------------------------------------------------------------------
+# Label-conditional Mondrian classifier tests
+# ---------------------------------------------------------------------------
+
+
+class TestLabelConditionalMondrianClassifier:
+    """Tests for label-conditional Mondrian CP (category_fn='label')."""
+
+    @pytest.fixture
+    def multiclass_data(self):
+        rng = np.random.default_rng(123)
+        N = 400
+        X = rng.standard_normal((N, 3))
+        y = (X[:, 0] + X[:, 1] + 0.5 * rng.standard_normal(N))
+        y = np.digitize(y, bins=[-1, 1])  # 3 classes: 0, 1, 2
+        return X, y
+
+    def test_label_string_shortcut(self, multiclass_data):
+        """category_fn='label' creates a label-conditional predictor."""
+        X, y = multiclass_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=3),
+            category_fn="label",
+        )
+        wrapper.learn_initial_training_set(X[:30], y[:30])
+        # Categories should be the labels themselves
+        assert set(wrapper.categories_) == set(y[:30])
+
+    def test_two_arg_callable(self, multiclass_data):
+        """A 2-arg callable (x, y) -> category works as label-aware."""
+        X, y = multiclass_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=3),
+            category_fn=lambda x, y: y,
+        )
+        wrapper.learn_initial_training_set(X[:30], y[:30])
+        assert set(wrapper.categories_) == set(y[:30])
+
+    def test_one_arg_backward_compat(self, multiclass_data):
+        """A 1-arg callable still works (object-conditional)."""
+        X, y = multiclass_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=3),
+            category_fn=lambda x: "pos" if x[0] > 0 else "neg",
+        )
+        wrapper.learn_initial_training_set(X[:30], y[:30])
+        assert set(wrapper.categories_) == {"pos", "neg"}
+
+    def test_label_conditional_per_class_validity(self, multiclass_data):
+        """Label-conditional Mondrian should give valid coverage per class."""
+        X, y = multiclass_data
+        n_init = 30
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=5),
+            category_fn="label",
+        )
+        wrapper.learn_initial_training_set(X[:n_init], y[:n_init])
+
+        epsilon = 0.1
+        errors = {c: [] for c in np.unique(y)}
+        for i in range(n_init, len(y)):
+            Gamma = wrapper.predict(X[i], epsilon=epsilon)
+            errors[y[i]].append(int(y[i] not in Gamma))
+            wrapper.learn_one(X[i], y[i])
+
+        # Each class should have error rate ≤ epsilon + tolerance
+        # (statistical tolerance for finite sample)
+        for c, errs in errors.items():
+            if len(errs) >= 30:  # only check classes with enough samples
+                rate = np.mean(errs)
+                assert rate <= epsilon + 0.07, (
+                    f"Class {c} error rate {rate:.3f} exceeds {epsilon} + tolerance"
+                )
+
+    def test_label_conditional_returns_p_values(self, multiclass_data):
+        """return_p_values=True works with label-conditional."""
+        X, y = multiclass_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=3),
+            category_fn="label",
+        )
+        wrapper.learn_initial_training_set(X[:30], y[:30])
+        Gamma, p_values = wrapper.predict(X[30], epsilon=0.1, return_p_values=True)
+        assert isinstance(p_values, dict)
+        for label in np.unique(y[:30]):
+            assert label in p_values
+            assert 0 <= p_values[label] <= 1
+
+    def test_label_conditional_learn_one(self, multiclass_data):
+        """learn_one correctly records label as category."""
+        X, y = multiclass_data
+        wrapper = MondrianConformalClassifier(
+            base_model=ConformalNearestNeighboursClassifier(k=3),
+            category_fn="label",
+        )
+        wrapper.learn_initial_training_set(X[:10], y[:10])
+        n_before = len(wrapper.categories_)
+        wrapper.learn_one(X[10], y[10])
+        assert len(wrapper.categories_) == n_before + 1
+        assert wrapper.categories_[-1] == y[10]
+
+    def test_invalid_category_fn_raises(self):
+        """Non-string, non-callable raises TypeError."""
+        with pytest.raises(TypeError):
+            MondrianConformalClassifier(
+                base_model=ConformalNearestNeighboursClassifier(k=3),
+                category_fn=42,
+            )

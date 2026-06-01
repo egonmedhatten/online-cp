@@ -237,12 +237,27 @@ for p in p_values:
 
 ## Mondrian Conformal Prediction
 
-Use Mondrian CP when you have a **categorical covariate** (group, site, sensor, etc.) and want **group-conditional validity** — i.e., coverage holds *within each group* separately.
+Use Mondrian CP when you need validity guarantees **within subgroups**, not just overall.
 
-!!! warning "When NOT to use Mondrian"
-    - If your groups are very small → insufficient calibration data per group
-    - If group membership is unknown at test time
-    - If you want marginal (overall) coverage only → standard CP is simpler and tighter
+### Label-conditional (classification)
+
+The most common case: guarantee coverage **per class** — $P(y \in \Gamma(x) \mid y = c) \geq 1 - \varepsilon$ for all $c$ (ALRW2 §4.6.7).
+
+```python
+from online_cp import ConformalNearestNeighboursClassifier
+from online_cp.mondrian import MondrianConformalClassifier
+
+model = MondrianConformalClassifier(
+    base_model=ConformalNearestNeighboursClassifier(k=5),
+    category_fn="label",
+)
+model.learn_initial_training_set(X, y)
+Gamma = model.predict(x_new, epsilon=0.1)
+```
+
+### Object-conditional (regression or classification)
+
+When you have a **categorical covariate** (site, sensor, group) and want group-conditional validity:
 
 ```python
 from online_cp import ConformalRidgeRegressor
@@ -254,6 +269,22 @@ model = MondrianConformalRegressor(base, category_fn=lambda x: int(x[0] > 0))
 model.learn_initial_training_set(X, y)
 interval = model.predict(x_new, epsilon=0.1)
 ```
+
+### General taxonomy
+
+For any taxonomy $\kappa(x, y) \to \text{category}$ depending on both features and label:
+
+```python
+MondrianConformalClassifier(
+    base_model=ConformalNearestNeighboursClassifier(k=5),
+    category_fn=lambda x, y: (y, int(x[0] > 0)),  # cross label × feature group
+)
+```
+
+!!! warning "When NOT to use Mondrian"
+    - If your categories are very small → insufficient calibration data per group
+    - If category membership is unknown at test time (not applicable to label-conditional)
+    - If you want marginal (overall) coverage only → standard CP is simpler and tighter
 
 ---
 
@@ -269,3 +300,4 @@ interval = model.predict(x_new, epsilon=0.1)
 | Calibrated probabilities | Venn | `VennAbersPredictor` |
 | Change-point detection | Martingale | `PluginMartingale` + `VilleWrapper` |
 | Group-conditional coverage | Mondrian | `MondrianConformalRegressor` / `MondrianConformalClassifier` |
+| Label-conditional coverage | Mondrian | `MondrianConformalClassifier(category_fn="label")` |

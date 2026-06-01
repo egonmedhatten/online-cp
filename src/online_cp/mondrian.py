@@ -521,16 +521,49 @@ class MondrianConformalClassifier:
     This yields valid group-conditional coverage:
         P(y in Gamma(x) | category(x) = k) >= 1 - epsilon  for all k.
 
+    The most common special case is **label-conditional** conformal prediction
+    (ALRW2 §4.6.7), where the category of an example is its label:
+    κ(n, (x, y)) = y. Use ``category_fn="label"`` for this.
+
     Parameters
     ----------
     base_model : ConformalNearestNeighboursClassifier or ConformalSupportVectorMachine
         The underlying conformal classifier. Trained on all data (pooled).
-    category_fn : callable
-        A function ``(x) -> hashable`` that assigns a category to each input.
+    category_fn : str or callable
+        Determines the Mondrian taxonomy:
+
+        - ``"label"`` — label-conditional: category = label (most common).
+        - A callable ``(x, y) -> hashable`` — general Mondrian taxonomy
+          depending on both features and label.
+        - A callable ``(x) -> hashable`` — object-conditional taxonomy
+          depending only on features (legacy interface).
     """
 
-    def __init__(self, base_model: Any, category_fn: Callable[[NDArray[np.floating[Any]]], Hashable]) -> None:
+    def __init__(self, base_model: Any, category_fn: str | Callable[..., Hashable]) -> None:
         self.base_model = base_model
+
+        if category_fn == "label":
+            self._category_fn = lambda x, y: y
+            self._label_aware = True
+        elif callable(category_fn):
+            import inspect
+            sig = inspect.signature(category_fn)
+            n_params = sum(
+                1 for p in sig.parameters.values()
+                if p.default is inspect.Parameter.empty
+                and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+            )
+            if n_params >= 2:
+                self._category_fn = category_fn
+                self._label_aware = True
+            else:
+                self._category_fn = category_fn
+                self._label_aware = False
+        else:
+            raise TypeError(
+                f"category_fn must be 'label' or a callable, got {type(category_fn).__name__}"
+            )
+
         self.category_fn = category_fn
         self.categories_ = []
 
@@ -539,12 +572,18 @@ class MondrianConformalClassifier:
         X = np.asarray(X)
         y = np.asarray(y)
         self.base_model.learn_initial_training_set(X, y)
-        self.categories_ = [self.category_fn(x_i) for x_i in X]
+        if self._label_aware:
+            self.categories_ = [self._category_fn(x_i, y_i) for x_i, y_i in zip(X, y)]
+        else:
+            self.categories_ = [self._category_fn(x_i) for x_i in X]
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: Any, **kwargs: Any) -> None:
         """Learn a single example in the pooled model and record its category."""
         self.base_model.learn_one(x, y, **kwargs)
-        self.categories_.append(self.category_fn(x))
+        if self._label_aware:
+            self.categories_.append(self._category_fn(x, y))
+        else:
+            self.categories_.append(self._category_fn(x))
 
     def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> Any:
         """Compute the Mondrian conformal prediction set."""
@@ -556,14 +595,24 @@ class MondrianConformalClassifier:
         if epsilon is None:
             epsilon = self.base_model.epsilon
         model = self.base_model
-        cat = self.category_fn(x)
         tau = model.rnd_gen.uniform(0, 1)
-        cat_mask = np.array([c == cat for c in self.categories_])
+
+        if self._label_aware:
+            # Label-aware: per-hypothesis category mask
+            cat_masks = {}
+            for label in model.label_space:
+                cat = self._category_fn(x, label)
+                cat_masks[label] = np.array([c == cat for c in self.categories_])
+        else:
+            # Object-conditional: one shared mask for all hypotheses
+            cat = self._category_fn(x)
+            shared_mask = np.array([c == cat for c in self.categories_])
+            cat_masks = {label: shared_mask for label in model.label_space}
 
         if isinstance(model, ConformalNearestNeighboursClassifier):
-            p_values = self._predict_knn(x, cat_mask, tau)
+            p_values = self._predict_knn(x, cat_masks, tau)
         elif isinstance(model, ConformalSupportVectorMachine):
-            p_values = self._predict_svm(x, cat_mask, tau)
+            p_values = self._predict_svm(x, cat_masks, tau)
         else:
             raise TypeError(f"Unsupported classifier: {type(model).__name__}")
 
@@ -572,7 +621,7 @@ class MondrianConformalClassifier:
             return Gamma, p_values
         return Gamma
 
-    def _predict_knn(self, x, cat_mask, tau):
+    def _predict_knn(self, x, cat_masks, tau):
         model = self.base_model
         p_values = {}
         if model.y.shape[0] < 1:
@@ -586,13 +635,13 @@ class MondrianConformalClassifier:
             y = np.append(model.y, label)
             same_d, diff_d = model._find_nearest_distances(D, y)
             Alpha_full = np.nan_to_num(same_d / diff_d, nan=np.inf)
-            # Filter to same-category + test point (last element)
-            cat_mask_aug = np.append(cat_mask, True)
+            # Filter to same-category + test point (last element always included)
+            cat_mask_aug = np.append(cat_masks[label], True)
             Alpha_cat = Alpha_full[cat_mask_aug]
             p_values[label] = self._compute_mondrian_p(Alpha_cat, tau)
         return p_values
 
-    def _predict_svm(self, x, cat_mask, tau):
+    def _predict_svm(self, x, cat_masks, tau):
         from online_cp.classifiers import _smo_solve
 
         model = self.base_model
@@ -615,6 +664,7 @@ class MondrianConformalClassifier:
         K_aug[n, n] = kappa
 
         for label in model.label_space:
+            cat_mask = cat_masks[label]
             y_aug = np.append(model.y, float(label))
             y_binary = np.where(y_aug == label, 1.0, -1.0)
             alpha, _ = _smo_solve(

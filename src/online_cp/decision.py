@@ -348,7 +348,7 @@ def venn_decision(
 class ConformalPredictiveDecisionMaker:
     """Conformal Predictive Decision Making (Vovk & Bendtsen 2018, Algorithm 1).
 
-    Maintains one :class:`~online_cp.CPS.RidgePredictionMachine` per decision.
+    Maintains one conformal predictive system per decision.
     Each model is trained on utility-transformed labels:
     ``(x_i, U(x_i, y_i, d))`` for the corresponding decision *d*.
 
@@ -360,11 +360,14 @@ class ConformalPredictiveDecisionMaker:
     ----------
     utility : UtilityFunction
         Utility function bundled with its finite decision space.
-    a : float, default 0.0
-        Ridge regularisation parameter (passed to each CPS).
-    **cps_kwargs
-        Additional keyword arguments passed to each
+    cps_class : type, optional
+        The CPS class to use for each decision. Must implement
+        ``learn_initial_training_set(X, y)``, ``predict_cpd(x)``, and
+        ``learn_one(x, y)``. Defaults to
         :class:`~online_cp.CPS.RidgePredictionMachine`.
+    **cps_kwargs
+        Keyword arguments passed to each CPS instance (e.g., ``a=1.0``
+        for ridge regularisation).
 
     Examples
     --------
@@ -381,13 +384,18 @@ class ConformalPredictiveDecisionMaker:
     True
     """
 
-    def __init__(self, utility: UtilityFunction, a: float = 0.0, **cps_kwargs) -> None:
-        from online_cp.CPS import RidgePredictionMachine
+    def __init__(self, utility: UtilityFunction, cps_class=None, **cps_kwargs) -> None:
+        if cps_class is None:
+            from online_cp.CPS import RidgePredictionMachine
+            cps_class = RidgePredictionMachine
 
         self.utility = utility
+        self._cps_class = cps_class
         self._models: dict[Any, Any] = {}
+        # Default to warnings=False if not explicitly set
+        cps_kwargs.setdefault("warnings", False)
         for d in utility.decisions:
-            self._models[d] = RidgePredictionMachine(a=a, warnings=False, **cps_kwargs)
+            self._models[d] = cps_class(**cps_kwargs)
 
     def learn_initial_training_set(
         self, X: NDArray, y: NDArray

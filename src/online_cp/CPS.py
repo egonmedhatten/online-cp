@@ -15,7 +15,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import Bounds, minimize, minimize_scalar
+from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
 __all__ = [
@@ -795,14 +795,33 @@ class ConformalPredictiveDistributionFunction:
             if bounds != "both":
                 raise Exception('bounds must be "both" if we are to minimise the interval width')
 
-            def compute_width(delta, epsilon):
-                epsilon_minus_delta = epsilon - delta
-                return self.quantile(1 - epsilon_minus_delta, tau) - self.quantile(delta, tau)
+            # Exact O(n) sweep: for piecewise-constant CPDs, the shortest
+            # interval with coverage ≥ 1-epsilon is found by checking all
+            # pairs of critical points where the CDF jump spans ≥ 1-epsilon.
+            Q = (1 - tau) * self.L + tau * self.U
+            target_coverage = 1 - epsilon
+            n_pts = len(self.Y)
 
-            delta = minimize_scalar(lambda x: compute_width(x, epsilon), bounds=(0, epsilon)).x
-            eps_minus_delta = epsilon - delta
-            lower = self.quantile(delta, tau)
-            upper = self.quantile(1 - eps_minus_delta, tau)
+            best_width = np.inf
+            best_lower = -np.inf
+            best_upper = np.inf
+
+            # Two-pointer sweep: find narrowest [Y[i], Y[j]] with Q[j]-Q[i] >= target
+            j = 0
+            for i in range(n_pts):
+                # Advance j until coverage is met
+                while j < n_pts and Q[j] - Q[i] < target_coverage:
+                    j += 1
+                if j >= n_pts:
+                    break
+                w = self.Y[j] - self.Y[i]
+                if w < best_width:
+                    best_width = w
+                    best_lower = self.Y[i]
+                    best_upper = self.Y[j]
+
+            lower = best_lower
+            upper = best_upper
 
         else:
             q1 = epsilon / 2
@@ -833,17 +852,15 @@ class ConformalPredictiveDistributionFunction:
                 return epsilon
             epsilon += increment  # Increment epsilon by a small amount
 
-    def conformal_expectation(self, tau, f=lambda y: y, delta=1e-12):
+    def median(self, tau: float = 0.5):
+        """Median of the CPD: shortcut for ``quantile(0.5, tau)``.
+
+        Parameters
+        ----------
+        tau : float, default 0.5
+            Randomisation parameter.
         """
-        The conformal expectation of the function f with respect to a cpd is defined in https://www.alrw.net/articles/19.pdf.
-        If f is a utility function, the conformal expectation can be used for decision-making.
-        If f is the identity function, the conformal expectation acts like the expectation of the predictive distribution.
-        However, it is important to note that it is not formally an expected value, since the total mass of the measure
-        defined by the cpd Q is less than one. It is in fact n/(n+1), where n is the number of training examples.
-        """
-        deltaQ = np.array([self.__call__(y + delta, tau) - self.__call__(y - delta, tau) for y in self.Y])
-        c_exp = np.array([f(y) for y in self.Y[deltaQ != 0]]) @ deltaQ[deltaQ != 0]
-        return c_exp
+        return self.quantile(0.5, tau)
 
     # These methods relate to when the cpd is used to predict sets
     @staticmethod

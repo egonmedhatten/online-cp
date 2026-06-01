@@ -33,6 +33,7 @@ nav:
     - Venn Predictors: api/venn.md
     - Mondrian CP: api/mondrian.md
     - Predictive Systems: api/cps.md
+    - Decision Making: api/decision.md
     - Martingales: api/martingale.md
     - Evaluation: api/evaluation.md
     - Metrics: api/metrics.md

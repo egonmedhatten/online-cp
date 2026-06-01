@@ -298,3 +298,60 @@ class TestMultiLevelCPD:
         # Smaller epsilon => wider interval
         for i in range(len(epsilons) - 1):
             assert result[epsilons[i]].width() >= result[epsilons[i + 1]].width()
+
+
+class TestHPDExactSweep:
+    """Test predict_set(minimise_width=True) with exact O(n) sweep."""
+
+    def test_hpd_narrower_or_equal(self, ridge_cps_dataset):
+        """HPD interval should be ≤ equal-tailed interval in width."""
+        X, Y = ridge_cps_dataset
+        cps = RidgePredictionMachine(a=1.0, warnings=False)
+        cps.learn_initial_training_set(X[:40], Y[:40])
+        cpd = cps.predict_cpd(X[40])
+        tau = 0.5
+        epsilon = 0.1
+
+        equal_tailed = cpd.predict_set(tau, epsilon=epsilon, minimise_width=False)
+        hpd = cpd.predict_set(tau, epsilon=epsilon, minimise_width=True)
+
+        assert hpd.width() <= equal_tailed.width() + 1e-10
+
+    def test_hpd_contains_median(self, ridge_cps_dataset):
+        """HPD interval should generally contain the median (for unimodal CPDs)."""
+        X, Y = ridge_cps_dataset
+        cps = RidgePredictionMachine(a=1.0, warnings=False)
+        cps.learn_initial_training_set(X[:40], Y[:40])
+        cpd = cps.predict_cpd(X[40])
+        tau = 0.5
+        epsilon = 0.1
+
+        hpd = cpd.predict_set(tau, epsilon=epsilon, minimise_width=True)
+        median = cpd.median(tau)
+        assert hpd.lower <= median <= hpd.upper
+
+    def test_hpd_width_monotone_in_epsilon(self, ridge_cps_dataset):
+        """Smaller epsilon (higher coverage) => wider HPD."""
+        X, Y = ridge_cps_dataset
+        cps = RidgePredictionMachine(a=1.0, warnings=False)
+        cps.learn_initial_training_set(X[:40], Y[:40])
+        cpd = cps.predict_cpd(X[40])
+        tau = 0.5
+
+        widths = []
+        for eps in [0.05, 0.1, 0.2, 0.3]:
+            hpd = cpd.predict_set(tau, epsilon=eps, minimise_width=True)
+            widths.append(hpd.width())
+        # widths should be non-increasing as epsilon increases
+        for i in range(len(widths) - 1):
+            assert widths[i] >= widths[i + 1] - 1e-10
+
+
+class TestMedian:
+    def test_median_equals_quantile_half(self, ridge_cps_dataset):
+        X, Y = ridge_cps_dataset
+        cps = RidgePredictionMachine(a=1.0, warnings=False)
+        cps.learn_initial_training_set(X[:40], Y[:40])
+        cpd = cps.predict_cpd(X[40])
+        tau = 0.5
+        assert cpd.median(tau) == cpd.quantile(0.5, tau)

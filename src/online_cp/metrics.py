@@ -247,21 +247,107 @@ class WinklerScore(Metric):
 class CRPS(Metric):
     """Continuous Ranked Probability Score for conformal predictive distributions.
 
+    .. deprecated::
+        This class delegates to :class:`TruncatedCRPS`. Prefer using
+        ``TruncatedCRPS`` or ``ConformalCRPS`` explicitly.
+
     Requires ``cpd`` keyword argument (a conformal predictive distribution object).
     """
 
     def _score(self, y, Gamma=None, *, cpd=None, **kw):
+        import warnings
+        warnings.warn(
+            "CRPS is deprecated. Use TruncatedCRPS or ConformalCRPS instead.",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+        return TruncatedCRPS()._score(y, Gamma, cpd=cpd, **kw)
+
+
+class TruncatedCRPS(Metric):
+    """Truncated CRPS: integrate over data support only.
+
+    Computes the standard CRPS formula but restricted to the interval
+    [C_1, C_{n-1}] (the finite critical points), avoiding divergence
+    from the mass-deficient tails. Uses exact piecewise-constant summation.
+
+    .. math::
+
+        \\text{TruncatedCRPS} = \\sum_{j=1}^{m-1}
+            [Q_\\tau(C_j) - \\mathbf{1}(y \\leq C_j)]^2 \\, (C_{j+1} - C_j)
+
+    where :math:`Q_\\tau` is the CPD evaluated at randomisation :math:`\\tau`
+    and the sum runs over finite critical points.
+
+    NOT strictly proper (due to truncation), but pragmatic and common.
+
+    Requires ``cpd`` keyword argument and optionally ``tau`` (default 0.5).
+    """
+
+    def _score(self, y, Gamma=None, *, cpd=None, tau=0.5, **kw):
         if cpd is None:
-            raise ValueError("CRPS requires cpd keyword argument")
+            raise ValueError("TruncatedCRPS requires cpd keyword argument")
 
-        def integrand(x):
-            if x <= y:
-                return (cpd(x, 0) - int(y <= x)) ** 2
-            else:
-                return (cpd(x, 1) - int(y <= x)) ** 2
+        # Get finite critical points (exclude -inf and +inf sentinels)
+        Y = cpd.Y
+        finite_mask = np.isfinite(Y)
+        C = Y[finite_mask]
 
-        vals = cpd.y_vals[1:-1]
-        return float(np.trapz([integrand(x) for x in vals], vals))
+        if len(C) < 2:
+            return 0.0
+
+        # CDF values at finite critical points
+        Q = np.array([cpd(c, tau) for c in C])
+        # Indicator: 1{y <= C_j}
+        indicator = (y <= C).astype(float)
+
+        # Piecewise-constant integrand: [Q(C_j) - I(y <= C_j)]^2 * (C_{j+1} - C_j)
+        widths = np.diff(C)
+        integrand = (Q[:-1] - indicator[:-1]) ** 2
+
+        return float(np.sum(integrand * widths))
+
+
+class ConformalCRPS(Metric):
+    """Conformal CRPS: replace the indicator with the CPD's conformal indicator.
+
+    Instead of the standard Heaviside indicator :math:`\\mathbf{1}(y \\leq x)`,
+    uses the CPD's own CDF evaluated at the true outcome :math:`Q_\\tau(y)` as
+    the "conformal indicator", ensuring the integrand shares the CPD's
+    mass-deficiency bounds.
+
+    .. math::
+
+        \\text{ConformalCRPS} = \\sum_{j=1}^{m-1}
+            [Q_\\tau(C_j) - Q_\\tau(y)]^2 \\, (C_{j+1} - C_j)
+
+    Finite by construction (both terms bounded by CPD mass). NOT strictly
+    proper, but theoretically motivated.
+
+    Requires ``cpd`` keyword argument and optionally ``tau`` (default 0.5).
+    """
+
+    def _score(self, y, Gamma=None, *, cpd=None, tau=0.5, **kw):
+        if cpd is None:
+            raise ValueError("ConformalCRPS requires cpd keyword argument")
+
+        # Get finite critical points
+        Y = cpd.Y
+        finite_mask = np.isfinite(Y)
+        C = Y[finite_mask]
+
+        if len(C) < 2:
+            return 0.0
+
+        # CDF at each critical point and at y
+        Q = np.array([cpd(c, tau) for c in C])
+        Q_y = float(cpd(y, tau))
+
+        # Piecewise-constant: [Q(C_j) - Q(y)]^2 * (C_{j+1} - C_j)
+        widths = np.diff(C)
+        integrand = (Q[:-1] - Q_y) ** 2
+
+        return float(np.sum(integrand * widths))
 
 
 # ---------------------------------------------------------------------------

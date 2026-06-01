@@ -196,3 +196,39 @@ from online_cp.venn import (
 from online_cp.venn import (
     log_loss_point as log_loss_point,
 )
+from online_cp.decision import (
+    UtilityFunction as UtilityFunction,
+)
+from online_cp.decision import (
+    cps_expected_utilities as cps_expected_utilities,
+)
+from online_cp.decision import (
+    cps_decision as cps_decision,
+)
+from online_cp.decision import (
+    venn_expected_utilities as venn_expected_utilities,
+)
+from online_cp.decision import (
+    venn_decision as venn_decision,
+)
+from online_cp.decision import (
+    maximize as maximize,
+)
+from online_cp.decision import (
+    maximin as maximin,
+)
+from online_cp.decision import (
+    hurwicz as hurwicz,
+)
+from online_cp.decision import (
+    minimax_regret as minimax_regret,
+)
+from online_cp.decision import (
+    ConformalPredictiveDecisionMaker as ConformalPredictiveDecisionMaker,
+)
+from online_cp.metrics import (
+    TruncatedCRPS as TruncatedCRPS,
+)
+from online_cp.metrics import (
+    ConformalCRPS as ConformalCRPS,
+)

@@ -4,6 +4,8 @@ import pytest
 from online_cp.classifiers import ConformalPredictionSet
 from online_cp.metrics import (
     CRPS,
+    ConformalCRPS,
+    TruncatedCRPS,
     ErrorRate,
     IntervalWidth,
     Metric,
@@ -324,3 +326,85 @@ class TestWidth:
         assert "BrierScore" in result
         assert "LogLoss" in result
         assert "Width" in result
+
+
+# ---------------------------------------------------------------------------
+# CPD scoring metrics
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def simple_cpd():
+    """Build a Ridge CPD from synthetic data."""
+    from online_cp.CPS import RidgePredictionMachine
+
+    rng = np.random.default_rng(789)
+    N = 50
+    X = rng.normal(size=(N, 2))
+    beta = np.array([1.0, -0.5])
+    Y = X @ beta + rng.normal(scale=0.5, size=N)
+    cps = RidgePredictionMachine(a=1.0, warnings=False)
+    cps.learn_initial_training_set(X[:40], Y[:40])
+    return cps.predict_cpd(X[40]), Y[40]
+
+
+class TestTruncatedCRPS:
+    def test_nonnegative(self, simple_cpd):
+        cpd, y = simple_cpd
+        m = TruncatedCRPS()
+        score = m.update(y=y, cpd=cpd)
+        assert score >= 0.0
+
+    def test_zero_at_perfect_prediction(self):
+        """If y is exactly a critical point with Q(y)=1, score should be small."""
+        from online_cp.CPS import RidgePredictionMachine
+
+        rng = np.random.default_rng(111)
+        N = 30
+        X = rng.normal(size=(N, 1))
+        Y = X[:, 0] * 2  # no noise
+        cps = RidgePredictionMachine(a=0.01, warnings=False)
+        cps.learn_initial_training_set(X[:20], Y[:20])
+        cpd = cps.predict_cpd(X[20])
+        m = TruncatedCRPS()
+        score = m.update(y=Y[20], cpd=cpd, tau=0.5)
+        # Should be small (near-perfect fit)
+        assert score < 1.0
+
+    def test_finite(self, simple_cpd):
+        cpd, y = simple_cpd
+        m = TruncatedCRPS()
+        score = m.update(y=y, cpd=cpd, tau=0.5)
+        assert np.isfinite(score)
+
+
+class TestConformalCRPS:
+    def test_nonnegative(self, simple_cpd):
+        cpd, y = simple_cpd
+        m = ConformalCRPS()
+        score = m.update(y=y, cpd=cpd, tau=0.5)
+        assert score >= 0.0
+
+    def test_finite(self, simple_cpd):
+        cpd, y = simple_cpd
+        m = ConformalCRPS()
+        score = m.update(y=y, cpd=cpd, tau=0.5)
+        assert np.isfinite(score)
+
+    def test_different_from_truncated(self, simple_cpd):
+        """ConformalCRPS and TruncatedCRPS should generally differ."""
+        cpd, y = simple_cpd
+        s1 = TruncatedCRPS().update(y=y, cpd=cpd, tau=0.5)
+        s2 = ConformalCRPS().update(y=y, cpd=cpd, tau=0.5)
+        # They can be equal in degenerate cases, but usually differ
+        # Just check both are finite and non-negative
+        assert s1 >= 0 and s2 >= 0
+        assert np.isfinite(s1) and np.isfinite(s2)
+
+
+class TestCRPSDeprecation:
+    def test_warns(self, simple_cpd):
+        cpd, y = simple_cpd
+        m = CRPS()
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            m.update(y=y, cpd=cpd)

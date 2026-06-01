@@ -6,7 +6,18 @@ coverage curves, prediction intervals, and set sizes.
 All functions return a matplotlib ``Axes`` object for composability.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Sequence
+
 import numpy as np
+from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
+    from online_cp.martingale import ConformalTestMartingale, CUSUMWrapper, ShiryaevRobertsWrapper, VilleWrapper
+    from online_cp.metrics import Metric
 
 __all__ = [
     "plot_coverage",
@@ -26,7 +37,7 @@ def _get_ax(ax):
     return ax
 
 
-def plot_coverage(metric, *, nominal=None, ax=None, **kwargs):
+def plot_coverage(metric: Metric, *, nominal: float | None = None, ax: Axes | None = None, **kwargs: Any) -> Axes:
     """Plot the running coverage (1 - error rate) over time.
 
     Parameters
@@ -64,7 +75,7 @@ def plot_coverage(metric, *, nominal=None, ax=None, **kwargs):
     return ax
 
 
-def plot_martingale(martingale, *, log_scale=True, threshold=100, ax=None, **kwargs):
+def plot_martingale(martingale: ConformalTestMartingale, *, log_scale: bool = True, threshold: float | None = 100, ax: Axes | None = None, **kwargs: Any) -> Axes:
     """Plot a martingale trajectory.
 
     Parameters
@@ -111,7 +122,7 @@ def plot_martingale(martingale, *, log_scale=True, threshold=100, ax=None, **kwa
     return ax
 
 
-def plot_detector(wrapper, *, threshold=None, log_scale=True, change_point=None, ax=None, **kwargs):
+def plot_detector(wrapper: VilleWrapper | CUSUMWrapper | ShiryaevRobertsWrapper, *, threshold: float | None = None, log_scale: bool = True, change_point: int | None = None, ax: Axes | None = None, **kwargs: Any) -> Axes:
     """Plot a detection wrapper's statistic trajectory with alarm markers.
 
     Accepts a VilleWrapper, CUSUMWrapper, or ShiryaevRobertsWrapper and
@@ -314,7 +325,7 @@ def _find_alarm_times_sr(sr_values, threshold):
     return alarm_times
 
 
-def plot_intervals(y_true, intervals, *, ax=None, point_kwargs=None, interval_kwargs=None):
+def plot_intervals(y_true: NDArray[np.floating[Any]] | Sequence[float], intervals: Sequence[Any], *, ax: Axes | None = None, point_kwargs: dict[str, Any] | None = None, interval_kwargs: dict[str, Any] | None = None) -> Axes:
     """Plot prediction intervals with true values overlaid.
 
     Parameters
@@ -371,7 +382,7 @@ def plot_intervals(y_true, intervals, *, ax=None, point_kwargs=None, interval_kw
     return ax
 
 
-def plot_set_sizes(metric, *, ax=None, **kwargs):
+def plot_set_sizes(metric: Metric, *, ax: Axes | None = None, **kwargs: Any) -> Axes:
     """Plot running average set size (or interval width) over time.
 
     Parameters

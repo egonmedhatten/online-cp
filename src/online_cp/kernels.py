@@ -3,7 +3,12 @@
 Provides Gaussian (RBF), linear, polynomial, periodic, and composite kernels.
 """
 
+from __future__ import annotations
+
+from typing import Any, Callable, Sequence
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.spatial.distance import cdist, pdist, squareform
 
 __all__ = [
@@ -20,7 +25,7 @@ __all__ = [
 class Kernel:
     """Base class for kernel functions."""
 
-    def __call__(self, x):
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         raise NotImplementedError("Subclasses should implement this!")
 
 
@@ -35,12 +40,12 @@ class GaussianKernel(Kernel):
         Distance metric passed to scipy (default ``'sqeuclidean'``).
     """
 
-    def __init__(self, sigma, distance="sqeuclidean"):
+    def __init__(self, sigma: float, distance: str = "sqeuclidean") -> None:
         self.sigma = sigma
         self.distance = distance
         self.name = "Gaussian"
 
-    def __call__(self, X, y=None):
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             dists = pdist(X, metric=self.distance)
@@ -61,10 +66,10 @@ class GaussianKernel(Kernel):
 class LinearKernel(Kernel):
     """Linear kernel: k(x, y) = x · y."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.name = "Linear"
 
-    def __call__(self, X, y=None):
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             K = X @ X.T
@@ -88,12 +93,12 @@ class PolynomialKernel(Kernel):
         Offset constant.
     """
 
-    def __init__(self, d, c):
+    def __init__(self, d: int, c: float) -> None:
         self.name = "Polynomial"
         self.d = d
         self.c = c
 
-    def __call__(self, X, y=None):
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             K = (X @ X.T + self.c) ** self.d
@@ -119,13 +124,13 @@ class PeriodicKernel(Kernel):
         Distance metric passed to scipy (default ``'euclidean'``).
     """
 
-    def __init__(self, p, s, distance="euclidean"):
+    def __init__(self, p: float, s: float, distance: str = "euclidean") -> None:
         self.p = p
         self.s = s
         self.distance = distance
         self.name = "Gaussian"
 
-    def __call__(self, X, y=None):
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             dists = pdist(X, metric=self.distance)
@@ -156,7 +161,7 @@ class LinearCombinationKernel(Kernel):
     True
     """
 
-    def __init__(self, kernels, weights=None):
+    def __init__(self, kernels: Sequence[Kernel], weights: Sequence[float] | None = None) -> None:
 
         if weights is None:
             weights = [1 for _ in kernels]
@@ -167,7 +172,7 @@ class LinearCombinationKernel(Kernel):
 
         self.name = "LinearCombinationKernel"  # TODO Write out the explicit combination as name, e.g. '0.3*Polynomial + 0.4*Gaussian
 
-    def __call__(self, X, y=None):
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         return sum(weight * kernel(X, y) for weight, kernel in zip(self.weights, self.kernels))
 
 
@@ -179,7 +184,7 @@ class ProductKernel(Kernel):
     pass
 
 
-def kernel_induced_distance(kernel):
+def kernel_induced_distance(kernel: Kernel) -> Callable[[NDArray[np.floating[Any]], NDArray[np.floating[Any]] | None], NDArray[np.floating[Any]]]:
     """Create a distance function from a kernel, compatible with ``distance_func``.
 
     The kernel-induced distance is:
@@ -234,7 +239,7 @@ def kernel_induced_distance(kernel):
     return _distance
 
 
-def kernel_matrix_to_distance_matrix(K):
+def kernel_matrix_to_distance_matrix(K: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     """Convert a kernel (Gram) matrix to a distance matrix.
 
     .. math::

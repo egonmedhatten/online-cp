@@ -5,11 +5,15 @@ assumption online, along with various betting strategies (parametric, non-parame
 particle filter, expert aggregation) for constructing the martingale.
 """
 
+from __future__ import annotations
+
 import math
 import warnings
 from copy import deepcopy
+from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.integrate import quad
 from scipy.optimize import brentq, minimize, minimize_scalar
 from scipy.special import betaln, gammainc, gammaln, logsumexp
@@ -95,21 +99,21 @@ class BettingStrategy:
     responsibility of the martingale that wraps them.
     """
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         """Return the density f(p) using current state (past data only).
 
         Must satisfy f(p) >= 0 and integrate to ~1 over [0,1].
         """
         return 1.0  # uniform = no betting
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         """Return the CDF F(p) using current state (protection function).
 
         Must satisfy F(0) = 0, F(1) = 1, monotone increasing.
         """
         return p  # uniform CDF
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         """Incorporate a new p-value observation into the density estimate."""
         pass
 
@@ -145,18 +149,18 @@ class BetaKernel(BettingStrategy):
         self._data = []
         self._kde = BetaKDE(bandwidth=self.bandwidth)
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         if len(self._data) < 2:
             return 1.0
         return float(self._kde.pdf(p, normalized=self.normalize))
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         if len(self._data) < 2:
             return p
         val, _ = quad(lambda x: self._kde.pdf(x, normalized=self.normalize), 0, p, limit=50)
         return float(val)
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         self._data.append(p)
         if len(self._data) >= 2:
             window = self.window_size or len(self._data)
@@ -352,7 +356,7 @@ class GaussianKDE(BettingStrategy):
         window = self.window_size or len(self._data)
         return np.array(self._data[-window:])
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         if len(self._data) < 2:
             return 1.0
         data = self._get_data()
@@ -360,7 +364,7 @@ class GaussianKDE(BettingStrategy):
             return 1.0
         return self._kernel_pdf_reflect(p, data, self._current_bw)
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         if len(self._data) < 2:
             return p
         data = self._get_data()
@@ -368,7 +372,7 @@ class GaussianKDE(BettingStrategy):
             return p
         return self._kernel_cdf_reflect(p, data, self._current_bw)
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         self._data.append(p)
         if len(self._data) >= 2:
             data = self._get_data()
@@ -400,13 +404,13 @@ class BetaMoments(BettingStrategy):
         self._ahat = 1.0
         self._bhat = 1.0
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         return beta.pdf(p, self._ahat, self._bhat)
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         return beta.cdf(p, self._ahat, self._bhat)
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         # Welford online update
         self._n += 1
         delta = p - self._mean
@@ -446,13 +450,13 @@ class BetaMLE(BettingStrategy):
         self._ahat = 1.0
         self._bhat = 1.0
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         return beta.pdf(p, self._ahat, self._bhat)
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         return beta.cdf(p, self._ahat, self._bhat)
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         p_safe = np.clip(p, 1e-12, 1 - 1e-12)
         self._n += 1
         self._log_sum_x += np.log(p_safe)
@@ -572,15 +576,15 @@ class ParticleFilterStrategy(BettingStrategy):
     def _get_alphas_betas(self):
         return np.exp(self.particles[:, 0]), np.exp(self.particles[:, 1])
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         alphas, betas_param = self._get_alphas_betas()
         return float(np.mean(beta.pdf(p, a=alphas, b=betas_param)))
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         alphas, betas_param = self._get_alphas_betas()
         return float(np.mean(beta.cdf(p, a=alphas, b=betas_param)))
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         self._predict()
         self._update_weights(p)
         self._resample()
@@ -684,10 +688,10 @@ class FixedStrategy(BettingStrategy):
             except Exception as e:
                 warnings.warn(f"Could not verify FixedStrategy PDF integration: {e}", stacklevel=2)
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         return float(self._pdf(p))
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         return float(self._cdf(p))
 
 
@@ -736,17 +740,17 @@ class PiecewiseConstantBetting(BettingStrategy):
         self._left = b / a
         self._right = (1 - b) / (1 - a)
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         """Evaluate f_{(a,b)}(p)."""
         return self._left if p <= self.a else self._right
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         """CDF: (b/a)*p if p <= a, else b + ((1-b)/(1-a))*(p - a)."""
         if p <= self.a:
             return self._left * p
         return self.b + self._right * (p - self.a)
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         """No-op: the piecewise-constant function is static."""
         pass
 
@@ -793,15 +797,15 @@ class ExpertAggregationStrategy(BettingStrategy):
         lse = logsumexp(self.log_weights)
         return np.exp(self.log_weights - lse)
 
-    def bet(self, p):
+    def bet(self, p: float) -> float:
         weights = self.get_current_weights()
         return float(np.dot(weights, [expert.bet(p) for expert in self.experts]))
 
-    def integrate(self, p):
+    def integrate(self, p: float) -> float:
         weights = self.get_current_weights()
         return float(np.dot(weights, [expert.integrate(p) for expert in self.experts]))
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         # Update weights based on expert performance
         gains = np.array([expert.bet(p) for expert in self.experts])
         master_prediction = np.dot(self.get_current_weights(), gains)
@@ -881,11 +885,11 @@ class ConformalTestMartingale:
         Protection function (CDF) for the next step.
     """
 
-    def __init__(self, store_p_values=True):
+    def __init__(self, store_p_values: bool = True) -> None:
         self.logM = 0.0
-        self.p_values = []
+        self.p_values: list[float] = []
         self.store_p_values = store_p_values
-        self.log_martingale_values = [0.0]
+        self.log_martingale_values: list[float] = [0.0]
         self._b_n_cache = lambda x: 1.0
         self._B_n_cache = lambda x: x
         self._B_n_inv_cache = None
@@ -965,7 +969,7 @@ class ConformalTestMartingale:
     def log10_martingale_values(self):
         return [logM / np.log(10) for logM in self.log_martingale_values]
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         """Incorporate a new p-value. Subclasses must implement this."""
         raise NotImplementedError
 
@@ -1008,11 +1012,11 @@ class PluginMartingale(ConformalTestMartingale):
 
     def __init__(
         self,
-        betting_strategy=GaussianKDE,
-        min_sample_size=100,
-        store_p_values=True,
-        **kwargs,
-    ):
+        betting_strategy: type[BettingStrategy] | BettingStrategy = GaussianKDE,
+        min_sample_size: int = 100,
+        store_p_values: bool = True,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(store_p_values)
         self.min_sample_size = min_sample_size
         self._n = 0
@@ -1046,7 +1050,7 @@ class PluginMartingale(ConformalTestMartingale):
         self.b_n = b_n
         self.B_n = B_n
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         # 1. Predict: evaluate current betting function
         f = self.strategy.bet(p)
         F = self.strategy.integrate(p)
@@ -1112,7 +1116,7 @@ class SimpleJumper(ConformalTestMartingale):
         self.b_epsilon = lambda u, epsilon: 1 + epsilon * (u - 1 / 2)
         self.B_n_inv = lambda x: x
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -1180,7 +1184,7 @@ class CompositeJumper(ConformalTestMartingale):
 
         self.Jumpers = {j: SimpleJumper(J=j, store_p_values=False) for j in self.J}
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -1264,7 +1268,7 @@ class SleeperStayer(ConformalTestMartingale):
         self._log_R_div_n = math.log(R / self._n_experts)
         self._n = 0
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -1377,7 +1381,7 @@ class SleeperDrifter(ConformalTestMartingale):
         ratio = min(ratio, 1.0)  # Clamp
         return ratio * a + (1 - ratio) * b
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -1558,7 +1562,7 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         self.b_n = b_n
         self.B_n = B_n
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         self.n += 1
         p_clipped = np.clip(p, 1e-12, 1.0)
         self.sum_log_p += np.log(p_clipped)
@@ -1633,7 +1637,7 @@ class VilleWrapper:
         """Step at which the hypothesis was first rejected, or None."""
         return self._rejection_time
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         """Update the inner martingale and track the running maximum."""
         self.martingale.update(p)
         self._n += 1
@@ -1723,7 +1727,7 @@ class CUSUMWrapper:
         """All log CUSUM statistic values."""
         return self._log_gamma_values
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         """Update the inner martingale and recompute the CUSUM statistic."""
         self.martingale.update(p)
         self._n += 1
@@ -1804,7 +1808,7 @@ class ShiryaevRobertsWrapper:
         """All Shiryaev-Roberts statistic values."""
         return self._sr_values
 
-    def update(self, p):
+    def update(self, p: float) -> None:
         """Update the inner martingale and recompute the SR statistic.
 
         Uses the O(1) recursive formula (eq. 8.18 of ALRW2):

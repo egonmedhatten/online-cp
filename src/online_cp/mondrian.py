@@ -26,7 +26,12 @@ Example
 >>> interval = wrapper.predict(x_test, epsilon=0.1)  # doctest: +SKIP
 """
 
+from __future__ import annotations
+
+from typing import Any, Callable, Hashable
+
 import numpy as np
+from numpy.typing import NDArray
 
 if __name__ != "__main__":
     from online_cp.regressors import (
@@ -66,7 +71,7 @@ class MondrianConformalRegressor:
         A function ``(x) -> hashable`` that assigns a category to each input.
     """
 
-    def __init__(self, base_model, category_fn):
+    def __init__(self, base_model: ConformalRegressor, category_fn: Callable[[NDArray[np.floating[Any]]], Hashable]) -> None:
         if not isinstance(
             base_model,
             (ConformalRidgeRegressor, KernelConformalRidgeRegressor, ConformalLassoRegressor),
@@ -92,7 +97,7 @@ class MondrianConformalRegressor:
         self.base_model.learn_one(x, y, **kwargs)
         self.categories_.append(self.category_fn(x))
 
-    def predict(self, x, epsilon=None, bounds="both"):
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, bounds: str = "both") -> ConformalPredictionInterval | MultiLevelPredictionInterval:
         """Compute the Mondrian conformal prediction interval.
 
         Uses the pooled model's A, B decomposition but calibrates only
@@ -524,24 +529,24 @@ class MondrianConformalClassifier:
         A function ``(x) -> hashable`` that assigns a category to each input.
     """
 
-    def __init__(self, base_model, category_fn):
+    def __init__(self, base_model: Any, category_fn: Callable[[NDArray[np.floating[Any]]], Hashable]) -> None:
         self.base_model = base_model
         self.category_fn = category_fn
         self.categories_ = []
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[Any]) -> None:
         """Train the pooled model on all data and record categories."""
         X = np.asarray(X)
         y = np.asarray(y)
         self.base_model.learn_initial_training_set(X, y)
         self.categories_ = [self.category_fn(x_i) for x_i in X]
 
-    def learn_one(self, x, y, **kwargs):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, **kwargs: Any) -> None:
         """Learn a single example in the pooled model and record its category."""
         self.base_model.learn_one(x, y, **kwargs)
         self.categories_.append(self.category_fn(x))
 
-    def predict(self, x, epsilon=None, return_p_values=False):
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> Any:
         """Compute the Mondrian conformal prediction set."""
         from online_cp.classifiers import (
             ConformalNearestNeighboursClassifier,

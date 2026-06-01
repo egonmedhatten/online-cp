@@ -12,7 +12,12 @@ Example
 >>> # metric.update(y=y_true, Gamma=prediction_set)
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
+from numpy.typing import NDArray
 
 __all__ = [
     "Metric",
@@ -38,15 +43,15 @@ class Metric:
     """
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self.__class__.__name__
 
-    def __init__(self):
-        self._values = []
+    def __init__(self) -> None:
+        self._values: list[float] = []
         self._sum = 0.0
         self._n = 0
 
-    def update(self, y=None, Gamma=None, **kw):
+    def update(self, y: Any = None, Gamma: Any = None, **kw: Any) -> float:
         """Record one observation.
 
         Parameters
@@ -73,31 +78,31 @@ class Metric:
     def _score(self, y, Gamma, **kw):
         raise NotImplementedError
 
-    def get(self):
+    def get(self) -> float:
         """Return the running mean of the metric."""
         if self._n == 0:
             return 0.0
         return self._sum / self._n
 
     @property
-    def values(self):
+    def values(self) -> NDArray[np.floating[Any]]:
         """Per-step history as a numpy array."""
         return np.asarray(self._values)
 
-    def cumulative_mean(self):
+    def cumulative_mean(self) -> NDArray[np.floating[Any]]:
         """Cumulative running mean at each step."""
         return np.cumsum(self._values) / np.arange(1, self._n + 1)
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset the metric to its initial state."""
         self._values = []
         self._sum = 0.0
         self._n = 0
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.name}: {self.get():.4f}"
 
-    def __add__(self, other):
+    def __add__(self, other: Metric | Metrics) -> Metrics:
         if isinstance(other, Metrics):
             return Metrics([self] + other._metrics)
         if isinstance(other, Metric):
@@ -119,27 +124,27 @@ class Metrics:
     >>> metric.update(y=1.0, Gamma=interval)
     """
 
-    def __init__(self, metrics):
+    def __init__(self, metrics: list[Metric]) -> None:
         self._metrics = list(metrics)
 
-    def update(self, y=None, Gamma=None, **kw):
+    def update(self, y: Any = None, Gamma: Any = None, **kw: Any) -> None:
         """Update all contained metrics."""
         for m in self._metrics:
             m.update(y=y, Gamma=Gamma, **kw)
 
-    def get(self):
+    def get(self) -> dict[str, float]:
         """Return a dict of {name: running_mean} for all metrics."""
         return {m.name: m.get() for m in self._metrics}
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset all metrics."""
         for m in self._metrics:
             m.reset()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "\n".join(repr(m) for m in self._metrics)
 
-    def __add__(self, other):
+    def __add__(self, other: Metrics | Metric) -> Metrics:
         if isinstance(other, Metrics):
             return Metrics(self._metrics + other._metrics)
         if isinstance(other, Metric):

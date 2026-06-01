@@ -5,10 +5,14 @@ with guaranteed coverage. Includes nearest neighbours and support vector
 machine-based conformal classifiers.
 """
 
+from __future__ import annotations
+
 import time
 import warnings
+from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 from joblib import Parallel, delayed
 from scipy.spatial.distance import cdist, pdist, squareform
 
@@ -48,14 +52,14 @@ class ConformalPredictionSet:
         Significance level at which the set was constructed.
     """
 
-    def __init__(self, Gamma: np.array, epsilon):
+    def __init__(self, Gamma: NDArray[Any], epsilon: float) -> None:
         self.elements = Gamma
         self.epsilon = epsilon
 
-    def __contains__(self, y):
+    def __contains__(self, y: Any) -> bool:
         return y in self.elements
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.elements.shape[0]
 
     def __repr__(self):
@@ -79,28 +83,28 @@ class MultiLevelPredictionSet:
         Mapping ``{epsilon: ConformalPredictionSet}``.
     """
 
-    def __init__(self, predictions: dict):
+    def __init__(self, predictions: dict[float, ConformalPredictionSet]) -> None:
         self._predictions = dict(sorted(predictions.items()))
 
     @property
-    def levels(self):
+    def levels(self) -> list[float]:
         """Sorted list of significance levels."""
         return list(self._predictions.keys())
 
-    def __getitem__(self, eps):
+    def __getitem__(self, eps: float) -> ConformalPredictionSet:
         return self._predictions[eps]
 
     def __iter__(self):
         return iter(self._predictions.items())
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._predictions)
 
-    def __contains__(self, y):
+    def __contains__(self, y: Any) -> bool:
         """True if y is covered at all levels."""
         return all(y in gamma for gamma in self._predictions.values())
 
-    def coverage(self, y):
+    def coverage(self, y: Any) -> dict[float, bool]:
         """Return dict of {epsilon: bool} indicating coverage at each level."""
         return {eps: (y in gamma) for eps, gamma in self._predictions.items()}
 
@@ -115,7 +119,7 @@ class ConformalClassifier:
     Provides shared methods for computing p-values and constructing prediction sets.
     """
 
-    def __init__(self, epsilon=default_epsilon):
+    def __init__(self, epsilon: float | NDArray[np.floating[Any]] = default_epsilon) -> None:
         self.epsilon = epsilon
 
     @staticmethod
@@ -329,7 +333,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
         return same_label_distances, different_label_distances
 
-    def learn_one(self, x, y, D=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, D: NDArray[np.floating[Any]] | None = None) -> None:
         new_index = 0 if self.X is None else self.X.shape[0]
 
         # Enforce label-space policy
@@ -362,7 +366,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.D = D
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
-    def compute_p_value(self, x, y, return_update=False):
+    def compute_p_value(self, x: NDArray[np.floating[Any]], y: Any, return_update: bool = False) -> float | tuple[float, NDArray[np.floating[Any]] | None]:
         """Compute conformal p-value for a single (x, y) pair.
 
         Only tests the given label y (not the full label space),
@@ -401,7 +405,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             return p_value, D
         return p_value
 
-    def predict(self, x, epsilon=None, return_p_values=False, return_update=False, verbose=0):
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -570,7 +574,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             stacklevel=2,
         )
 
-    def learn_one(self, x, y, D=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, D: Any = None) -> None:
         # Enforce label-space policy
         if self._label_space_fixed:
             if y not in self.label_space:
@@ -591,7 +595,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
         else:
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[Any]) -> None:
         if X.shape[0] > 0:
             self.X = X
             self.y = y
@@ -652,7 +656,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             )
         return True
 
-    def predict(self, x, epsilon=None, return_p_values=False, verbose=0):
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -846,7 +850,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         """Compute kernel between all rows of X and a single point x."""
         return self._kernel(X, x).ravel()
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[Any]) -> None:
         """Store training data and precompute Gram matrix."""
         if self._label_space_fixed:
             unknown = set(np.unique(y)) - set(self.label_space)
@@ -865,7 +869,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         self.y = y.copy().astype(float)
         self.K = self._compute_gram(X)
 
-    def learn_one(self, x, y):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any) -> None:
         """Learn a new example, updating stored data and Gram matrix."""
         x = np.atleast_1d(x).ravel()
 
@@ -904,7 +908,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, float(y))
 
-    def predict(self, x, epsilon=None, return_p_values=False):
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> ConformalPredictionSet | MultiLevelPredictionSet:
         """
         Predict the conformal prediction set for object x.
 

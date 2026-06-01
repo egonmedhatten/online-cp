@@ -6,11 +6,15 @@ Each CPS produces a conformal predictive distribution (CPD) for a new test
 object, which can be used to form prediction sets at any significance level.
 """
 
+from __future__ import annotations
+
 import time
 import warnings
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize, minimize_scalar
 from scipy.spatial.distance import cdist, pdist, squareform
 
@@ -34,10 +38,10 @@ def get_ConformalPredictionInterval():
 class ConformalPredictiveSystem:
     """Base class for conformal predictive systems."""
 
-    def __init__(self, epsilon=default_epsilon):
+    def __init__(self, epsilon: float = default_epsilon) -> None:
         self.epsilon = epsilon
 
-    def learn_many(self, X, y):
+    def learn_many(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         for x1, y1 in zip(X, y):
             self.learn_one(x1, y1)
 
@@ -80,7 +84,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
         self.p = X.shape[1]
@@ -90,7 +94,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         else:
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
         Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
         >>> cps = RidgePredictionMachine()
@@ -294,7 +298,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         self.verbose = verbose
         self.rnd_gen = np.random.default_rng(rnd_state)
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
         Id = np.identity(self.X.shape[0])
@@ -362,7 +366,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
     def _update_K(K, k, kappa):
         return np.block([[K, k], [k.T, kappa]])
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
         Learn a single example
         """
@@ -537,7 +541,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             dists = cdist(X, y, metric=self.distance)
         return dists
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         """
         The Nearest neighbours prediction machine assumes all labels are unique. If they are not, we add noise to break ties.
 
@@ -562,7 +566,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
     def update_distance_matrix(D, d):
         return np.block([[D, d], [d.T, np.array([0])]])
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
         The Nearest neighbours prediction machine assumes all labels are unique. If they are not, we add noise to break ties.
         precomputed is a dictionary

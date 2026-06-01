@@ -5,10 +5,14 @@ with guaranteed coverage. Includes ridge regression, kernel ridge regression,
 and Lasso-based conformal regressors.
 """
 
+from __future__ import annotations
+
 import time
 import warnings
+from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
@@ -58,15 +62,15 @@ class ConformalPredictionInterval:
         Significance level at which the interval was constructed.
     """
 
-    def __init__(self, lower, upper, epsilon):
+    def __init__(self, lower: float, upper: float, epsilon: float) -> None:
         self.lower = lower
         self.upper = upper
         self.epsilon = epsilon
 
-    def __contains__(self, y):
+    def __contains__(self, y: float) -> bool:
         return self.lower <= y <= self.upper
 
-    def width(self):
+    def width(self) -> float:
         return self.upper - self.lower
 
     def __repr__(self):
@@ -87,28 +91,28 @@ class MultiLevelPredictionInterval:
         Mapping ``{epsilon: ConformalPredictionInterval}``.
     """
 
-    def __init__(self, predictions: dict):
+    def __init__(self, predictions: dict[float, ConformalPredictionInterval]) -> None:
         self._predictions = dict(sorted(predictions.items()))
 
     @property
-    def levels(self):
+    def levels(self) -> list[float]:
         """Sorted list of significance levels."""
         return list(self._predictions.keys())
 
-    def __getitem__(self, eps):
+    def __getitem__(self, eps: float) -> ConformalPredictionInterval:
         return self._predictions[eps]
 
     def __iter__(self):
         return iter(self._predictions.items())
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._predictions)
 
-    def __contains__(self, y):
+    def __contains__(self, y: float) -> bool:
         """True if y is covered at all levels."""
         return all(y in interval for interval in self._predictions.values())
 
-    def coverage(self, y):
+    def coverage(self, y: float) -> dict[float, bool]:
         """Return dict of {epsilon: bool} indicating coverage at each level."""
         return {eps: (y in interval) for eps, interval in self._predictions.items()}
 
@@ -124,7 +128,7 @@ class ConformalRegressor:
     intervals, and processing datasets in the online setting.
     """
 
-    def __init__(self, epsilon=default_epsilon):
+    def __init__(self, epsilon: float | NDArray[np.floating[Any]] = default_epsilon) -> None:
         self.epsilon = epsilon
 
     # TODO The methods _get_upper and _get_lower could be called with a vector of significance levels,
@@ -290,7 +294,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     def __init__(
         self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon
-    ):
+    ) -> None:
         """
         The ridge parameter (L2 regularisation) is a.
         Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
@@ -315,7 +319,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         # Do we use the studentised residuals
         self.studentised = studentised
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
         self.p = X.shape[1]
@@ -325,7 +329,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         else:
             self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
         Learn a single example. If we have already computed X and XTXinv, use them for update. Then the last row of X is the object with label y.
         >>> cp = ConformalRidgeRegressor()
@@ -436,7 +440,14 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
         return A, B
 
-    def predict(self, x, epsilon=None, bounds="both", return_update=False, debug_time=False):
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        bounds: str = "both",
+        return_update: bool = False,
+        debug_time: bool = False,
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
         """
         This function makes a prediction.
 
@@ -833,7 +844,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         y_hat = agg_func(y_neighbours, axis=1)
         return y_hat
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         """Batch-initialize with training data.
 
         Parameters
@@ -847,7 +858,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.y = np.asarray(y, dtype=float)
         self.D = self.distance_func(self.X)
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """Incrementally add one observation.
 
         Parameters
@@ -874,7 +885,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, y)
 
-    def predict(self, x, epsilon=None, bounds="both", return_update=False):
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        bounds: str = "both",
+        return_update: bool = False,
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
         """Predict a conformal prediction interval for test object x.
 
         Parameters
@@ -1057,7 +1074,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 class KernelConformalRidgeRegressor(ConformalRegressor):
     # TODO Add doctests to methods where applicable
 
-    def __init__(self, kernel, a=0, warnings=True, verbose=0, rnd_state=None, epsilon=default_epsilon):
+    def __init__(self, kernel: Any, a: float = 0, warnings: bool = True, verbose: int = 0, rnd_state: int | None = None, epsilon: float = default_epsilon) -> None:
         """
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is
         also compatible with (most) kernels from e.g. scikit-learn.
@@ -1082,7 +1099,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
         self.rnd_gen = np.random.default_rng(rnd_state)
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
         Id = np.identity(self.X.shape[0])
@@ -1105,7 +1122,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         # print(f'kappa: {kappa}')
         return np.block([[K, k], [k.T, kappa]])
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
         Learn a single example
         """
@@ -1165,7 +1182,14 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         # Nonconformity scores are A + yB = y - yhat
         return A, B
 
-    def predict(self, x, epsilon=None, bounds="both", return_update=False, debug_time=False):
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        bounds: str = "both",
+        return_update: bool = False,
+        debug_time: bool = False,
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
         """
         This function makes a prediction.
 
@@ -1585,7 +1609,7 @@ class ConformalLassoRegressor(ConformalRegressor):
         self.beta = None  # Current Lasso solution
         self.Sigma = None  # X^T X / n (sample covariance)
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         """Fit initial Lasso on the training data."""
         self.X = X.copy()
         self.y = y.copy()
@@ -1629,7 +1653,7 @@ class ConformalLassoRegressor(ConformalRegressor):
         if self.verbose > 0:
             print(f"Tuned lambda: {self.lam:.6f} (CV MSE: {best_mse:.4f})")
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
         Learn a new data point. Updates the training set and refits Lasso.
 
@@ -1656,7 +1680,12 @@ class ConformalLassoRegressor(ConformalRegressor):
             # Refit from scratch (warm-started from current beta)
             self.beta = _solve_lasso(self.X, self.y, self.lam, rho=self.rho, warm_start=self.beta)
 
-    def predict(self, x, epsilon=None, return_update=False):
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        return_update: bool = False,
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
         """
         Compute the conformal prediction set at x using the homotopy algorithm.
 
@@ -1733,7 +1762,7 @@ class ConformalLassoRegressor(ConformalRegressor):
             return result, precomputed_dict
         return result
 
-    def compute_p_value(self, x, y, smoothed=True, tau=None):
+    def compute_p_value(self, x: NDArray[np.floating[Any]], y: float, smoothed: bool = True, tau: float | None = None) -> float:
         """
         Compute the conformal p-value for (x, y) given current training set.
         """

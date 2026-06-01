@@ -6,7 +6,12 @@ ALRW2 §6.4) — the first known Python implementation of the full/transductive
 variant.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.spatial.distance import cdist, pdist, squareform
 
 try:
@@ -168,7 +173,7 @@ class VennPrediction:
     array([0.5, 0.5])
     """
 
-    def __init__(self, probs, label_space):
+    def __init__(self, probs: NDArray[np.floating[Any]], label_space: NDArray[Any]) -> None:
         self.probs = np.asarray(probs, dtype=np.float64)
         self.label_space = np.asarray(label_space)
 
@@ -547,7 +552,7 @@ class VennAbersPredictor:
         elif self.scorer == "svm":
             self.K = self._kernel(X)
 
-    def learn_one(self, x, y, precomputed=None):
+    def learn_one(self, x: NDArray[np.floating[Any]], y: int, precomputed: dict[str, Any] | None = None) -> None:
         """Incrementally add one observation after the true label is revealed.
 
         Parameters
@@ -649,7 +654,7 @@ class VennAbersPredictor:
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
 
-    def predict(self, x, return_update=False):
+    def predict(self, x: NDArray[np.floating[Any]], return_update: bool = False) -> VennPrediction | tuple[VennPrediction, dict[str, Any]]:
         """Produce a Venn-Abers multi-probability prediction.
 
         Parameters
@@ -1212,7 +1217,7 @@ class NearestNeighboursVennPredictor:
             Y = np.atleast_2d(Y)
             return cdist(X, Y, metric=self.metric)
 
-    def learn_initial_training_set(self, X, y):
+    def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.integer[Any]]) -> None:
         """Batch-initialise with training data.
 
         Parameters

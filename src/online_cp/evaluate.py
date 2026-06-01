@@ -20,6 +20,13 @@ Example
 >>> print(metric)
 """
 
+from __future__ import annotations
+
+from typing import Any, Callable, Generator, Iterable
+
+import numpy as np
+from numpy.typing import NDArray
+
 if __name__ != "__main__":
     from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS, BrierScore, LogLoss, Width
 
@@ -83,7 +90,16 @@ def _should_learn(learn, i, x_i, y_i):
     return learn(i, x_i, y_i)
 
 
-def progressive_val(model, X, y=None, *, epsilon=None, metric=None, learn=True, print_every=0):
+def progressive_val(
+    model: Any,
+    X: NDArray[np.floating[Any]] | Iterable,
+    y: NDArray[Any] | None = None,
+    *,
+    epsilon: float | NDArray[np.floating[Any]] | None = None,
+    metric: Metric | Metrics | None = None,
+    learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
+    print_every: int = 0,
+) -> Metric | Metrics:
     """Run the progressive validation (test-then-train) protocol.
 
     For each sample: predict, update metric, then optionally learn.
@@ -155,7 +171,16 @@ def progressive_val(model, X, y=None, *, epsilon=None, metric=None, learn=True, 
     return metric
 
 
-def iter_progressive_val(model, X, y=None, *, epsilon=None, metric=None, learn=True, step=1):
+def iter_progressive_val(
+    model: Any,
+    X: NDArray[np.floating[Any]] | Iterable,
+    y: NDArray[Any] | None = None,
+    *,
+    epsilon: float | NDArray[np.floating[Any]] | None = None,
+    metric: Metric | Metrics | None = None,
+    learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
+    step: int = 1,
+) -> Generator[dict[str, Any], None, None]:
     """Iterate the progressive validation protocol, yielding checkpoints.
 
     Yields a snapshot of the metric state every ``step`` samples.
@@ -231,7 +256,15 @@ def iter_progressive_val(model, X, y=None, *, epsilon=None, metric=None, learn=T
 # ---------------------------------------------------------------------------
 
 
-def progressive_val_venn(model, X, y=None, *, metric=None, learn=True, print_every=0):
+def progressive_val_venn(
+    model: Any,
+    X: NDArray[np.floating[Any]] | Iterable,
+    y: NDArray[Any] | None = None,
+    *,
+    metric: Metric | Metrics | None = None,
+    learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
+    print_every: int = 0,
+) -> Metric | Metrics:
     """Run progressive validation for Venn predictors.
 
     Same test-then-train protocol as ``progressive_val``, but adapted for
@@ -276,7 +309,15 @@ def progressive_val_venn(model, X, y=None, *, metric=None, learn=True, print_eve
     return metric
 
 
-def iter_progressive_val_venn(model, X, y=None, *, metric=None, learn=True, step=1):
+def iter_progressive_val_venn(
+    model: Any,
+    X: NDArray[np.floating[Any]] | Iterable,
+    y: NDArray[Any] | None = None,
+    *,
+    metric: Metric | Metrics | None = None,
+    learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
+    step: int = 1,
+) -> Generator[dict[str, Any], None, None]:
     """Iterate progressive validation for Venn predictors, yielding checkpoints.
 
     Parameters

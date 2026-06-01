@@ -245,7 +245,8 @@ class VennAbersPredictor:
     is retrained on the augmented dataset (training + hypothesized test label)
     for each prediction.
 
-    Supports ridge regression, k-NN, and SVM scoring functions.
+    Supports ridge regression, kernel ridge regression, k-NN, and SVM
+    scoring functions.
 
     >>> import numpy as np
     >>> np.random.seed(42)
@@ -278,7 +279,7 @@ class VennAbersPredictor:
         """
         Parameters
         ----------
-        scorer : {'ridge', 'knn', 'svm'}
+        scorer : {'ridge', 'kernel_ridge', 'knn', 'svm'}
             Scoring function to use.
         a : float
             Ridge regularisation parameter (for scorer='ridge').
@@ -291,7 +292,8 @@ class VennAbersPredictor:
         aggregation : {'mean', 'median'}
             Aggregation for k-NN distances.
         kernel : str or Kernel instance or callable
-            Kernel for SVM scorer. Strings: 'rbf', 'linear', 'poly'.
+            Kernel for kernel-ridge and SVM scorers. Strings: 'rbf',
+            'linear', 'poly'.
         C : float
             SVM regularisation parameter (upper bound on alpha).
         sigma : float
@@ -305,8 +307,10 @@ class VennAbersPredictor:
         smo_max_iter : int
             Maximum iterations for SMO solver.
         """
-        if scorer not in ("ridge", "knn", "svm"):
-            raise ValueError(f"scorer must be 'ridge', 'knn', or 'svm', got '{scorer}'")
+        if scorer not in ("ridge", "kernel_ridge", "knn", "svm"):
+            raise ValueError(
+                f"scorer must be 'ridge', 'kernel_ridge', 'knn', or 'svm', got '{scorer}'"
+            )
         if aggregation not in ("mean", "median"):
             raise ValueError(f"aggregation must be 'mean' or 'median', got '{aggregation}'")
 
@@ -341,9 +345,10 @@ class VennAbersPredictor:
         self.D = None
         self._label_indices = None
 
-        # SVM state
+        # Kernel/SVM state
         self.K = None  # Gram matrix
-        if scorer == "svm":
+        self.Ka_inv = None  # (K + aI)^-1 for kernel-ridge
+        if scorer in ("svm", "kernel_ridge"):
             self._kernel = self._resolve_kernel(kernel)
         else:
             self._kernel_spec = kernel  # store for later if needed
@@ -376,6 +381,47 @@ class VennAbersPredictor:
         else:
             raise TypeError(f"kernel must be a string, Kernel instance, or callable, got {type(kernel)}")
 
+    def _augment_kernel_state(self, x):
+        """Build augmented K and (K+aI)^-1 for one new point with robust fallback."""
+        x = np.asarray(x).ravel()
+        n = self.K.shape[0]
+
+        k_row = np.atleast_1d(self._kernel(self.X, x))
+        kappa = float(self._kernel(x.reshape(1, -1))[0, 0])
+        K_aug = np.empty((n + 1, n + 1), dtype=np.float64)
+        K_aug[:n, :n] = self.K
+        K_aug[:n, n] = k_row
+        K_aug[n, :n] = k_row
+        K_aug[n, n] = kappa
+
+        # Block inverse update for (K_aug + aI)^-1
+        b = k_row
+        d = kappa + self.a
+        A_inv_b = self.Ka_inv @ b
+        s = float(d - b.T @ A_inv_b)
+
+        # Use a relative tolerance and finite checks; fallback to recomputation when unstable
+        scale = 1.0 + abs(d) + np.linalg.norm(b) * max(np.linalg.norm(A_inv_b), 1.0)
+        tol = 1e-12 * scale
+        use_fallback = (not np.isfinite(s)) or (s <= tol)
+
+        if use_fallback:
+            Ka_aug = K_aug + self.a * np.identity(n + 1)
+            try:
+                Ka_inv_aug = np.linalg.inv(Ka_aug)
+            except np.linalg.LinAlgError:
+                Ka_inv_aug = np.linalg.pinv(Ka_aug)
+        else:
+            Ka_inv_aug = np.empty((n + 1, n + 1), dtype=np.float64)
+            Ka_inv_aug[:n, :n] = self.Ka_inv + np.outer(A_inv_b, A_inv_b) / s
+            Ka_inv_aug[:n, n] = -A_inv_b / s
+            Ka_inv_aug[n, :n] = -A_inv_b / s
+            Ka_inv_aug[n, n] = 1.0 / s
+
+        # Keep numerical symmetry of the inverse matrix
+        Ka_inv_aug = 0.5 * (Ka_inv_aug + Ka_inv_aug.T)
+        return K_aug, Ka_inv_aug
+
     def learn_initial_training_set(self, X, y):
         """Batch-initialize with training data.
 
@@ -398,6 +444,13 @@ class VennAbersPredictor:
             self.p = X.shape[1]
             self.Id = np.identity(self.p)
             self.XTXinv = np.linalg.inv(X.T @ X + self.a * self.Id)
+        elif self.scorer == "kernel_ridge":
+            self.K = self._kernel(X)
+            Ka = self.K + self.a * np.identity(self.K.shape[0])
+            try:
+                self.Ka_inv = np.linalg.inv(Ka)
+            except np.linalg.LinAlgError:
+                self.Ka_inv = np.linalg.pinv(Ka)
         elif self.scorer == "knn":
             self.D = self.distance_func(X)
             self._label_indices = {0: np.flatnonzero(y == 0), 1: np.flatnonzero(y == 1)}
@@ -416,6 +469,7 @@ class VennAbersPredictor:
         precomputed : dict, optional
             Cached state from predict(return_update=True).
             For ridge: {'XTXinv': ...}
+            For kernel_ridge: {'K': ..., 'Ka_inv': ...}
             For knn: {'D': ...}
         """
         x = np.asarray(x).ravel()
@@ -427,6 +481,13 @@ class VennAbersPredictor:
                 self.p = self.X.shape[1]
                 self.Id = np.identity(self.p)
                 self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+            elif self.scorer == "kernel_ridge":
+                self.K = self._kernel(self.X)
+                Ka = self.K + self.a * np.identity(1)
+                try:
+                    self.Ka_inv = np.linalg.inv(Ka)
+                except np.linalg.LinAlgError:
+                    self.Ka_inv = np.linalg.pinv(Ka)
             elif self.scorer == "knn":
                 self.D = self.distance_func(self.X)
                 self._label_indices = {0: np.flatnonzero(self.y == 0), 1: np.flatnonzero(self.y == 1)}
@@ -458,6 +519,16 @@ class VennAbersPredictor:
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
                 self._label_indices = {0: np.flatnonzero(self.y == 0), 1: np.flatnonzero(self.y == 1)}
+
+            elif self.scorer == "kernel_ridge":
+                if precomputed is not None and "K" in precomputed and "Ka_inv" in precomputed:
+                    self.K = precomputed["K"]
+                    self.Ka_inv = precomputed["Ka_inv"]
+                else:
+                    self.K, self.Ka_inv = self._augment_kernel_state(x)
+
+                self.X = np.vstack([self.X, x.reshape(1, -1)])
+                self.y = np.append(self.y, y)
 
             elif self.scorer == "svm":
                 if precomputed is not None and "K" in precomputed:
@@ -502,6 +573,8 @@ class VennAbersPredictor:
 
         if self.scorer == "ridge":
             return self._predict_ridge(x, return_update)
+        elif self.scorer == "kernel_ridge":
+            return self._predict_kernel_ridge(x, return_update)
         elif self.scorer == "knn":
             return self._predict_knn(x, return_update)
         elif self.scorer == "svm":
@@ -543,6 +616,36 @@ class VennAbersPredictor:
 
         if return_update:
             return pred, {"XTXinv": XTXinv_aug}
+        return pred
+
+    def _predict_kernel_ridge(self, x, return_update):
+        """Kernel-ridge scoring: S(x_i) = fitted values on augmented set."""
+        n = self.X.shape[0]
+
+        # Augment Gram and inverse state with robust fallback when needed
+        K_aug, Ka_inv_aug = self._augment_kernel_state(x)
+
+        # Scores for hypothesis y=0
+        y_ext_0 = np.append(self.y.astype(np.float64), 0.0)
+        beta_0 = Ka_inv_aug @ y_ext_0
+        scores_0 = K_aug @ beta_0
+
+        # Scores for hypothesis y=1
+        # scores_1 = scores_0 + last column of kernel-ridge hat matrix
+        h_col = K_aug @ Ka_inv_aug[:, -1]
+        scores_1 = scores_0 + h_col
+
+        labels_0 = np.append(self.y, 0).astype(np.float64)
+        labels_1 = np.append(self.y, 1).astype(np.float64)
+
+        test_idx = n
+        p0 = _isotonic_calibrate(scores_0, labels_0, test_idx)
+        p1 = _isotonic_calibrate(scores_1, labels_1, test_idx)
+
+        pred = VennPrediction(p0, p1)
+
+        if return_update:
+            return pred, {"K": K_aug, "Ka_inv": Ka_inv_aug}
         return pred
 
     def _predict_knn(self, x, return_update):

@@ -178,6 +178,92 @@ class TestVennAbersRidge:
 
 
 # ---------------------------------------------------------------------------
+# VennAbersPredictor - Kernel Ridge
+# ---------------------------------------------------------------------------
+
+
+class TestVennAbersKernelRidge:
+    @pytest.fixture
+    def trained_vap_kernel_ridge(self):
+        np.random.seed(43)
+        n = 60
+        X = np.random.randn(n, 3)
+        y = (X[:, 0] + 0.7 * X[:, 1] - 0.4 * X[:, 2] > 0).astype(int)
+        vap = VennAbersPredictor(scorer="kernel_ridge", a=1.0, kernel="rbf", sigma=1.0)
+        vap.learn_initial_training_set(X[:40], y[:40])
+        return vap, X, y
+
+    def test_predictions_in_unit_interval(self, trained_vap_kernel_ridge):
+        vap, X, y = trained_vap_kernel_ridge
+        for i in range(40, 50):
+            pred = vap.predict(X[i])
+            assert 0 <= pred.p0 <= 1, f"p0={pred.p0} out of [0,1]"
+            assert 0 <= pred.p1 <= 1, f"p1={pred.p1} out of [0,1]"
+
+    def test_p1_geq_p0(self, trained_vap_kernel_ridge):
+        vap, X, y = trained_vap_kernel_ridge
+        for i in range(40, 50):
+            pred = vap.predict(X[i])
+            assert pred.p1 >= pred.p0, f"p1={pred.p1} < p0={pred.p0}"
+
+    def test_streaming_with_learn_one(self, trained_vap_kernel_ridge):
+        vap, X, y = trained_vap_kernel_ridge
+        for i in range(40, 45):
+            pred = vap.predict(X[i])
+            assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
+            vap.learn_one(X[i], y[i])
+        assert vap.K.shape == (45, 45)
+        assert vap.Ka_inv.shape == (45, 45)
+
+    def test_return_update_speeds_learn(self, trained_vap_kernel_ridge):
+        vap, X, y = trained_vap_kernel_ridge
+        pred, precomputed = vap.predict(X[40], return_update=True)
+        assert "K" in precomputed
+        assert "Ka_inv" in precomputed
+        assert precomputed["K"].shape == (41, 41)
+        assert precomputed["Ka_inv"].shape == (41, 41)
+        assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
+
+        vap.learn_one(X[40], y[40], precomputed=precomputed)
+        pred2 = vap.predict(X[41])
+        assert 0 <= pred2.p0 <= 1 and 0 <= pred2.p1 <= 1
+
+    def test_kernel_linear(self):
+        np.random.seed(0)
+        X = np.random.randn(30, 2)
+        y = (X[:, 0] > 0).astype(int)
+        vap = VennAbersPredictor(scorer="kernel_ridge", a=1.0, kernel="linear")
+        vap.learn_initial_training_set(X[:20], y[:20])
+        pred = vap.predict(X[20])
+        assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
+
+    def test_cold_start(self):
+        vap = VennAbersPredictor(scorer="kernel_ridge", a=1.0)
+        pred = vap.predict(np.array([1.0, 2.0, 3.0]))
+        assert pred.p0 == 0.5 and pred.p1 == 0.5
+
+    def test_near_singular_kernel_state_stays_finite(self):
+        """Near-duplicate points with tiny regularization should remain numerically stable."""
+        rng = np.random.default_rng(7)
+        base = np.array([0.2, -0.1])
+        X_dup = np.tile(base, (12, 1)) + 1e-12 * rng.normal(size=(12, 2))
+        y_dup = np.array([0, 1] * 6)
+
+        vap = VennAbersPredictor(scorer="kernel_ridge", a=1e-14, kernel="linear")
+        vap.learn_initial_training_set(X_dup[:8], y_dup[:8])
+
+        pred, precomputed = vap.predict(X_dup[8], return_update=True)
+        assert np.isfinite(pred.p0)
+        assert np.isfinite(pred.p1)
+        assert np.isfinite(precomputed["Ka_inv"]).all()
+
+        vap.learn_one(X_dup[8], y_dup[8], precomputed=precomputed)
+        pred2 = vap.predict(X_dup[9])
+        assert np.isfinite(pred2.p0)
+        assert np.isfinite(pred2.p1)
+
+
+# ---------------------------------------------------------------------------
 # VennAbersPredictor — k-NN
 # ---------------------------------------------------------------------------
 

@@ -25,3 +25,5 @@
 ::: online_cp.metrics.LogLoss
 
 ::: online_cp.metrics.Width
+
+::: online_cp.metrics.CalibrationError

@@ -67,6 +67,24 @@ from online_cp.metrics import (
 from online_cp.metrics import (
     Width as Width,
 )
+from online_cp.metrics import (
+    CalibrationError as CalibrationError,
+)
+from online_cp.plotting import (
+    plot_reliability_diagram as plot_reliability_diagram,
+)
+from online_cp.plotting import (
+    plot_reliability_diagram_venn as plot_reliability_diagram_venn,
+)
+from online_cp.plotting import (
+    plot_sharpness as plot_sharpness,
+)
+from online_cp.plotting import (
+    plot_pit_histogram as plot_pit_histogram,
+)
+from online_cp.plotting import (
+    plot_calibration_conditional as plot_calibration_conditional,
+)
 from online_cp.evaluate import (
     progressive_val_venn as progressive_val_venn,
 )

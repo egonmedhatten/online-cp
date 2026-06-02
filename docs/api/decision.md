@@ -10,10 +10,6 @@
 
 ::: online_cp.decision.venn_decision
 
-::: online_cp.decision.maximize
+::: online_cp.decision.alpha_utility
 
-::: online_cp.decision.maximin
-
-::: online_cp.decision.hurwicz
-
-::: online_cp.decision.minimax_regret
+::: online_cp.decision.alpha_regret

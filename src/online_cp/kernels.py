@@ -128,7 +128,7 @@ class PeriodicKernel(Kernel):
         self.p = p
         self.s = s
         self.distance = distance
-        self.name = "Gaussian"
+        self.name = "Periodic"
 
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
@@ -170,7 +170,7 @@ class LinearCombinationKernel(Kernel):
         self.kernels = kernels
         self.weights = weights
 
-        self.name = "LinearCombinationKernel"  # TODO Write out the explicit combination as name, e.g. '0.3*Polynomial + 0.4*Gaussian
+        self.name = " + ".join(f"{w}*{k.name}" for w, k in zip(weights, kernels))
 
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         return sum(weight * kernel(X, y) for weight, kernel in zip(self.weights, self.kernels))

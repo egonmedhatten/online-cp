@@ -45,6 +45,26 @@ class ConformalPredictiveSystem:
         for x1, y1 in zip(X, y):
             self.learn_one(x1, y1)
 
+    def predict(self, x, **kwargs):
+        """Produce a conformal predictive distribution for test object x.
+
+        Alias for :meth:`predict_cpd`. Provides a uniform interface
+        consistent with classifiers and regressors.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Test object.
+        **kwargs
+            Passed through to ``predict_cpd``.
+
+        Returns
+        -------
+        ConformalPredictiveDistributionFunction
+            The conformal predictive distribution for x.
+        """
+        return self.predict_cpd(x, **kwargs)
+
 
 class RidgePredictionMachine(ConformalPredictiveSystem):
     """Conformal predictive system based on ridge regression.

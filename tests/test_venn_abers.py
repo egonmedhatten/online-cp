@@ -534,7 +534,7 @@ class TestNearestNeighboursVennPredictor:
         vp.learn_initial_training_set(X_train, y_train)
 
         x_new = np.array([1.0, 2.0])
-        pred = vp.predict_one(x_new)
+        pred = vp.predict(x_new)
 
         # Under hypothesis v=1 (y_new=1):
         # The new point's taxonomy should place it with all positives
@@ -558,7 +558,7 @@ class TestNearestNeighboursVennPredictor:
         vp.learn_initial_training_set(X[:35], y[:35])
 
         # Test a clearly positive point
-        pred = vp.predict_one(np.array([3.0, 0.0]))
+        pred = vp.predict(np.array([3.0, 0.0]))
         assert pred.p0 <= pred.p1
 
     def test_k_greater_than_1(self):
@@ -570,7 +570,7 @@ class TestNearestNeighboursVennPredictor:
         vp = NearestNeighboursVennPredictor(k=3)
         vp.learn_initial_training_set(X[:25], y[:25])
 
-        pred = vp.predict_one(X[25])
+        pred = vp.predict(X[25])
         assert 0 <= pred.p0 <= 1
         assert 0 <= pred.p1 <= 1
 
@@ -591,8 +591,8 @@ class TestNearestNeighboursVennPredictor:
             vp_inc.learn_one(X[i], y[i])
 
         x_test = np.array([0.5, 0.5])
-        pred_batch = vp_batch.predict_one(x_test)
-        pred_inc = vp_inc.predict_one(x_test)
+        pred_batch = vp_batch.predict(x_test)
+        pred_inc = vp_inc.predict(x_test)
         assert abs(pred_batch.p0 - pred_inc.p0) < 1e-10
         assert abs(pred_batch.p1 - pred_inc.p1) < 1e-10
 
@@ -604,14 +604,14 @@ class TestNearestNeighboursVennPredictor:
         vp = NearestNeighboursVennPredictor(k=10)  # k >> n
         vp.learn_initial_training_set(X, y)
 
-        pred = vp.predict_one(np.array([1.5, 1.5]))
+        pred = vp.predict(np.array([1.5, 1.5]))
         assert 0 <= pred.p0 <= 1
         assert 0 <= pred.p1 <= 1
 
     def test_empty_predictor_returns_uniform(self):
         """Prediction with no training data returns (0.5, 0.5)."""
         vp = NearestNeighboursVennPredictor(k=1)
-        pred = vp.predict_one(np.array([1.0, 2.0]))
+        pred = vp.predict(np.array([1.0, 2.0]))
         assert pred.p0 == 0.5
         assert pred.p1 == 0.5
 
@@ -619,7 +619,7 @@ class TestNearestNeighboursVennPredictor:
         """With one training example, prediction should not crash."""
         vp = NearestNeighboursVennPredictor(k=1)
         vp.learn_one(np.array([1.0, 0.0]), 1)
-        pred = vp.predict_one(np.array([0.0, 0.0]))
+        pred = vp.predict(np.array([0.0, 0.0]))
         assert 0 <= pred.p0 <= 1
         assert 0 <= pred.p1 <= 1
 
@@ -635,16 +635,16 @@ class TestNearestNeighboursVennPredictor:
             np.array([[0, 0], [1, 1], [2, 2]]),
             np.array([0, 1, 2]),
         )
-        pred = vp.predict_one(np.array([0.5, 0.5]))
+        pred = vp.predict(np.array([0.5, 0.5]))
         assert isinstance(pred, MulticlassVennPrediction)
 
     def test_output_type(self):
-        """predict_one returns VennPrediction."""
+        """predict returns VennPrediction."""
         X = np.array([[0, 0], [1, 1], [2, 2], [3, 3]], dtype=float)
         y = np.array([0, 0, 1, 1])
         vp = NearestNeighboursVennPredictor(k=1)
         vp.learn_initial_training_set(X, y)
-        pred = vp.predict_one(np.array([2.5, 2.5]))
+        pred = vp.predict(np.array([2.5, 2.5]))
         assert isinstance(pred, VennPrediction)
 
     def test_compatible_with_log_loss_point(self):
@@ -653,7 +653,7 @@ class TestNearestNeighboursVennPredictor:
         y = np.array([0, 0, 1, 1])
         vp = NearestNeighboursVennPredictor(k=1)
         vp.learn_initial_training_set(X, y)
-        pred = vp.predict_one(np.array([2.5, 2.5]))
+        pred = vp.predict(np.array([2.5, 2.5]))
         ll = log_loss_point(pred.p0, pred.p1)
         br = brier_point(pred.p0, pred.p1)
         assert 0 <= ll <= 1
@@ -679,7 +679,7 @@ class TestNearestNeighboursVennValidity:
         sum_upper = 0.0
 
         for i in range(n_train, n_train + n_test):
-            pred = vp.predict_one(X[i])
+            pred = vp.predict(X[i])
 
             # Predicted label: same rule as VAP (p0+p1 > 1 → predict 1)
             y_hat = 1 if pred.p0 + pred.p1 > 1 else 0
@@ -733,7 +733,7 @@ class TestMulticlassNearestNeighboursVenn:
         X, y = self._make_3class_data(rng)
         vp = NearestNeighboursVennPredictor(k=3)
         vp.learn_initial_training_set(X[:40], y[:40])
-        pred = vp.predict_one(X[40])
+        pred = vp.predict(X[40])
         assert isinstance(pred, MulticlassVennPrediction)
 
     def test_output_type_binary(self):
@@ -743,7 +743,7 @@ class TestMulticlassNearestNeighboursVenn:
         y = (X[:, 0] > 0).astype(int)
         vp = NearestNeighboursVennPredictor(k=1)
         vp.learn_initial_training_set(X[:20], y[:20])
-        pred = vp.predict_one(X[20])
+        pred = vp.predict(X[20])
         assert isinstance(pred, VennPrediction)
 
     def test_rows_sum_to_one(self):
@@ -754,7 +754,7 @@ class TestMulticlassNearestNeighboursVenn:
         vp.learn_initial_training_set(X[:40], y[:40])
 
         for i in range(40, 50):
-            pred = vp.predict_one(X[i])
+            pred = vp.predict(X[i])
             row_sums = pred.probs.sum(axis=1)
             np.testing.assert_allclose(row_sums, 1.0, atol=1e-12)
 
@@ -766,7 +766,7 @@ class TestMulticlassNearestNeighboursVenn:
         vp.learn_initial_training_set(X[:40], y[:40])
 
         for i in range(40, 50):
-            pred = vp.predict_one(X[i])
+            pred = vp.predict(X[i])
             assert np.all(pred.probs >= 0)
 
     def test_diagonal_dominance_well_separated(self):
@@ -779,7 +779,7 @@ class TestMulticlassNearestNeighboursVenn:
         # Most predictions should have diagonal dominance
         diag_dominant_count = 0
         for i in range(60, 90):
-            pred = vp.predict_one(X[i])
+            pred = vp.predict(X[i])
             for row_idx in range(3):
                 if pred.probs[row_idx, row_idx] == pred.probs[row_idx].max():
                     diag_dominant_count += 1
@@ -788,14 +788,14 @@ class TestMulticlassNearestNeighboursVenn:
         assert diag_dominant_count >= 0.8 * (30 * 3)
 
     def test_streaming(self):
-        """predict_one → learn_one loop works correctly."""
+        """predict → learn_one loop works correctly."""
         rng = np.random.default_rng(10)
         X, y = self._make_3class_data(rng, n=60)
         vp = NearestNeighboursVennPredictor(k=3)
         vp.learn_initial_training_set(X[:30], y[:30])
 
         for i in range(30, 50):
-            pred = vp.predict_one(X[i])
+            pred = vp.predict(X[i])
             assert isinstance(pred, MulticlassVennPrediction)
             assert pred.probs.shape == (3, 3)
             vp.learn_one(X[i], y[i])
@@ -810,7 +810,7 @@ class TestMulticlassNearestNeighboursVenn:
         vp = NearestNeighboursVennPredictor(k=3)
         vp.learn_initial_training_set(X[:40], y[:40])
 
-        pred = vp.predict_one(X[40])
+        pred = vp.predict(X[40])
         point = pred.point
         assert point.shape == (3,)
         assert np.all(point >= 0)
@@ -830,7 +830,7 @@ class TestMulticlassNearestNeighboursVenn:
         vp = NearestNeighboursVennPredictor(k=3)
         vp.learn_initial_training_set(X[:80], y[:80])
 
-        pred = vp.predict_one(X[80])
+        pred = vp.predict(X[80])
         assert isinstance(pred, MulticlassVennPrediction)
         assert pred.probs.shape == (5, 5)
         np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
@@ -844,7 +844,7 @@ class TestMulticlassNearestNeighboursVenn:
         vp = NearestNeighboursVennPredictor(k=3, label_space=[0, 1, 2])
         vp.learn_initial_training_set(X[:20], y_train)
 
-        pred = vp.predict_one(X[20])
+        pred = vp.predict(X[20])
         assert isinstance(pred, MulticlassVennPrediction)
         assert pred.probs.shape == (3, 3)
         np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
@@ -865,7 +865,7 @@ class TestMulticlassNearestNeighboursVenn:
         assert 2 in vp.label_space
         assert len(vp.label_space) == 3
 
-        pred = vp.predict_one(X[21])
+        pred = vp.predict(X[21])
         assert isinstance(pred, MulticlassVennPrediction)
         assert pred.probs.shape == (3, 3)
 
@@ -877,14 +877,14 @@ class TestMulticlassNearestNeighboursVenn:
 
         vp = NearestNeighboursVennPredictor(k=2, label_space=[0, 1, 2])
         # Cold start prediction
-        pred = vp.predict_one(X[0])
+        pred = vp.predict(X[0])
         assert isinstance(pred, MulticlassVennPrediction)
 
         # Build up from scratch
         for i in range(10):
             vp.learn_one(X[i], y[i])
 
-        pred = vp.predict_one(X[10])
+        pred = vp.predict(X[10])
         assert isinstance(pred, MulticlassVennPrediction)
         assert pred.probs.shape == (3, 3)
         np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
@@ -898,7 +898,7 @@ class TestMulticlassNearestNeighboursVenn:
         vp = NearestNeighboursVennPredictor(k=20)  # k > n
         vp.learn_initial_training_set(X[:5], y[:5])
 
-        pred = vp.predict_one(X[5])
+        pred = vp.predict(X[5])
         assert isinstance(pred, MulticlassVennPrediction)
         np.testing.assert_allclose(pred.probs.sum(axis=1), 1.0, atol=1e-12)
 

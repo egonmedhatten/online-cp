@@ -8,6 +8,7 @@ variant.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -1188,7 +1189,7 @@ class NearestNeighboursVennPredictor:
     >>> y = (X[:, 0] + X[:, 1] > 0).astype(int)
     >>> vp = NearestNeighboursVennPredictor(k=1)
     >>> vp.learn_initial_training_set(X[:20], y[:20])
-    >>> pred = vp.predict_one(X[20])
+    >>> pred = vp.predict(X[20])
     >>> bool(0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1)
     True
     """
@@ -1291,6 +1292,30 @@ class NearestNeighboursVennPredictor:
             self.y = np.append(self.y, y)
 
     def predict_one(self, x):
+        """Produce a Venn multiprobability prediction.
+
+        .. deprecated:: 0.3.0
+            Use :meth:`predict` instead.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Test object.
+
+        Returns
+        -------
+        VennPrediction or MulticlassVennPrediction
+            Binary: VennPrediction(p0, p1).
+            Multiclass: MulticlassVennPrediction with |Y| × |Y| matrix.
+        """
+        warnings.warn(
+            "predict_one() is deprecated, use predict() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.predict(x)
+
+    def predict(self, x):
         """Produce a Venn multiprobability prediction.
 
         Parameters

@@ -333,7 +333,15 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
         return same_label_distances, different_label_distances
 
-    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, D: NDArray[np.floating[Any]] | None = None) -> None:
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None, *, D: NDArray[np.floating[Any]] | None = None) -> None:
+        if D is not None:
+            warnings.warn(
+                "The 'D' parameter is deprecated, use 'precomputed' instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if precomputed is None:
+                precomputed = D
         new_index = 0 if self.X is None else self.X.shape[0]
 
         # Enforce label-space policy
@@ -360,10 +368,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.X = x.reshape(1, -1)
             self.D = self.distance_func(self.X)
         else:
-            if D is None:
+            if precomputed is None:
                 d = self.distance_func(self.X, x)
-                D = self.update_distance_matrix(self.D, d)
-            self.D = D
+                precomputed = self.update_distance_matrix(self.D, d)
+            self.D = precomputed
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
     def compute_p_value(self, x: NDArray[np.floating[Any]], y: Any, return_update: bool = False) -> float | tuple[float, NDArray[np.floating[Any]] | None]:
@@ -656,7 +664,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             )
         return True
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -667,6 +675,8 @@ class ConformalClassifierWrapper(ConformalClassifier):
             Gamma, p_values = self._fallback_prediction(epsilon)
             if return_p_values:
                 return Gamma, p_values
+            if return_update:
+                return Gamma, {}
             return Gamma
 
         label_to_idx = {label: i for i, label in enumerate(self.label_space)}
@@ -676,6 +686,8 @@ class ConformalClassifierWrapper(ConformalClassifier):
             Gamma, p_values = self._fallback_prediction(epsilon)
             if return_p_values:
                 return Gamma, p_values
+            if return_update:
+                return Gamma, {}
             return Gamma
 
         X = np.append(self.X, x.reshape(1, -1), axis=0)
@@ -695,6 +707,8 @@ class ConformalClassifierWrapper(ConformalClassifier):
                 Gamma, p_values = self._fallback_prediction(epsilon)
                 if return_p_values:
                     return Gamma, p_values
+                if return_update:
+                    return Gamma, {}
                 return Gamma
 
             classes = getattr(self.learner, "classes_", None)
@@ -707,12 +721,16 @@ class ConformalClassifierWrapper(ConformalClassifier):
                 Gamma, p_values = self._fallback_prediction(epsilon)
                 if return_p_values:
                     return Gamma, p_values
+                if return_update:
+                    return Gamma, {}
                 return Gamma
 
             if not self._validate_probabilities(Prob, classes, expected_rows=len(Y)):
                 Gamma, p_values = self._fallback_prediction(epsilon)
                 if return_p_values:
                     return Gamma, p_values
+                if return_update:
+                    return Gamma, {}
                 return Gamma
 
             Prob = self._align_probabilities(Prob, classes)
@@ -722,6 +740,8 @@ class ConformalClassifierWrapper(ConformalClassifier):
                 Gamma, p_values = self._fallback_prediction(epsilon)
                 if return_p_values:
                     return Gamma, p_values
+                if return_update:
+                    return Gamma, {}
                 return Gamma
 
             Alpha = Prob[np.arange(len(Y)), label_idx]
@@ -730,8 +750,9 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         if return_p_values:
             return Gamma, p_values
-        else:
-            return Gamma
+        if return_update:
+            return Gamma, {}
+        return Gamma
 
 
 class ConformalSupportVectorMachine(ConformalClassifier):

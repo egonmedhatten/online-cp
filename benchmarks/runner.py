@@ -117,10 +117,8 @@ def run_benchmark(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         if task == "venn":
-            # Handle both predict() and predict_one() interfaces
-            predict_fn = getattr(model, "predict", None) or getattr(model, "predict_one")
             for x_i, y_i in zip(X_test, y_test):
-                venn_pred = predict_fn(x_i)
+                venn_pred = model.predict(x_i)
                 metric.update(y=y_i, Gamma=None, venn=venn_pred)
                 model.learn_one(x_i, y_i)
         elif task == "cps":

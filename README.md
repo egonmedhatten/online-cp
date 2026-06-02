@@ -1,6 +1,7 @@
 # online-cp — Online Conformal Prediction
 
 [![PyPI version](https://badge.fury.io/py/online-cp.svg)](https://badge.fury.io/py/online-cp)
+[![Docs](https://img.shields.io/badge/docs-online-blue)](https://egonmedhatten.github.io/online-cp/)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![Tests](https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg)](https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml)
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)
@@ -251,6 +252,7 @@ Start with [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) for a 5-mi
 
 ## Links
 
+* [Documentation](https://egonmedhatten.github.io/online-cp/)
 * [online-cp on GitHub][online-cp-on-github]
 * [online-cp on PyPI][online-cp-on-pypi]
 * [Changelog](CHANGELOG.md)

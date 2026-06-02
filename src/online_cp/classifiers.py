@@ -7,6 +7,7 @@ machine-based conformal classifiers.
 
 from __future__ import annotations
 
+import copy
 import time
 import warnings
 from typing import Any
@@ -536,7 +537,17 @@ class ConformalClassifierWrapper(ConformalClassifier):
         }
     )
 
-    def __init__(self, learner, label_space=None, epsilon=default_epsilon, verbose=0, rnd_state=None, n_jobs=None):
+    _WARM_START_BENEFICIAL = frozenset(
+        {
+            "LogisticRegression",
+            "MLPClassifier",
+            "SGDClassifier",
+            "Perceptron",
+            "PassiveAggressiveClassifier",
+        }
+    )
+
+    def __init__(self, learner, label_space=None, epsilon=default_epsilon, verbose=0, rnd_state=None, n_jobs=None, warm_start="auto"):
         super().__init__(epsilon)
 
         warnings.warn(
@@ -561,6 +572,17 @@ class ConformalClassifierWrapper(ConformalClassifier):
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
+
+        # Warm-start configuration
+        if warm_start == "auto":
+            self._warm_start = type(learner).__name__ in self._WARM_START_BENEFICIAL
+        else:
+            self._warm_start = bool(warm_start)
+
+        # Base fit cache (invalidated on learn_one)
+        self._base_learner = None
+        self._base_fitted = False
+
         self._warn_estimator_support_tier()
 
     def _warn_estimator_support_tier(self):
@@ -583,6 +605,10 @@ class ConformalClassifierWrapper(ConformalClassifier):
         )
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: Any, D: Any = None) -> None:
+        # Invalidate base fit cache
+        self._base_fitted = False
+        self._base_learner = None
+
         # Enforce label-space policy
         if self._label_space_fixed:
             if y not in self.label_space:
@@ -604,6 +630,10 @@ class ConformalClassifierWrapper(ConformalClassifier):
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[Any]) -> None:
+        # Invalidate base fit cache
+        self._base_fitted = False
+        self._base_learner = None
+
         if X.shape[0] > 0:
             self.X = X
             self.y = y
@@ -664,7 +694,44 @@ class ConformalClassifierWrapper(ConformalClassifier):
             )
         return True
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
+    def _ensure_base_fit(self, X):
+        """Lazily fit the base learner on (X_train, y_train) and cache a copy."""
+        if not self._base_fitted:
+            try:
+                self.learner.fit(self.X, self.y)
+                self._base_learner = copy.deepcopy(self.learner)
+                self._base_fitted = True
+            except Exception:
+                # If base fit fails, proceed without caching
+                self._base_learner = None
+                self._base_fitted = False
+
+    def _fit_label(self, learner, X, Y, label_to_idx, tau, y_candidate):
+        """Fit learner for a single candidate label and return (label, p_value) or None on failure."""
+        Y_aug = np.append(self.y, y_candidate)
+        try:
+            learner.fit(X, Y_aug)
+            Prob = learner.predict_proba(X)
+        except Exception as exc:
+            return None  # Signal failure
+
+        classes = getattr(learner, "classes_", None)
+        if classes is None:
+            return None
+
+        if not self._validate_probabilities(Prob, classes, expected_rows=len(Y_aug)):
+            return None
+
+        Prob = self._align_probabilities(Prob, classes)
+        label_idx = np.array([label_to_idx.get(label, -1) for label in Y_aug], dtype=int)
+        if np.any(label_idx < 0):
+            return None
+
+        Alpha = Prob[np.arange(len(Y_aug)), label_idx]
+        p_value = self._compute_p_value(Alpha, tau, "conformity")
+        return (y_candidate, p_value)
+
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -691,61 +758,56 @@ class ConformalClassifierWrapper(ConformalClassifier):
             return Gamma
 
         X = np.append(self.X, x.reshape(1, -1), axis=0)
-        # Label loop
-        for y in self.label_space:
-            Y = np.append(self.y, y)
-            try:
-                self.learner.fit(X, Y)
-                Prob = self.learner.predict_proba(X)
-            except Exception as exc:
-                warnings.warn(
-                    f"Wrapped learner failed during fit/predict_proba ({type(exc).__name__}); "
-                    "falling back to full prediction set",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                Gamma, p_values = self._fallback_prediction(epsilon)
-                if return_p_values:
-                    return Gamma, p_values
-                if return_update:
-                    return Gamma, {}
-                return Gamma
 
-            classes = getattr(self.learner, "classes_", None)
-            if classes is None:
-                warnings.warn(
-                    "Wrapped learner must expose classes_ after fit; falling back to full prediction set",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                Gamma, p_values = self._fallback_prediction(epsilon)
-                if return_p_values:
-                    return Gamma, p_values
-                if return_update:
-                    return Gamma, {}
-                return Gamma
+        # Build base fit cache (lazy)
+        self._ensure_base_fit(X)
 
-            if not self._validate_probabilities(Prob, classes, expected_rows=len(Y)):
-                Gamma, p_values = self._fallback_prediction(epsilon)
-                if return_p_values:
-                    return Gamma, p_values
-                if return_update:
-                    return Gamma, {}
-                return Gamma
+        # Parallel execution
+        if self.n_jobs is not None and self.n_jobs != 1:
 
-            Prob = self._align_probabilities(Prob, classes)
-            label_idx = np.array([label_to_idx.get(label, -1) for label in Y], dtype=int)
-            if np.any(label_idx < 0):
-                warnings.warn("Observed labels are not present in label_space", UserWarning, stacklevel=2)
-                Gamma, p_values = self._fallback_prediction(epsilon)
-                if return_p_values:
-                    return Gamma, p_values
-                if return_update:
-                    return Gamma, {}
-                return Gamma
+            def process_label(y_candidate):
+                learner_copy = copy.deepcopy(self._base_learner) if self._base_learner is not None else copy.deepcopy(self.learner)
+                if self._warm_start and hasattr(learner_copy, "warm_start"):
+                    learner_copy.warm_start = True
+                return self._fit_label(learner_copy, X, self.y, label_to_idx, tau, y_candidate)
 
-            Alpha = Prob[np.arange(len(Y)), label_idx]
-            p_values[y] = self._compute_p_value(Alpha, tau, "conformity")
+            results = Parallel(n_jobs=self.n_jobs)(
+                delayed(process_label)(y_candidate) for y_candidate in self.label_space
+            )
+            for result in results:
+                if result is None:
+                    Gamma, p_values = self._fallback_prediction(epsilon)
+                    if return_p_values:
+                        return Gamma, p_values
+                    return Gamma
+                p_values[result[0]] = result[1]
+
+        # Sequential execution (with warm-start chaining)
+        else:
+            use_warm = self._warm_start and hasattr(self.learner, "warm_start")
+            orig_warm_start = getattr(self.learner, "warm_start", None)
+
+            if use_warm and self._base_learner is not None:
+                # Restore from base fit and enable warm_start for chaining
+                self.learner = copy.deepcopy(self._base_learner)
+                self.learner.warm_start = True
+
+            for y_candidate in self.label_space:
+                result = self._fit_label(self.learner, X, self.y, label_to_idx, tau, y_candidate)
+                if result is None:
+                    # Restore learner state on failure
+                    if use_warm and orig_warm_start is not None:
+                        self.learner.warm_start = orig_warm_start
+                    Gamma, p_values = self._fallback_prediction(epsilon)
+                    if return_p_values:
+                        return Gamma, p_values
+                    return Gamma
+                p_values[result[0]] = result[1]
+
+            # Restore original warm_start setting
+            if use_warm and orig_warm_start is not None:
+                self.learner.warm_start = orig_warm_start
+
         Gamma = self._compute_Gamma(p_values, epsilon)
 
         if return_p_values:

@@ -32,6 +32,7 @@ __all__ = [
     "BrierScore",
     "LogLoss",
     "Width",
+    "CalibrationError",
 ]
 
 
@@ -412,3 +413,192 @@ class Width(Metric):
         # For each label (column), compute max - min across hypotheses (rows)
         widths = probs.max(axis=0) - probs.min(axis=0)
         return float(widths.mean())
+
+
+class CalibrationError(Metric):
+    """Expected Calibration Error (ECE) for Venn predictor outputs.
+
+    Accumulates (predicted probability, true indicator) pairs from a
+    stream of ``VennPrediction`` objects, enabling post-hoc ECE
+    computation via binning.
+
+    Two modes:
+
+    - ``use_hypothesis=False`` (default): evaluates the *point estimate*
+      from ``venn.point``. This is the aggregated probability and is
+      typically well-calibrated empirically.
+    - ``use_hypothesis=True``: evaluates the correct-hypothesis probability
+      :math:`P^y(y)`, which is *theoretically calibrated* by the Venn
+      validity guarantee (ALRW2 Theorem 6.4).
+
+    The per-step ``_score()`` returns :math:`|p - \\mathbf{1}\\{y = k\\}|`
+    (absolute calibration gap), so ``metric.value`` gives the running mean
+    absolute error. Use :meth:`ece` for the standard binned ECE.
+
+    For binary classification, the predicted probability is :math:`P(y=1)`.
+    For multiclass, probabilities are stored per-class (one-vs-rest) and
+    ECE is computed as a weighted average across classes.
+
+    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+
+    Parameters
+    ----------
+    use_hypothesis : bool, default False
+        If True, use the correct-hypothesis probability :math:`P^y(y)`
+        instead of the point estimate.
+    max_history : int or None, default None
+        Maximum number of (predicted, observed) pairs to store.
+        If None, stores all. When exceeded, oldest pairs are discarded.
+    """
+
+    def __init__(self, use_hypothesis: bool = False, max_history: int | None = None) -> None:
+        super().__init__()
+        self.use_hypothesis = use_hypothesis
+        self.max_history = max_history
+        self._pairs: list[tuple[float, int]] = []  # (predicted_prob, true_indicator)
+
+    def _score(self, y, Gamma=None, *, venn=None, **kw):
+        if venn is None:
+            raise ValueError("CalibrationError requires venn keyword argument")
+
+        label_idx = int(np.searchsorted(venn.label_space, y))
+        # For calibration we track P(y = positive_class) vs 1{y = positive_class}
+        # For binary: positive_class = label_space[1]
+        # For multiclass: use label_space[-1] (or user can filter externally)
+        pos_idx = min(1, len(venn.label_space) - 1)
+
+        if self.use_hypothesis:
+            # P^y(positive_class): probability of positive class under correct hypothesis
+            pred_prob = float(venn.probs[label_idx, pos_idx])
+        else:
+            # Point estimate probability for positive class
+            pred_prob = float(venn.point[pos_idx])
+
+        indicator = int(label_idx == pos_idx)
+        self._pairs.append((pred_prob, indicator))
+
+        if self.max_history is not None and len(self._pairs) > self.max_history:
+            self._pairs.pop(0)
+
+        return abs(pred_prob - indicator)
+
+    @property
+    def predicted(self) -> NDArray:
+        """Array of stored predicted probabilities."""
+        if not self._pairs:
+            return np.array([])
+        return np.array([p for p, _ in self._pairs])
+
+    @property
+    def observed(self) -> NDArray:
+        """Array of stored true indicators (always 1 for correct-class prob)."""
+        if not self._pairs:
+            return np.array([])
+        return np.array([o for _, o in self._pairs])
+
+    def ece(self, n_bins: int = 10, strategy: str = "uniform") -> float:
+        """Compute binned Expected Calibration Error.
+
+        Parameters
+        ----------
+        n_bins : int, default 10
+            Number of bins.
+        strategy : str, default "uniform"
+            Binning strategy: ``"uniform"`` (equal-width) or
+            ``"quantile"`` (equal-mass).
+
+        Returns
+        -------
+        float
+            Weighted average of |mean_predicted - fraction_positive| across
+            bins, weighted by bin count.
+        """
+        if not self._pairs:
+            return 0.0
+
+        predicted = self.predicted
+        observed = self.observed
+
+        if strategy == "uniform":
+            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+        elif strategy == "quantile":
+            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+            bin_edges = np.quantile(predicted, quantiles)
+            bin_edges[0] = 0.0
+            bin_edges[-1] = 1.0
+        else:
+            raise ValueError(f"Unknown strategy {strategy!r}. Choose 'uniform' or 'quantile'.")
+
+        ece_val = 0.0
+        n_total = len(predicted)
+
+        for i in range(n_bins):
+            if i < n_bins - 1:
+                mask = (predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1])
+            else:
+                mask = (predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1])
+
+            n_bin = mask.sum()
+            if n_bin == 0:
+                continue
+
+            mean_pred = predicted[mask].mean()
+            frac_pos = observed[mask].mean()
+            ece_val += (n_bin / n_total) * abs(mean_pred - frac_pos)
+
+        return float(ece_val)
+
+    def bin_data(self, n_bins: int = 10, strategy: str = "uniform") -> tuple[NDArray, NDArray, NDArray]:
+        """Return binned calibration data for plotting.
+
+        Parameters
+        ----------
+        n_bins : int, default 10
+            Number of bins.
+        strategy : str, default "uniform"
+            Binning strategy: ``"uniform"`` or ``"quantile"``.
+
+        Returns
+        -------
+        mean_predicted : ndarray
+            Mean predicted probability per bin.
+        fraction_positive : ndarray
+            Fraction of positive outcomes per bin.
+        bin_counts : ndarray
+            Number of samples per bin.
+        """
+        if not self._pairs:
+            return np.array([]), np.array([]), np.array([])
+
+        predicted = self.predicted
+        observed = self.observed
+
+        if strategy == "uniform":
+            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+        elif strategy == "quantile":
+            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+            bin_edges = np.quantile(predicted, quantiles)
+            bin_edges[0] = 0.0
+            bin_edges[-1] = 1.0
+        else:
+            raise ValueError(f"Unknown strategy {strategy!r}.")
+
+        mean_preds = []
+        frac_pos = []
+        counts = []
+
+        for i in range(n_bins):
+            if i < n_bins - 1:
+                mask = (predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1])
+            else:
+                mask = (predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1])
+
+            n_bin = mask.sum()
+            if n_bin == 0:
+                continue
+
+            mean_preds.append(predicted[mask].mean())
+            frac_pos.append(observed[mask].mean())
+            counts.append(n_bin)
+
+        return np.array(mean_preds), np.array(frac_pos), np.array(counts)

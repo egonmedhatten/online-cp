@@ -25,6 +25,11 @@ __all__ = [
     "plot_martingale",
     "plot_intervals",
     "plot_set_sizes",
+    "plot_reliability_diagram",
+    "plot_reliability_diagram_venn",
+    "plot_sharpness",
+    "plot_pit_histogram",
+    "plot_calibration_conditional",
 ]
 
 
@@ -409,5 +414,367 @@ def plot_set_sizes(metric: Metric, *, ax: Axes | None = None, **kwargs: Any) -> 
     ax.set_ylabel(metric.name)
     ax.set_title(f"Running {metric.name}")
     ax.legend()
+    ax.grid(True, alpha=0.3)
+    return ax
+
+
+# ---------------------------------------------------------------------------
+# Calibration diagnostics
+# ---------------------------------------------------------------------------
+
+
+def plot_reliability_diagram(
+    predicted: NDArray | Any,
+    observed: NDArray | None = None,
+    *,
+    n_bins: int = 10,
+    strategy: str = "uniform",
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
+    """Plot a reliability diagram (calibration curve).
+
+    Bins predicted probabilities and plots mean predicted vs observed
+    frequency, with a diagonal reference line for perfect calibration.
+
+    Parameters
+    ----------
+    predicted : ndarray or CalibrationError
+        Array of predicted probabilities in [0, 1], or a
+        ``CalibrationError`` metric object (from which stored pairs are
+        extracted).
+    observed : ndarray or None
+        Binary array of outcomes (1 = positive, 0 = negative).
+        Required if ``predicted`` is an ndarray, ignored if a metric.
+    n_bins : int, default 10
+        Number of bins.
+    strategy : str, default "uniform"
+        ``"uniform"`` (equal-width) or ``"quantile"`` (equal-mass).
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on.
+    **kwargs
+        Passed to the main ``ax.plot()`` call.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+    """
+    from online_cp.metrics import CalibrationError
+
+    ax = _get_ax(ax)
+
+    if isinstance(predicted, CalibrationError):
+        mean_pred, frac_pos, counts = predicted.bin_data(n_bins, strategy)
+    else:
+        predicted = np.asarray(predicted)
+        if observed is None:
+            raise ValueError("observed is required when predicted is an array")
+        observed = np.asarray(observed)
+        # Bin manually
+        if strategy == "uniform":
+            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+        elif strategy == "quantile":
+            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+            bin_edges = np.quantile(predicted, quantiles)
+            bin_edges[0] = 0.0
+            bin_edges[-1] = 1.0
+        else:
+            raise ValueError(f"Unknown strategy {strategy!r}.")
+
+        mean_pred_list, frac_pos_list, counts_list = [], [], []
+        for i in range(n_bins):
+            if i < n_bins - 1:
+                mask = (predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1])
+            else:
+                mask = (predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1])
+            n_bin = mask.sum()
+            if n_bin == 0:
+                continue
+            mean_pred_list.append(predicted[mask].mean())
+            frac_pos_list.append(observed[mask].mean())
+            counts_list.append(n_bin)
+        mean_pred = np.array(mean_pred_list)
+        frac_pos = np.array(frac_pos_list)
+        counts = np.array(counts_list)
+
+    # Diagonal reference
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Perfect calibration")
+
+    # Calibration curve
+    kwargs.setdefault("marker", "o")
+    kwargs.setdefault("label", "Model")
+    ax.plot(mean_pred, frac_pos, **kwargs)
+
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Fraction of positives")
+    ax.set_title("Reliability Diagram")
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.legend(loc="lower right")
+    ax.grid(True, alpha=0.3)
+    return ax
+
+
+def plot_reliability_diagram_venn(
+    predictions: Sequence[Any],
+    labels: NDArray | Sequence,
+    *,
+    n_bins: int = 10,
+    which: str = "both",
+    target_label: int | None = None,
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
+    """Reliability diagram for Venn multiprobability predictions.
+
+    Demonstrates the Venn calibration guarantee by plotting:
+
+    - **point**: reliability of the aggregated point estimate
+    - **hypothesis**: reliability of the correct-hypothesis probability
+      :math:`P^y(y)` (theoretically calibrated)
+    - **both**: overlays both curves
+
+    Parameters
+    ----------
+    predictions : sequence of VennPrediction
+        Multiprobability predictions.
+    labels : array-like
+        True labels corresponding to each prediction.
+    n_bins : int, default 10
+        Number of bins.
+    which : str, default "both"
+        ``"point"``, ``"hypothesis"``, or ``"both"``.
+    target_label : int or None
+        For binary predictions, which label to plot P(y=target_label).
+        Defaults to label_space[1] (the positive class).
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on.
+    **kwargs
+        Passed to ``ax.plot()`` calls.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+    """
+    ax = _get_ax(ax)
+    labels = np.asarray(labels)
+
+    point_probs = []
+    hyp_probs = []
+    indicators = []
+
+    for pred, y in zip(predictions, labels):
+        label_idx = int(np.searchsorted(pred.label_space, y))
+        if target_label is not None:
+            target_idx = int(np.searchsorted(pred.label_space, target_label))
+        else:
+            target_idx = min(1, len(pred.label_space) - 1)
+
+        point_probs.append(pred.point[target_idx])
+        hyp_probs.append(float(pred.probs[label_idx, target_idx]))
+        indicators.append(1 if label_idx == target_idx else 0)
+
+    point_probs = np.array(point_probs)
+    hyp_probs = np.array(hyp_probs)
+    indicators = np.array(indicators)
+
+    # Diagonal
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Perfect calibration")
+
+    def _bin_and_plot(predicted, label, **pkw):
+        bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+        mp, fp = [], []
+        for i in range(n_bins):
+            if i < n_bins - 1:
+                mask = (predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1])
+            else:
+                mask = (predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1])
+            n_bin = mask.sum()
+            if n_bin == 0:
+                continue
+            mp.append(predicted[mask].mean())
+            fp.append(indicators[mask].mean())
+        if mp:
+            ax.plot(mp, fp, marker="o", label=label, **pkw)
+
+    if which in ("point", "both"):
+        _bin_and_plot(point_probs, "Point estimate", **kwargs)
+    if which in ("hypothesis", "both"):
+        kw2 = dict(kwargs)
+        kw2.setdefault("linestyle", "--")
+        _bin_and_plot(hyp_probs, r"Correct-hypothesis $P^y(y)$", **kw2)
+
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Fraction of positives")
+    ax.set_title("Venn Reliability Diagram")
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.legend(loc="lower right")
+    ax.grid(True, alpha=0.3)
+    return ax
+
+
+def plot_sharpness(
+    predictions: Sequence[Any],
+    *,
+    n_bins: int = 20,
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
+    """Histogram of Venn multiprobability widths (sharpness).
+
+    For binary predictions, plots the distribution of :math:`|p_1 - p_0|`.
+    For multiclass, plots the mean per-label width (max − min across
+    hypotheses).
+
+    Parameters
+    ----------
+    predictions : sequence of VennPrediction
+        Multiprobability predictions.
+    n_bins : int, default 20
+        Number of histogram bins.
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on.
+    **kwargs
+        Passed to ``ax.hist()``.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+    """
+    ax = _get_ax(ax)
+
+    widths = []
+    for pred in predictions:
+        probs = pred.probs
+        per_label_widths = probs.max(axis=0) - probs.min(axis=0)
+        widths.append(per_label_widths.mean())
+
+    widths = np.array(widths)
+
+    kwargs.setdefault("edgecolor", "black")
+    kwargs.setdefault("alpha", 0.7)
+    ax.hist(widths, bins=n_bins, **kwargs)
+
+    ax.axvline(widths.mean(), color="red", linestyle="--", alpha=0.7,
+               label=f"Mean = {widths.mean():.3f}")
+
+    ax.set_xlabel("Multiprobability width")
+    ax.set_ylabel("Count")
+    ax.set_title("Sharpness (Multiprobability Width Distribution)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return ax
+
+
+def plot_pit_histogram(
+    pit_values: NDArray | Sequence[float],
+    *,
+    n_bins: int = 10,
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
+    """PIT histogram for conformal predictive distributions.
+
+    Plots a histogram of Probability Integral Transform values
+    :math:`F(y_{\\text{true}})` and compares to the Uniform[0,1]
+    reference. Under exchangeability, PIT values should be uniform.
+
+    Parameters
+    ----------
+    pit_values : array-like
+        PIT values, typically computed as ``cpd(y_true, tau)`` for each
+        test point.
+    n_bins : int, default 10
+        Number of histogram bins.
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on.
+    **kwargs
+        Passed to ``ax.bar()``.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+    """
+    ax = _get_ax(ax)
+    pit_values = np.asarray(pit_values)
+
+    counts, bin_edges = np.histogram(pit_values, bins=n_bins, range=(0, 1))
+    n_total = len(pit_values)
+    freq = counts / n_total
+
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_width = 1.0 / n_bins
+
+    kwargs.setdefault("alpha", 0.7)
+    kwargs.setdefault("edgecolor", "black")
+    ax.bar(bin_centers, freq, width=bin_width * 0.9, **kwargs)
+
+    # Uniform reference
+    uniform_level = 1.0 / n_bins
+    ax.axhline(uniform_level, color="red", linestyle="--", alpha=0.7,
+               label=f"Uniform (1/{n_bins})")
+
+    # 95% confidence band (Binomial)
+    se = np.sqrt(uniform_level * (1 - uniform_level) / n_total)
+    ax.axhspan(uniform_level - 1.96 * se, uniform_level + 1.96 * se,
+               alpha=0.1, color="red", label="95% band")
+
+    ax.set_xlabel("PIT value")
+    ax.set_ylabel("Relative frequency")
+    ax.set_title("PIT Histogram (CPS Calibration)")
+    ax.set_xlim(0, 1)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return ax
+
+
+def plot_calibration_conditional(
+    metric_dict: dict[str, Any],
+    *,
+    n_bins: int = 10,
+    strategy: str = "uniform",
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
+    """Overlay reliability diagrams for multiple groups (Mondrian lens).
+
+    Parameters
+    ----------
+    metric_dict : dict[str, CalibrationError]
+        Mapping from group name to ``CalibrationError`` metric.
+    n_bins : int, default 10
+        Number of bins per group.
+    strategy : str, default "uniform"
+        Binning strategy: ``"uniform"`` or ``"quantile"``.
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on.
+    **kwargs
+        Passed to each ``ax.plot()`` call.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+    """
+    ax = _get_ax(ax)
+
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Perfect calibration")
+
+    for i, (name, metric) in enumerate(metric_dict.items()):
+        mean_pred, frac_pos, counts = metric.bin_data(n_bins, strategy)
+        if len(mean_pred) == 0:
+            continue
+        kw = dict(kwargs)
+        kw.setdefault("marker", "o")
+        kw.setdefault("label", name)
+        kw.setdefault("color", f"C{i}")
+        ax.plot(mean_pred, frac_pos, **kw)
+
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Fraction of positives")
+    ax.set_title("Conditional Calibration (Mondrian)")
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3)
     return ax

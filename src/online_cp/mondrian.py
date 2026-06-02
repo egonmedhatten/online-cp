@@ -408,7 +408,7 @@ class MondrianConformalRegressor:
         else:
             Alpha = A_cat + y * B_cat
             c_type = "nonconformity"
-        return ConformalRegressor._calculate_p(Alpha, tau if smoothed else None, c_type=c_type)
+        return ConformalRegressor._compute_p_value(Alpha, tau if smoothed else None, c_type=c_type)
 
     def _p_value_kernel_ridge(self, x, y, cat, bounds="both", smoothed=True, tau=None):
         model = self.base_model
@@ -434,7 +434,7 @@ class MondrianConformalRegressor:
         else:
             Alpha = A_cat + y * B_cat
             c_type = "nonconformity"
-        return ConformalRegressor._calculate_p(Alpha, tau if smoothed else None, c_type=c_type)
+        return ConformalRegressor._compute_p_value(Alpha, tau if smoothed else None, c_type=c_type)
 
     def _p_value_lasso(self, x, y, cat, smoothed=True, tau=None):
         model = self.base_model

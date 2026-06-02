@@ -135,6 +135,7 @@ def progressive_val(
 
     needs_p = _needs_p_values(metric)
     needs_cpd = _needs_cpd(metric)
+    rng = np.random.default_rng()
 
     predict_kw = {}
     if epsilon is not None:
@@ -149,7 +150,8 @@ def progressive_val(
             kw["p_values"] = p_values
         elif needs_cpd:
             cpd = model.predict_cpd(x_i)
-            Gamma = cpd.predict_set(epsilon=epsilon) if epsilon else None
+            tau = rng.uniform(0, 1)
+            Gamma = cpd.predict_set(tau, epsilon=epsilon) if epsilon else None
             kw["cpd"] = cpd
         else:
             Gamma = model.predict(x_i, **predict_kw)
@@ -216,6 +218,7 @@ def iter_progressive_val(
 
     needs_p = _needs_p_values(metric)
     needs_cpd = _needs_cpd(metric)
+    rng = np.random.default_rng()
 
     predict_kw = {}
     if epsilon is not None:
@@ -229,7 +232,8 @@ def iter_progressive_val(
             kw["p_values"] = p_values
         elif needs_cpd:
             cpd = model.predict_cpd(x_i)
-            Gamma = cpd.predict_set(epsilon=epsilon) if epsilon else None
+            tau = rng.uniform(0, 1)
+            Gamma = cpd.predict_set(tau, epsilon=epsilon) if epsilon else None
             kw["cpd"] = cpd
         else:
             Gamma = model.predict(x_i, **predict_kw)

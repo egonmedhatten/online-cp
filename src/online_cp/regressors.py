@@ -147,7 +147,7 @@ class ConformalRegressor:
         return size
 
     @staticmethod
-    def _calculate_p(Alpha, tau=None, c_type="nonconformity"):
+    def _compute_p_value(Alpha, tau=None, c_type="nonconformity"):
         """
         Method to compute the smoothed p-value, given an array of nonconformity scores where the last element corresponds
         to the test object, and a random number tau. If tau is None, the non-smoothed p-value is returned.
@@ -636,9 +636,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 raise Exception('bounds must be one of "both", "lower", "upper"')
 
             if smoothed:
-                p = self._calculate_p(Alpha, tau, c_type=c_type)
+                p = self._compute_p_value(Alpha, tau, c_type=c_type)
             else:
-                p = self._calculate_p(Alpha, c_type=c_type)
+                p = self._compute_p_value(Alpha, c_type=c_type)
         else:
             if smoothed:
                 p = tau
@@ -1070,6 +1070,55 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         else:
             raise ValueError(f"bounds must be 'both', 'lower', or 'upper', got '{bounds}'")
 
+    def compute_p_value(self, x: NDArray[np.floating[Any]], y: float, tau: float | None = None, smoothed: bool = True) -> float:
+        """Compute conformal p-value for a test pair (x, y).
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Test object.
+        y : float
+            Hypothesized label.
+        tau : float, optional
+            Randomization value in [0, 1] for smoothed p-value.
+            If None and smoothed=True, drawn uniformly at random.
+        smoothed : bool
+            Whether to compute the smoothed p-value (default True).
+
+        Returns
+        -------
+        float
+            The conformal p-value.
+        """
+        x = np.asarray(x).ravel()
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            return 1.0
+
+        if smoothed and tau is None:
+            tau = self.rnd_gen.uniform(0, 1)
+
+        # Training residuals (leave-one-out k-NN)
+        y_hat_train = self._knn_predictions(self.D, self.y)
+        alpha_train = np.abs(self.y - y_hat_train)
+
+        # Test point k-NN prediction
+        d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
+        k_test = min(self.k, n)
+        agg_func = np.mean if self.aggregation == "mean" else np.median
+        test_knn_idx = np.argpartition(d, k_test - 1)[:k_test]
+        y_hat_test = agg_func(self.y[test_knn_idx])
+
+        # Test nonconformity score
+        alpha_test = np.abs(y - y_hat_test)
+
+        # Compute p-value: fraction of training alphas >= test alpha
+        Alpha = np.append(alpha_train, alpha_test)
+        if smoothed:
+            return self._compute_p_value(Alpha, tau, c_type="nonconformity")
+        else:
+            return self._compute_p_value(Alpha, c_type="nonconformity")
+
 
 class KernelConformalRidgeRegressor(ConformalRegressor):
     # TODO Add doctests to methods where applicable
@@ -1381,9 +1430,9 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 raise Exception('bounds must be one of "both", "lower", "upper"')
 
             if smoothed:
-                p = self._calculate_p(Alpha, tau, c_type=c_type)
+                p = self._compute_p_value(Alpha, tau, c_type=c_type)
             else:
-                p = self._calculate_p(Alpha, c_type=c_type)
+                p = self._compute_p_value(Alpha, c_type=c_type)
         else:
             if smoothed:
                 p = tau

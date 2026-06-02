@@ -139,7 +139,7 @@ class TestConformalNearestNeighboursClassifier:
         _, D = cp_with_update.predict(x_new, return_update=True)
         assert D.shape == (X_train.shape[0] + 1, X_train.shape[0] + 1)
 
-        cp_with_update.learn_one(x_new, y_new, D=D)
+        cp_with_update.learn_one(x_new, y_new, precomputed=D)
         cp_reference.learn_one(x_new, y_new)
 
         assert np.allclose(cp_with_update.X, cp_reference.X)
@@ -163,7 +163,7 @@ class TestConformalNearestNeighboursClassifier:
         assert 0 <= p_value <= 1
         assert D.shape == (X_train.shape[0] + 1, X_train.shape[0] + 1)
 
-        cp_with_update.learn_one(x_new, y_new, D=D)
+        cp_with_update.learn_one(x_new, y_new, precomputed=D)
         cp_reference.learn_one(x_new, y_new)
 
         assert np.allclose(cp_with_update.X, cp_reference.X)

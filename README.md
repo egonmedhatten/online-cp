@@ -110,14 +110,14 @@ from online_cp import NearestNeighboursVennPredictor, log_loss_point
 # Binary
 vp = NearestNeighboursVennPredictor(k=3)
 vp.learn_initial_training_set(X_train, y_train)
-pred = vp.predict_one(x_new)
+pred = vp.predict(x_new)
 print(pred.p0, pred.p1)            # multiprobability pair
 log_loss_point(pred.p0, pred.p1)   # merge for decisions
 
 # Multiclass (label_space inferred from data, or pass explicitly)
 vp = NearestNeighboursVennPredictor(k=5, label_space=[0, 1, 2])
 vp.learn_initial_training_set(X_train, y_train)
-pred = vp.predict_one(x_new)
+pred = vp.predict(x_new)
 print(pred.point)                  # calibrated class probabilities
 
 vp.learn_one(x_new, y_new)

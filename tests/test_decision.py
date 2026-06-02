@@ -6,12 +6,10 @@ import pytest
 from online_cp.CPS import RidgePredictionMachine
 from online_cp.decision import (
     UtilityFunction,
+    alpha_regret,
+    alpha_utility,
     cps_decision,
     cps_expected_utilities,
-    hurwicz,
-    maximize,
-    maximin,
-    minimax_regret,
     venn_decision,
     venn_expected_utilities,
 )
@@ -155,67 +153,63 @@ class TestVennExpectedUtilities:
 
 
 class TestDecisionCriteria:
-    def test_maximize_selects_max(self):
+    def test_alpha_utility_point_case(self):
+        """For scalar expectations, alpha doesn't matter."""
         exps = {0: 1.0, 1: 3.0, 2: 2.0}
-        assert maximize(exps) == 1
+        assert alpha_utility(exps, alpha=0.0) == 1
+        assert alpha_utility(exps, alpha=0.5) == 1
+        assert alpha_utility(exps, alpha=1.0) == 1
 
-    def test_maximin_selects_best_worst_case(self):
+    def test_alpha_utility_pessimistic(self):
+        """α=0 (maximin): select best worst-case."""
         exps = {
             "A": np.array([1.0, 5.0]),  # min = 1
             "B": np.array([2.0, 3.0]),  # min = 2
             "C": np.array([0.0, 10.0]),  # min = 0
         }
-        assert maximin(exps) == "B"
+        assert alpha_utility(exps, alpha=0.0) == "B"
 
-    def test_hurwicz_interpolates(self):
+    def test_alpha_utility_optimistic(self):
+        """α=1 (maximax): select best best-case."""
+        exps = {
+            "A": np.array([1.0, 5.0]),  # max = 5
+            "B": np.array([3.0, 3.0]),  # max = 3
+        }
+        assert alpha_utility(exps, alpha=1.0) == "A"
+
+    def test_alpha_utility_interpolates(self):
         exps = {
             "A": np.array([1.0, 5.0]),  # α=1 → 5, α=0 → 1
             "B": np.array([3.0, 3.0]),  # always 3
         }
         # Fully optimistic: A wins (5 > 3)
-        assert hurwicz(exps, alpha=1.0) == "A"
+        assert alpha_utility(exps, alpha=1.0) == "A"
         # Fully pessimistic: B wins (3 > 1)
-        assert hurwicz(exps, alpha=0.0) == "B"
+        assert alpha_utility(exps, alpha=0.0) == "B"
 
-    def test_hurwicz_with_tuples(self):
+    def test_alpha_utility_with_tuples(self):
         exps = {"A": (1.0, 5.0), "B": (3.0, 3.0)}
-        assert hurwicz(exps, alpha=1.0) == "A"
-        assert hurwicz(exps, alpha=0.0) == "B"
+        assert alpha_utility(exps, alpha=1.0) == "A"
+        assert alpha_utility(exps, alpha=0.0) == "B"
 
-    def test_minimax_regret(self):
-        exps = {
-            "A": np.array([4.0, 0.0]),
-            "B": np.array([3.0, 3.0]),
-        }
-        # Scenario 0: best is A(4). Regret: A=0, B=1
-        # Scenario 1: best is B(3). Regret: A=3, B=0
-        # Max regret: A=3, B=1 → B wins
-        assert minimax_regret(exps) == "B"
-
-    def test_minimax_regret_with_tuples(self):
-        exps = {"A": (0.0, 4.0), "B": (3.0, 3.0)}
-        assert minimax_regret(exps) == "B"
-
-    def test_alpha_regret_zero_equals_minimax(self):
-        """α=0 should reproduce minimax regret."""
-        exps = {
-            "A": np.array([4.0, 0.0]),
-            "B": np.array([3.0, 3.0]),
-        }
-        assert minimax_regret(exps, alpha=0.0) == minimax_regret(exps)
-
-    def test_alpha_regret_one_is_minimin(self):
-        """α=1 should give minimin regret (optimistic)."""
+    def test_alpha_regret_pessimistic(self):
+        """α=0 (minimax regret)."""
         exps = {
             "A": np.array([4.0, 0.0]),
             "B": np.array([3.0, 3.0]),
         }
         # Scenario 0: best=A(4). Regret: A=0, B=1
         # Scenario 1: best=B(3). Regret: A=3, B=0
-        # Min regret: A=0, B=0 → tie (both have min regret 0)
-        # With α=1: score = min regret. Both 0, so argmin picks first = A
-        # Actually let's use a clearer example:
-        exps2 = {
+        # Max regret: A=3, B=1 → B wins
+        assert alpha_regret(exps, alpha=0.0) == "B"
+
+    def test_alpha_regret_with_tuples(self):
+        exps = {"A": (0.0, 4.0), "B": (3.0, 3.0)}
+        assert alpha_regret(exps, alpha=0.0) == "B"
+
+    def test_alpha_regret_optimistic(self):
+        """α=1 (minimin regret)."""
+        exps = {
             "A": np.array([5.0, 0.0]),
             "B": np.array([3.0, 3.0]),
             "C": np.array([4.0, 2.0]),
@@ -225,8 +219,8 @@ class TestDecisionCriteria:
         # Min regret: A=0, B=0, C=1
         # α=1 (minimin): score = min regret → A or B (both 0)
         # α=0 (minimax): max regret: A=3, B=2, C=1 → C wins
-        assert minimax_regret(exps2, alpha=0.0) == "C"
-        assert minimax_regret(exps2, alpha=1.0) in ("A", "B")
+        assert alpha_regret(exps, alpha=0.0) == "C"
+        assert alpha_regret(exps, alpha=1.0) in ("A", "B")
 
     def test_alpha_regret_interpolates(self):
         """Intermediate α should interpolate between extremes."""
@@ -242,7 +236,7 @@ class TestDecisionCriteria:
         #   B: 0.5*0 + 0.5*2 = 1.0
         #   C: 0.5*1 + 0.5*1 = 1.0
         # B or C win (both score 1.0)
-        result = minimax_regret(exps, alpha=0.5)
+        result = alpha_regret(exps, alpha=0.5)
         assert result in ("B", "C")
 
 
@@ -258,14 +252,13 @@ class TestCPSDecision:
 
 
 class TestVennDecision:
-    def test_maximin_multiclass(self, multiclass_venn_pred, zero_one_utility):
-        d = venn_decision(multiclass_venn_pred, zero_one_utility, x=None, criterion="maximin")
+    def test_utility_pessimistic(self, multiclass_venn_pred, zero_one_utility):
+        d = venn_decision(multiclass_venn_pred, zero_one_utility, x=None, criterion="utility", alpha=0.0)
         assert d in zero_one_utility.decisions
 
-    def test_maximize_multiclass(self, multiclass_venn_pred, zero_one_utility):
-        """With diagonal-dominant probs, maximize (mean) should pick
-        the label with highest average probability."""
-        d = venn_decision(multiclass_venn_pred, zero_one_utility, x=None, criterion="maximize")
+    def test_utility_midpoint(self, multiclass_venn_pred, zero_one_utility):
+        """α=0.5 (midpoint) should pick a valid decision."""
+        d = venn_decision(multiclass_venn_pred, zero_one_utility, x=None, criterion="utility", alpha=0.5)
         assert d in zero_one_utility.decisions
 
     def test_invalid_criterion_raises(self, multiclass_venn_pred, zero_one_utility):

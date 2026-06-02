@@ -212,16 +212,10 @@ from online_cp.decision import (
     venn_decision as venn_decision,
 )
 from online_cp.decision import (
-    maximize as maximize,
+    alpha_utility as alpha_utility,
 )
 from online_cp.decision import (
-    maximin as maximin,
-)
-from online_cp.decision import (
-    hurwicz as hurwicz,
-)
-from online_cp.decision import (
-    minimax_regret as minimax_regret,
+    alpha_regret as alpha_regret,
 )
 from online_cp.decision import (
     ConformalPredictiveDecisionMaker as ConformalPredictiveDecisionMaker,

@@ -151,55 +151,33 @@ def venn_expected_utilities(
 
 
 # ---------------------------------------------------------------------------
-# Layer 3: Decision Criteria
+# Layer 3: Decision Criteria (α-utility and α-regret families)
 # ---------------------------------------------------------------------------
 
 
-def maximize(expectations: dict[Any, float | NDArray]) -> Any:
-    """Select the decision with maximum expected utility (point case).
+def alpha_utility(expectations: dict[Any, float | NDArray | tuple], alpha: float = 0.0) -> Any:
+    """α-utility criterion: Hurwicz-weighted expected utility.
+
+    For each decision *d*, the score is:
+
+    ``score(d) = α · upper(E[U|d]) + (1 − α) · lower(E[U|d])``
+
+    Special cases:
+
+    - α = 0: maximin (pessimistic — maximise worst-case utility)
+    - α = 1: maximax (optimistic — maximise best-case utility)
+    - α = 0.5: midpoint (average of best/worst case)
+
+    When expectations are scalars (point case), all α values give the
+    same result (maximize).
 
     Parameters
     ----------
     expectations : dict
-        Mapping from decision to expected utility (scalar).
-
-    Returns
-    -------
-    any
-        The optimal decision.
-    """
-    return max(expectations, key=lambda d: float(np.asarray(expectations[d]).mean()))
-
-
-def maximin(expectations: dict[Any, NDArray | tuple]) -> Any:
-    """Maximin criterion: maximise the worst-case expected utility.
-
-    Parameters
-    ----------
-    expectations : dict
-        Mapping from decision to either an ndarray of expected utilities
-        (one per hypothesis/scenario) or a tuple (lower, upper).
-
-    Returns
-    -------
-    any
-        The decision maximising the minimum expected utility.
-    """
-    return max(expectations, key=lambda d: _lower(expectations[d]))
-
-
-def hurwicz(expectations: dict[Any, NDArray | tuple], alpha: float = 0.5) -> Any:
-    """Hurwicz α-criterion: blend optimism and pessimism.
-
-    Score for decision *d*:
-    ``α * max(E[U|d]) + (1 - α) * min(E[U|d])``
-
-    Parameters
-    ----------
-    expectations : dict
-        Mapping from decision to imprecise expectations (ndarray or tuple).
-    alpha : float, default 0.5
-        Degree of optimism (1 = fully optimistic, 0 = fully pessimistic).
+        Mapping from decision to expected utility. Values can be:
+        scalars (point), ndarrays (one per hypothesis), or tuples (lo, hi).
+    alpha : float, default 0.0
+        Optimism index (0 = pessimistic, 1 = optimistic).
 
     Returns
     -------
@@ -214,13 +192,13 @@ def hurwicz(expectations: dict[Any, NDArray | tuple], alpha: float = 0.5) -> Any
     return max(expectations, key=score)
 
 
-def minimax_regret(expectations: dict[Any, NDArray | tuple], alpha: float = 0.0) -> Any:
-    """α-regret criterion (Hurwicz blend on regret).
+def alpha_regret(expectations: dict[Any, NDArray | tuple], alpha: float = 0.0) -> Any:
+    """α-regret criterion: Hurwicz-weighted regret minimisation.
 
     For each scenario/hypothesis *v*, the regret of decision *d* is
     ``max_{d'} E_v[U(d')] - E_v[U(d)]``. The score for each decision is:
 
-    ``score(d) = α * min_v R_v(d) + (1 - α) * max_v R_v(d)``
+    ``score(d) = α · min_v R_v(d) + (1 − α) · max_v R_v(d)``
 
     We select the decision minimising this score.
 
@@ -228,14 +206,13 @@ def minimax_regret(expectations: dict[Any, NDArray | tuple], alpha: float = 0.0)
 
     - α = 0: minimax regret (pessimistic — minimise worst-case regret)
     - α = 1: minimin regret (optimistic — minimise best-case regret)
-    - α ∈ (0, 1): Hurwicz interpolation on regret
 
     Parameters
     ----------
     expectations : dict
         Mapping from decision to imprecise expectations (ndarray or tuple).
     alpha : float, default 0.0
-        Degree of optimism (0 = pessimistic/minimax, 1 = optimistic/minimin).
+        Optimism index (0 = pessimistic, 1 = optimistic).
 
     Returns
     -------
@@ -243,24 +220,14 @@ def minimax_regret(expectations: dict[Any, NDArray | tuple], alpha: float = 0.0)
         The decision minimising the α-regret score.
     """
     decisions = list(expectations.keys())
-    # Build matrix: rows = scenarios, cols = decisions
-    # Each entry is E_v[U(d)]
-    cols = []
-    for d in decisions:
-        cols.append(_as_array(expectations[d]))
-    # All arrays must have the same length (number of scenarios)
+    cols = [_as_array(expectations[d]) for d in decisions]
     matrix = np.column_stack(cols)  # shape (n_scenarios, n_decisions)
 
-    # Best achievable utility per scenario
-    best_per_scenario = matrix.max(axis=1)  # shape (n_scenarios,)
+    best_per_scenario = matrix.max(axis=1)
+    regret = best_per_scenario[:, None] - matrix
 
-    # Regret: best - actual, for each (scenario, decision)
-    regret = best_per_scenario[:, None] - matrix  # shape (n_scenarios, n_decisions)
-
-    # α-regret score per decision: blend of min and max regret
     score = alpha * regret.min(axis=0) + (1 - alpha) * regret.max(axis=0)
 
-    # Select decision with minimum score
     best_idx = int(np.argmin(score))
     return decisions[best_idx]
 
@@ -303,20 +270,25 @@ def cps_decision(
         The optimal decision.
     """
     exps = cps_expected_utilities(cpd, utility, x, tau)
-    return maximize(exps)
+    return alpha_utility(exps, alpha=0.5)
 
 
 def venn_decision(
     venn_pred,
     utility: UtilityFunction,
     x: Any,
-    criterion: str = "maximin",
-    alpha: float = 0.5,
+    criterion: str = "utility",
+    alpha: float = 0.0,
 ) -> Any:
-    """Select optimal decision under Venn multiprobability.
+    """Select optimal decision under Venn multiprobability (Venn-PDMS).
 
-    Computes expected utilities under each hypothesis, then applies the
-    specified decision criterion.
+    Computes expected utilities under each Venn hypothesis, then applies
+    one of two decision criterion families:
+
+    - ``"utility"`` (α-utility): score(d) = α·upper + (1−α)·lower.
+      α=0 is maximin, α=1 is maximax, α=0.5 is midpoint.
+    - ``"regret"`` (α-regret): minimise the α-weighted regret.
+      α=0 is minimax regret, α=1 is minimin regret.
 
     Parameters
     ----------
@@ -326,10 +298,10 @@ def venn_decision(
         Utility function with decision space.
     x : any
         Features of the test object.
-    criterion : str, default "maximin"
-        One of "maximize", "maximin", "hurwicz", "minimax_regret".
-    alpha : float, default 0.5
-        Optimism parameter (only used with "hurwicz" criterion).
+    criterion : str, default "utility"
+        One of ``"utility"`` or ``"regret"``.
+    alpha : float, default 0.0
+        Optimism index in [0, 1]. α=0 is pessimistic (default).
 
     Returns
     -------
@@ -535,19 +507,15 @@ def _as_array(val) -> NDArray:
 
 
 def _apply_criterion(
-    expectations: dict, criterion: str, alpha: float = 0.5
+    expectations: dict, criterion: str, alpha: float = 0.0
 ) -> Any:
     """Dispatch to the appropriate decision criterion."""
-    if criterion == "maximize":
-        return maximize(expectations)
-    elif criterion == "maximin":
-        return maximin(expectations)
-    elif criterion == "hurwicz":
-        return hurwicz(expectations, alpha)
-    elif criterion == "minimax_regret":
-        return minimax_regret(expectations, alpha)
+    if criterion == "utility":
+        return alpha_utility(expectations, alpha)
+    elif criterion == "regret":
+        return alpha_regret(expectations, alpha)
     else:
         raise ValueError(
             f"Unknown criterion {criterion!r}. "
-            f"Choose from: 'maximize', 'maximin', 'hurwicz', 'minimax_regret'."
+            f"Choose from: 'utility', 'regret'."
         )

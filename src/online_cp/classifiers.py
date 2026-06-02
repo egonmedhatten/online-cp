@@ -731,7 +731,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
         p_value = self._compute_p_value(Alpha, tau, "conformity")
         return (y_candidate, p_value)
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
+    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 

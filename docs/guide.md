@@ -125,7 +125,7 @@ from online_cp import RidgePredictionMachine
 cps = RidgePredictionMachine(a=1.0)
 cps.learn_initial_training_set(X_train, y_train)
 
-cpd = cps.predict_cpd(x_new)           # Returns a CPD object
+cpd = cps.predict(x_new)               # Returns a CPD object
 interval = cpd.predict_set(tau=0.5, epsilon=0.1)  # Extract interval
 ```
 

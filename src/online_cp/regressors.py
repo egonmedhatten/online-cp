@@ -1585,8 +1585,13 @@ def _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k):
 class ConformalLassoRegressor(ConformalRegressor):
     """
     Conformal prediction with Lasso/elastic net using the piecewise linear
-    homotopy from Lei & Fithian. Computes exact conformal prediction sets
+    homotopy from Lei (2019). Computes exact conformal prediction sets
     without grid search by tracing how residuals evolve as the test label varies.
+
+    References
+    ----------
+    Lei, J. (2019). Fast exact conformalization of the Lasso using piecewise
+    linear homotopy. *Biometrika*, 106(4), 751–767.
 
     When rho=0 (default), this is pure Lasso. When rho>0, this solves the
     elastic net: min (1/2)||y - Xβ||² + lam||β||₁ + (rho/2)||β||₂²

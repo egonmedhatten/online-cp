@@ -13,7 +13,6 @@ References
 ----------
 - Vovk, V. & Bendtsen, C. (2018). *Conformal predictive decision making*.
   Proceedings of Machine Learning Research, 91, 52–62.
-- Venn-PDMS paper (predictive decision making under multiprobability).
 """
 
 from __future__ import annotations

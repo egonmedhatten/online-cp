@@ -297,8 +297,8 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
 class KernelRidgePredictionMachine(ConformalPredictiveSystem):
     """
-    This conformal predictive system uses the "studentised residuals as conformity measure.
-    Algorithm 7,3 in Algorithmic Learning in a Random World 2nd edition.
+    This conformal predictive system uses the "studentised residuals" as conformity measure.
+    Algorithm 7.3 in Algorithmic Learning in a Random World (2nd edition).
     """
 
     def __init__(self, kernel, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, epsilon=default_epsilon):

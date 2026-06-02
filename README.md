@@ -211,18 +211,40 @@ for p in p_values:
         break
 ```
 
+### Conformal predictive decision making
+
+Make optimal decisions under uncertainty using conformal predictive distributions:
+
+```python
+from online_cp import UtilityFunction, ConformalPredictiveDecisionMaker
+
+# Define a utility: U(x, y, decision) -> payoff
+U = UtilityFunction(
+    lambda x, y, d: -abs(y - d),  # penalise distance from decision to outcome
+    decisions=[0.0, 0.5, 1.0],
+)
+
+cdm = ConformalPredictiveDecisionMaker(U, a=1.0)
+cdm.learn_initial_training_set(X_train, y_train)
+
+for i in range(len(X_test)):
+    decision = cdm.predict(X_test[i])       # maximises expected utility
+    cdm.learn_one(X_test[i], y_test[i])
+```
+
 ## Features
 
 | Module | Description |
 |--------|-------------|
-| **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalLassoRegressor` |
+| **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalNearestNeighboursRegressor`, `ConformalLassoRegressor` |
 | **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
 | **Venn Predictors** | `VennAbersPredictor` (ridge, k-NN, SVM scoring), `NearestNeighboursVennPredictor` (binary & multiclass), `log_loss_point`, `brier_point` |
 | **Mondrian CP** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage |
 | **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
+| **Decision Making** | `ConformalPredictiveDecisionMaker`, `UtilityFunction`, `cps_decision`, `venn_decision` |
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |
 | **Evaluation** | `progressive_val()`, `iter_progressive_val()` — streaming test-then-train |
-| **Plotting** | `plot_coverage`, `plot_martingale`, `plot_intervals`, `plot_set_sizes` |
+| **Plotting** | `plot_coverage`, `plot_martingale`, `plot_detector`, `plot_intervals`, `plot_set_sizes` |
 | **Martingales** | `PluginMartingale`, `SimpleMixtureMartingale`, `SimpleJumper`, `CompositeJumper`, `SleeperStayer`, `SleeperDrifter` |  
 | **Detection Wrappers** | `VilleWrapper`, `CUSUMWrapper`, `ShiryaevRobertsWrapper` |
 | **Kernels** | `GaussianKernel`, `LinearKernel`, `PolynomialKernel`, `PeriodicKernel`, `LinearCombinationKernel` |
@@ -267,6 +289,10 @@ For **inductive** (split) conformal prediction — where you have a fixed pre-tr
 ## References
 
 Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. *Algorithmic Learning in a Random World* (2nd ed). Springer Nature, 2022.
+
+Jing Lei. Fast exact conformalization of the Lasso using piecewise linear homotopy. *Biometrika*, 106(4):751–767, 2019.
+
+Vladimir Vovk and Claus Bendtsen. Conformal predictive decision making. *Proceedings of Machine Learning Research*, 91:52–62, 2018.
 
 
 [`notebooks/tutorial.ipynb`]: https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb

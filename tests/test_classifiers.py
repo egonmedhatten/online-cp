@@ -439,3 +439,125 @@ class TestKNNAggregation:
     def test_invalid_aggregation_raises(self):
         with pytest.raises(ValueError, match="aggregation must be"):
             ConformalNearestNeighboursClassifier(k=3, aggregation="sum")
+
+
+class TestWrapperWarmStart:
+    """Tests for the warm_start and n_jobs features of ConformalClassifierWrapper."""
+
+    def _make_dataset(self):
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((30, 2))
+        y = (X[:, 0] > 0).astype(int)
+        return X, y
+
+    def test_warm_start_predictions_match_cold(self):
+        """Warm-start and cold-start must produce identical p-values."""
+        from sklearn.linear_model import LogisticRegression
+
+        X, y = self._make_dataset()
+
+        with pytest.warns(UserWarning):
+            cp_warm = ConformalClassifierWrapper(
+                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
+                rnd_state=123, warm_start=True,
+            )
+        with pytest.warns(UserWarning):
+            cp_cold = ConformalClassifierWrapper(
+                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
+                rnd_state=123, warm_start=False,
+            )
+
+        cp_warm.learn_initial_training_set(X[:20], y[:20])
+        cp_cold.learn_initial_training_set(X[:20], y[:20])
+
+        _, pv_warm = cp_warm.predict(X[20], return_p_values=True)
+        _, pv_cold = cp_cold.predict(X[20], return_p_values=True)
+
+        for label in [0, 1]:
+            assert abs(pv_warm[label] - pv_cold[label]) < 1e-10
+
+    def test_warm_start_auto_detection(self):
+        """LogisticRegression gets warm_start=True, RandomForest does not."""
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.ensemble import RandomForestClassifier
+
+        with pytest.warns(UserWarning):
+            cp_lr = ConformalClassifierWrapper(
+                LogisticRegression(), label_space=np.array([0, 1]), rnd_state=0,
+            )
+        assert cp_lr._warm_start is True
+
+        with pytest.warns(UserWarning):
+            cp_rf = ConformalClassifierWrapper(
+                RandomForestClassifier(n_estimators=5), label_space=np.array([0, 1]), rnd_state=0,
+            )
+        assert cp_rf._warm_start is False
+
+    def test_n_jobs_parallel_predictions_match_sequential(self):
+        """Parallel execution must match sequential results."""
+        from sklearn.linear_model import LogisticRegression
+
+        X, y = self._make_dataset()
+
+        with pytest.warns(UserWarning):
+            cp_seq = ConformalClassifierWrapper(
+                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
+                rnd_state=99, n_jobs=None,
+            )
+        with pytest.warns(UserWarning):
+            cp_par = ConformalClassifierWrapper(
+                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
+                rnd_state=99, n_jobs=2,
+            )
+
+        cp_seq.learn_initial_training_set(X[:20], y[:20])
+        cp_par.learn_initial_training_set(X[:20], y[:20])
+
+        _, pv_seq = cp_seq.predict(X[20], return_p_values=True)
+        _, pv_par = cp_par.predict(X[20], return_p_values=True)
+
+        for label in [0, 1]:
+            assert abs(pv_seq[label] - pv_par[label]) < 1e-10
+
+    def test_base_fit_invalidated_on_learn_one(self):
+        """After learn_one, the base fit cache must be invalidated."""
+        from sklearn.linear_model import LogisticRegression
+
+        X, y = self._make_dataset()
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(
+                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
+                rnd_state=0,
+            )
+
+        cp.learn_initial_training_set(X[:20], y[:20])
+        assert cp._base_fitted is False
+
+        # First predict builds the cache
+        cp.predict(X[20])
+        assert cp._base_fitted is True
+
+        # learn_one invalidates it
+        cp.learn_one(X[20], y[20])
+        assert cp._base_fitted is False
+        assert cp._base_learner is None
+
+    def test_warm_start_force_on_random_forest(self):
+        """warm_start=True forced on tree-based should still produce valid predictions."""
+        from sklearn.ensemble import RandomForestClassifier
+
+        X, y = self._make_dataset()
+
+        with pytest.warns(UserWarning):
+            cp = ConformalClassifierWrapper(
+                RandomForestClassifier(n_estimators=5, random_state=0),
+                label_space=np.array([0, 1]), rnd_state=0, warm_start=True,
+            )
+
+        cp.learn_initial_training_set(X[:20], y[:20])
+        Gamma, pv = cp.predict(X[20], return_p_values=True)
+
+        assert set(pv.keys()) == {0, 1}
+        for p in pv.values():
+            assert 0 <= p <= 1

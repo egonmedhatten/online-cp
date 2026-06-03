@@ -280,3 +280,81 @@ class TestRecomputeInverse:
 
         cp.change_ridge_parameter(2.0)
         assert cp._n_sm_updates == 0
+
+
+class TestStudentised:
+    """Tests for studentised conformal ridge regressors."""
+
+    def test_ridge_studentised_coverage(self, linear_dataset):
+        """Studentised Ridge should achieve valid coverage."""
+        X, y = linear_dataset
+        epsilon = 0.1
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0, studentised=True, epsilon=epsilon)
+
+        n_init = 30
+        cp.learn_initial_training_set(X[:n_init], y[:n_init])
+
+        covered = 0
+        n_test = len(y) - n_init
+        for obj, lab in zip(X[n_init:], y[n_init:]):
+            Gamma = cp.predict(obj)
+            covered += int(lab in Gamma)
+            cp.learn_one(obj, lab)
+
+        coverage = covered / n_test
+        assert coverage >= (1 - epsilon) - 0.05, f"Studentised coverage {coverage:.3f} too low"
+
+    def test_kernel_ridge_studentised_coverage(self, linear_dataset):
+        """Studentised KernelRidge should achieve valid coverage."""
+        X, y = linear_dataset
+        epsilon = 0.1
+        kernel = GaussianKernel(sigma=1.0)
+        cp = KernelConformalRidgeRegressor(
+            kernel=kernel, a=0.1, warnings=False, rnd_state=0,
+            studentised=True, epsilon=epsilon,
+        )
+
+        n_init = 30
+        cp.learn_initial_training_set(X[:n_init], y[:n_init])
+
+        covered = 0
+        n_test = min(20, len(y) - n_init)  # limit to keep test fast
+        for obj, lab in zip(X[n_init:n_init + n_test], y[n_init:n_init + n_test]):
+            Gamma = cp.predict(obj)
+            covered += int(lab in Gamma)
+            cp.learn_one(obj, lab)
+
+        coverage = covered / n_test
+        assert coverage >= (1 - epsilon) - 0.1, f"KernelRidge studentised coverage {coverage:.3f} too low"
+
+    def test_ridge_studentised_guard_degenerate(self):
+        """Studentised path should handle near-degenerate leverage gracefully."""
+        cp = ConformalRidgeRegressor(a=1e-8, warnings=False, rnd_state=0, studentised=True)
+        # Near-collinear features → high leverage → B[n] close to B[i]
+        X = np.array([[1.0, 1.0001], [2.0, 2.0001], [3.0, 3.0001]])
+        y = np.array([1.0, 2.0, 3.0])
+        cp.learn_initial_training_set(X, y)
+        # Should not crash even with near-degenerate data
+        interval = cp.predict(np.array([4.0, 4.0001]))
+        assert hasattr(interval, 'lower')
+        assert hasattr(interval, 'upper')
+
+
+class TestLassoCrashGuard:
+    """Test that Lasso handles no-training-data gracefully."""
+
+    def test_predict_before_training(self):
+        """Lasso predict should return (-inf, inf) before training."""
+        from online_cp.regressors import ConformalLassoRegressor
+        cp = ConformalLassoRegressor(lam=0.5)
+        result = cp.predict(np.array([1.0, 2.0, 3.0]))
+        assert result.lower == -np.inf
+        assert result.upper == np.inf
+
+    def test_predict_multi_epsilon_before_training(self):
+        """Lasso predict with multiple epsilons before training."""
+        from online_cp.regressors import ConformalLassoRegressor
+        cp = ConformalLassoRegressor(lam=0.5)
+        result = cp.predict(np.array([1.0, 2.0]), epsilon=[0.05, 0.1])
+        assert isinstance(result, MultiLevelPredictionInterval)
+        assert result[0.05].lower == -np.inf

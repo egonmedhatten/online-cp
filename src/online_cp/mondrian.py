@@ -149,7 +149,7 @@ class MondrianConformalRegressor:
         K = KernelConformalRidgeRegressor._update_K(model.K, k, kappa)
         Kinv = KernelConformalRidgeRegressor._update_Kinv(model.Kinv, k, kappa + model.a)
         X = np.append(model.X, x.reshape(1, -1), axis=0)
-        A, B = KernelConformalRidgeRegressor.compute_A_and_B(X, K, Kinv, model.y)
+        A, B = model.compute_A_and_B(X, K, Kinv, model.y)
 
         cat_mask = np.array([c == cat for c in self.categories_] + [True])
         n_cat = int(cat_mask.sum())
@@ -420,7 +420,7 @@ class MondrianConformalRegressor:
         K = KernelConformalRidgeRegressor._update_K(model.K, k, kappa)
         Kinv = KernelConformalRidgeRegressor._update_Kinv(model.Kinv, k, kappa + model.a)
         X = np.append(model.X, x.reshape(1, -1), axis=0)
-        A, B = KernelConformalRidgeRegressor.compute_A_and_B(X, K, Kinv, model.y)
+        A, B = model.compute_A_and_B(X, K, Kinv, model.y)
         cat_mask = np.array([c == cat for c in self.categories_] + [True])
         A_cat, B_cat = A[cat_mask], B[cat_mask]
         if bounds == "both":

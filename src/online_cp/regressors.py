@@ -275,11 +275,18 @@ class ConformalRidgeRegressor(ConformalRegressor):
     """
 
     def __init__(
-        self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon
+        self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon, recompute_every: int | None = None
     ) -> None:
         """
         The ridge parameter (L2 regularisation) is a.
         Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
+
+        Parameters
+        ----------
+        recompute_every : int or None
+            If set, recompute the full matrix inverse from scratch every N
+            Sherman-Morrison updates to correct accumulated floating-point drift.
+            Default None (no periodic recomputation).
         """
         super().__init__(epsilon=epsilon)
 
@@ -301,11 +308,16 @@ class ConformalRidgeRegressor(ConformalRegressor):
         # Do we use the studentised residuals
         self.studentised = studentised
 
+        # Sherman-Morrison stability
+        self.recompute_every = recompute_every
+        self._n_sm_updates = 0
+
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
         self.p = X.shape[1]
         self.Id = np.identity(self.p)
+        self._n_sm_updates = 0
         if self.autotune:
             self._tune_ridge_parameter()
         else:
@@ -316,6 +328,31 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise, "
                     "or provide more linearly independent training examples."
                 ) from None
+
+    def recompute_inverse(self) -> None:
+        """Recompute (X^T X + aI)^{-1} from scratch to correct numerical drift.
+
+        Call this periodically during long online streams, or set
+        ``recompute_every`` in the constructor for automatic periodic
+        recomputation.
+
+        >>> import numpy as np
+        >>> cp = ConformalRidgeRegressor(a=1)
+        >>> cp.learn_initial_training_set(np.eye(3), np.array([1., 2., 3.]))
+        >>> cp.recompute_inverse()
+        >>> np.allclose(cp.XTXinv, np.linalg.inv(cp.X.T @ cp.X + cp.a * cp.Id))
+        True
+        """
+        if self.X is None or self.Id is None:
+            return
+        try:
+            self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+        except np.linalg.LinAlgError:
+            raise ValueError(
+                "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise, "
+                "or provide more linearly independent training examples."
+            ) from None
+        self._n_sm_updates = 0
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
@@ -355,13 +392,21 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             "or provide more linearly independent training examples."
                         ) from None
                 else:
-                    # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                    # Update XTX_inv using the Sherman-Morrison formula
                     # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
                     self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    self._n_sm_updates += 1
 
-                    # Check the rank
-                    if self.warnings:
-                        self.check_matrix_rank(self.XTXinv)
+                    if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
+                        self.recompute_inverse()
+                    elif self.warnings:
+                        cond = np.linalg.cond(self.XTXinv)
+                        if cond > 1e12:
+                            warnings.warn(
+                                f"(X^T X + aI)^{{-1}} has condition number {cond:.2e}. "
+                                f"Consider calling recompute_inverse() or setting recompute_every.",
+                                stacklevel=2,
+                            )
 
         else:
             # Learn object x
@@ -380,13 +425,21 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     ) from None
             else:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
+                # Update XTX_inv using the Sherman-Morrison formula
                 # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
                 self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                self._n_sm_updates += 1
 
-                # Check the rank
-                if self.warnings:
-                    self.check_matrix_rank(self.XTXinv)
+                if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
+                    self.recompute_inverse()
+                elif self.warnings:
+                    cond = np.linalg.cond(self.XTXinv)
+                    if cond > 1e12:
+                        warnings.warn(
+                            f"(X^T X + aI)^{{-1}} has condition number {cond:.2e}. "
+                            f"Consider calling recompute_inverse() or setting recompute_every.",
+                            stacklevel=2,
+                        )
 
     def compute_A_and_B(self, X, XTXinv, y):
         """
@@ -626,6 +679,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise, "
                     "or provide more linearly independent training examples."
                 ) from None
+            self._n_sm_updates = 0
 
     def _tune_ridge_parameter(self, a0=None):
         """
@@ -1082,11 +1136,19 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
 class KernelConformalRidgeRegressor(ConformalRegressor):
 
-    def __init__(self, kernel: Any, a: float = 0, warnings: bool = True, verbose: int = 0, rnd_state: int | None = None, epsilon: float = default_epsilon) -> None:
+    def __init__(self, kernel: Any, a: float = 0, warnings: bool = True, verbose: int = 0, rnd_state: int | None = None, epsilon: float = default_epsilon, recompute_every: int | None = None) -> None:
         """
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is
         also compatible with (most) kernels from e.g. scikit-learn.
         Custom kernels can also be passed as callable functions.
+
+        Parameters
+        ----------
+        recompute_every : int or None
+            If set, recompute the full matrix inverse from scratch every N
+            rank-1 updates to correct accumulated floating-point drift.
+            Note: recomputation is O(n³) where n is the current training size.
+            Default None (no periodic recomputation).
         """
         super().__init__(epsilon=epsilon)
 
@@ -1107,6 +1169,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
         self.rnd_gen = np.random.default_rng(rnd_state)
 
+        # Sherman-Morrison stability
+        self.recompute_every = recompute_every
+        self._n_sm_updates = 0
+
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
@@ -1119,6 +1185,30 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             raise ValueError(
                 "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
             ) from None
+        self._n_sm_updates = 0
+
+    def recompute_inverse(self) -> None:
+        """Recompute (K + aI)^{-1} from scratch to correct numerical drift.
+
+        Call this periodically during long online streams, or set
+        ``recompute_every`` in the constructor for automatic periodic
+        recomputation.
+
+        Note: This is O(n³) where n is the current training set size.
+        """
+        if self.K is None:
+            return
+        n = self.K.shape[0]
+        if self.verbose > 0 and n > 1000:
+            print(f"KernelConformalRidgeRegressor.recompute_inverse(): n={n}, O(n³) recomputation.")
+        Id = np.identity(n)
+        try:
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+        except np.linalg.LinAlgError:
+            raise ValueError(
+                "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
+            ) from None
+        self._n_sm_updates = 0
 
     @staticmethod
     def _update_Kinv(Kinv, k, kappa):
@@ -1189,6 +1279,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 self.K = self._update_K(self.K, k, kappa)
                 self.Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+                self._n_sm_updates += 1
+
+                if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
+                    self.recompute_inverse()
 
     @staticmethod
     def compute_A_and_B(X, K, Kinv, y):

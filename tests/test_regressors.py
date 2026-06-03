@@ -178,3 +178,105 @@ class TestMultiLevelPredict:
         from online_cp.regressors import ConformalPredictionInterval
         result = cp.predict(X[30], epsilon=0.1)
         assert isinstance(result, ConformalPredictionInterval)
+
+
+class TestRecomputeInverse:
+    """Tests for Sherman-Morrison numerical stability features."""
+
+    def test_ridge_recompute_inverse_matches_fresh(self, linear_dataset):
+        """recompute_inverse() should produce same result as computing from scratch."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+
+        # Do many SM updates
+        for i in range(20, 50):
+            cp.learn_one(X[i], y[i])
+
+        # Recompute and compare to ground truth
+        cp.recompute_inverse()
+        ground_truth = np.linalg.inv(cp.X.T @ cp.X + cp.a * cp.Id)
+        assert np.allclose(cp.XTXinv, ground_truth, atol=1e-12)
+        assert cp._n_sm_updates == 0
+
+    def test_ridge_recompute_every_triggers(self, linear_dataset):
+        """recompute_every should trigger periodic full recomputation."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0, recompute_every=5)
+        cp.learn_initial_training_set(X[:20], y[:20])
+
+        # After 5 SM updates, counter should reset
+        for i in range(20, 25):
+            cp.learn_one(X[i], y[i])
+        assert cp._n_sm_updates == 0  # reset after recompute at step 5
+
+        # After 3 more, should be at 3
+        for i in range(25, 28):
+            cp.learn_one(X[i], y[i])
+        assert cp._n_sm_updates == 3
+
+    def test_ridge_recompute_every_accuracy(self, linear_dataset):
+        """With recompute_every, drift should be bounded vs ground truth."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0, recompute_every=10)
+        cp.learn_initial_training_set(X[:20], y[:20])
+
+        for i in range(20, 80):
+            cp.learn_one(X[i], y[i])
+
+        ground_truth = np.linalg.inv(cp.X.T @ cp.X + cp.a * cp.Id)
+        assert np.allclose(cp.XTXinv, ground_truth, atol=1e-10)
+
+    def test_ridge_recompute_inverse_idempotent(self, linear_dataset):
+        """Calling recompute_inverse twice gives same result."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
+        cp.learn_initial_training_set(X[:30], y[:30])
+
+        for i in range(30, 50):
+            cp.learn_one(X[i], y[i])
+
+        cp.recompute_inverse()
+        first = cp.XTXinv.copy()
+        cp.recompute_inverse()
+        assert np.array_equal(first, cp.XTXinv)
+
+    def test_kernel_ridge_recompute_inverse_matches_fresh(self, linear_dataset):
+        """KernelRidge recompute_inverse() matches ground truth."""
+        X, y = linear_dataset
+        kernel = GaussianKernel(sigma=1.0)
+        cp = KernelConformalRidgeRegressor(kernel=kernel, a=0.1, warnings=False, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+
+        for i in range(20, 35):
+            cp.learn_one(X[i], y[i])
+
+        cp.recompute_inverse()
+        n = cp.K.shape[0]
+        ground_truth = np.linalg.inv(cp.K + cp.a * np.identity(n))
+        assert np.allclose(cp.Kinv, ground_truth, atol=1e-12)
+        assert cp._n_sm_updates == 0
+
+    def test_kernel_ridge_recompute_every_triggers(self, linear_dataset):
+        """KernelRidge recompute_every triggers periodic recomputation."""
+        X, y = linear_dataset
+        kernel = GaussianKernel(sigma=1.0)
+        cp = KernelConformalRidgeRegressor(kernel=kernel, a=0.1, warnings=False, rnd_state=0, recompute_every=5)
+        cp.learn_initial_training_set(X[:20], y[:20])
+
+        for i in range(20, 25):
+            cp.learn_one(X[i], y[i])
+        assert cp._n_sm_updates == 0  # reset after recompute
+
+    def test_ridge_change_parameter_resets_counter(self, linear_dataset):
+        """change_ridge_parameter should reset the SM update counter."""
+        X, y = linear_dataset
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+
+        for i in range(20, 30):
+            cp.learn_one(X[i], y[i])
+        assert cp._n_sm_updates > 0
+
+        cp.change_ridge_parameter(2.0)
+        assert cp._n_sm_updates == 0

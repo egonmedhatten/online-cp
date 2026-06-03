@@ -128,10 +128,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         if self.y is None:
             self.y = np.array([y])
         else:
-            if hasattr(self, "h"):
-                self.y = np.append(self.y, y.reshape(1, self.h), axis=0)
-            else:
-                self.y = np.append(self.y, y)
+            self.y = np.append(self.y, y)
 
         if precomputed is not None:
             X = precomputed["X"]
@@ -520,13 +517,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         rnd_state=None,
         epsilon=default_epsilon,
     ):
-        """
-        Consider adding possibility to update self.k as the training set grows, e.g. by some heuristic or something.
-        Two rules of thumb are quite simple:
-            1. Choose k close to sqrt(n) where n is the training set size
-            2. If the data has large variance, choose k larger. If the variance is small, choose k smaller. This is less clear, however.
-        """
-        # TODO: The sorting of conformity scores is the most time consuming step. Can it be done with parallel processing to speed things up?
         super().__init__(epsilon=epsilon)
 
         self.k = k
@@ -552,7 +542,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         """
         By default we use scipy to compute distances
         """
-        # TODO: Can this be done using parallel processing?
         X = np.atleast_2d(X)
         if y is None:
             dists = squareform(pdist(X, metric=self.distance))
@@ -648,8 +637,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         tic = time.time()
         # Temporarily update the distance matrix
         if self.X.shape[0] < self.k:
-            # FIXME: Make some graceful error handling here
-            raise Exception("Training set is too small...")
+            raise ValueError("Training set is too small for k-NN prediction")
         else:
             d = self.distance_func(self.X, x)
             D = self.update_distance_matrix(self.D, d)
@@ -813,7 +801,7 @@ class ConformalPredictiveDistributionFunction:
 
         if minimise_width:
             if bounds != "both":
-                raise Exception('bounds must be "both" if we are to minimise the interval width')
+                raise ValueError('bounds must be "both" when minimise_width=True')
 
             # Exact O(n) sweep: for piecewise-constant CPDs, the shortest
             # interval with coverage ≥ 1-epsilon is found by checking all
@@ -856,7 +844,7 @@ class ConformalPredictiveDistributionFunction:
                 lower = -np.inf
                 upper = self.quantile(q2, tau)
             else:
-                raise Exception
+                raise ValueError('bounds must be "both", "lower", or "upper"')
 
         CP_int = get_ConformalPredictionInterval()
         return CP_int(lower, upper, epsilon)
@@ -969,10 +957,9 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
                 return self.C[j_at]
             elif 0 <= j_between < len(self.C) - 1:
                 # Return a value just above C[j_between]
-                eps = np.abs(self.C[j_between]) * np.finfo(np.float64).eps
                 if j_between == 0:
                     return -np.inf
-                return self.C[j_between] + eps
+                return np.nextafter(self.C[j_between], np.inf)
             else:
                 return np.inf
 
@@ -984,11 +971,6 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
             return q0, q1
 
 class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
-    """
-    TODO: Write tests
-    """
-
-    # NOTE: It would be possible to pass a protection function here...
     def __init__(self, L, U, Y, time_dict=None, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
         self.L = L
@@ -1045,7 +1027,7 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
                 if k == 0:
                     candidate = -np.inf
                 else:
-                    candidate = self.Y[k] + np.abs(self.Y[k]) * np.finfo(np.float64).eps
+                    candidate = np.nextafter(self.Y[k], np.inf)
                 if candidate < best_y:
                     best_y = candidate
             return best_y
@@ -1122,16 +1104,30 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
 
     def quantile(self, p, tau=None):
         def compute_quantile(p, tau):
-            # Analytical inversion using precomputed L, U
-            # Find smallest j where (1-tau)*L[j] + tau*U[j] >= p
+            # CDF at breakpoint Y[j]: (1-tau)*L[j] + tau*U[j]
+            # CDF between Y[j] and Y[j+1]: (j + tau) / n
+            n = len(self.Y) - 1  # size of trimmed Y[:-1]
+
+            # First j where at-knot level >= p
             pi_at = (1 - tau) * self.L + tau * self.U
-            candidates = np.where(pi_at >= p)[0]
-            if len(candidates) == 0:
+            at_candidates = np.where(pi_at >= p)[0]
+            j_at = at_candidates[0] if len(at_candidates) > 0 else len(self.Y)
+
+            # First j where between-level (j+tau)/n >= p
+            j_between = max(0, int(np.ceil(p * n - tau)))
+
+            if j_at <= j_between:
+                # At-breakpoint reached first
+                if j_at == 0:
+                    return -np.inf
+                return self.Y[j_at]
+            elif j_between < len(self.Y) - 1:
+                # Between-level reached first; quantile is just above Y[j_between]
+                if j_between == 0:
+                    return -np.inf
+                return np.nextafter(self.Y[j_between], np.inf)
+            else:
                 return np.inf
-            j = candidates[0]
-            if j == 0:
-                return -np.inf
-            return self.Y[j]
 
         if tau is not None:
             return compute_quantile(p, tau)
@@ -1139,12 +1135,3 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
             q0 = compute_quantile(p, 0)
             q1 = compute_quantile(p, 1)
             return q0, q1
-
-
-if __name__ == "__main__":
-    import doctest
-    import sys
-
-    (failures, _) = doctest.testmod()
-    if failures:
-        sys.exit(1)

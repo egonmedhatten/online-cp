@@ -12,18 +12,28 @@ from numpy.typing import NDArray
 from scipy.spatial.distance import cdist, pdist, squareform
 
 __all__ = [
+    "CustomKernel",
     "GaussianKernel",
-    "LinearKernel",
-    "PolynomialKernel",
-    "PeriodicKernel",
+    "Kernel",
     "LinearCombinationKernel",
+    "LinearKernel",
+    "PeriodicKernel",
+    "PolynomialKernel",
+    "ProductKernel",
     "kernel_induced_distance",
     "kernel_matrix_to_distance_matrix",
 ]
 
 
 class Kernel:
-    """Base class for kernel functions."""
+    """Base class for kernel functions.
+
+    Subclasses implement ``__call__(X, y=None)`` with the convention:
+
+    - ``kernel(X)`` returns the ``(n, n)`` Gram matrix.
+    - ``kernel(X, y)`` returns an ``(n,)`` vector of similarities between
+      each row of X and the single point y.
+    """
 
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         raise NotImplementedError("Subclasses should implement this!")
@@ -36,26 +46,25 @@ class GaussianKernel(Kernel):
     ----------
     sigma : float
         Bandwidth parameter.
-    distance : str, optional
-        Distance metric passed to scipy (default ``'sqeuclidean'``).
     """
 
-    def __init__(self, sigma: float, distance: str = "sqeuclidean") -> None:
+    def __init__(self, sigma: float) -> None:
         self.sigma = sigma
-        self.distance = distance
         self.name = "Gaussian"
+
+    def __repr__(self) -> str:
+        return f"GaussianKernel(sigma={self.sigma!r})"
 
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
-            dists = pdist(X, metric=self.distance)
+            dists = pdist(X, metric="sqeuclidean")
             K = np.exp(-dists / (2 * self.sigma**2))
-            # convert from upper-triangular matrix to square matrix
             K = squareform(K)
             np.fill_diagonal(K, 1)
         else:
             Y = np.atleast_2d(y)
-            dists = cdist(X, Y, metric=self.distance)
+            dists = cdist(X, Y, metric="sqeuclidean")
             K = np.exp(-dists / (2 * self.sigma**2))
             K = K.reshape(
                 -1,
@@ -68,6 +77,9 @@ class LinearKernel(Kernel):
 
     def __init__(self) -> None:
         self.name = "Linear"
+
+    def __repr__(self) -> str:
+        return "LinearKernel()"
 
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
@@ -98,6 +110,9 @@ class PolynomialKernel(Kernel):
         self.d = d
         self.c = c
 
+    def __repr__(self) -> str:
+        return f"PolynomialKernel(d={self.d!r}, c={self.c!r})"
+
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
@@ -112,7 +127,10 @@ class PolynomialKernel(Kernel):
 
 
 class PeriodicKernel(Kernel):
-    """Periodic kernel: k(x, y) = exp(-2 sin²(π||x-y||) / s).
+    """Periodic kernel: k(x, y) = exp(-2 sin²(π||x-y|| / p) / s).
+
+    Guaranteed PSD for scalar inputs; for higher dimensions the Gram matrix
+    may not be strictly PSD.
 
     Parameters
     ----------
@@ -130,18 +148,20 @@ class PeriodicKernel(Kernel):
         self.distance = distance
         self.name = "Periodic"
 
+    def __repr__(self) -> str:
+        return f"PeriodicKernel(p={self.p!r}, s={self.s!r})"
+
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             dists = pdist(X, metric=self.distance)
-            K = np.exp(-2 * np.sin(np.pi * dists) ** 2 / (self.s))
-            # convert from upper-triangular matrix to square matrix
+            K = np.exp(-2 * np.sin(np.pi * dists / self.p) ** 2 / self.s)
             K = squareform(K)
             np.fill_diagonal(K, 1)
         else:
             Y = np.atleast_2d(y)
             dists = cdist(X, Y, metric=self.distance)
-            K = np.exp(-2 * np.sin(np.pi * dists) ** 2 / (self.s))
+            K = np.exp(-2 * np.sin(np.pi * dists / self.p) ** 2 / self.s)
             K = K.reshape(
                 -1,
             )
@@ -149,8 +169,8 @@ class PeriodicKernel(Kernel):
 
 
 class LinearCombinationKernel(Kernel):
-    """
-    Positive  combinations of kernels is still a kernel
+    """Positive linear combination of kernels (which is still a valid kernel).
+
     >>> k1 = LinearKernel()
     >>> k2 = LinearKernel()
     >>> kernels = [k1, k2]
@@ -167,21 +187,78 @@ class LinearCombinationKernel(Kernel):
             weights = [1 for _ in kernels]
         if len(kernels) != len(weights):
             raise ValueError("The number of kernels and weights must be the same")
+        if any(w < 0 for w in weights):
+            raise ValueError("All weights must be non-negative")
         self.kernels = kernels
         self.weights = weights
 
         self.name = " + ".join(f"{w}*{k.name}" for w, k in zip(weights, kernels))
+
+    def __repr__(self) -> str:
+        return f"LinearCombinationKernel({self.name})"
 
     def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
         return sum(weight * kernel(X, y) for weight, kernel in zip(self.weights, self.kernels))
 
 
 class ProductKernel(Kernel):
-    """
-    TODO Implement. Need to understand what product is the relevant one. Inner? Matrix product?
+    """Element-wise (Schur/Hadamard) product of kernels (which is still a valid kernel).
+
+    >>> k1 = LinearKernel()
+    >>> k2 = LinearKernel()
+    >>> k = ProductKernel([k1, k2])
+    >>> X = np.array([[1, 2], [3, 4]])
+    >>> np.allclose(k(X), k1(X) * k2(X))
+    True
     """
 
-    pass
+    def __init__(self, kernels: Sequence[Kernel]) -> None:
+        if len(kernels) < 2:
+            raise ValueError("ProductKernel requires at least two kernels")
+        self.kernels = kernels
+        self.name = " * ".join(k.name for k in kernels)
+
+    def __repr__(self) -> str:
+        return f"ProductKernel({self.name})"
+
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+        result = self.kernels[0](X, y)
+        for kernel in self.kernels[1:]:
+            result = result * kernel(X, y)
+        return result
+
+
+class CustomKernel(Kernel):
+    """Wrapper for a user-provided kernel function.
+
+    Parameters
+    ----------
+    func : callable
+        A function with signature ``func(X, y=None)`` following the kernel
+        convention: returns ``(n, n)`` Gram matrix if ``y is None``, else
+        ``(n,)`` similarities.
+    name : str, optional
+        Name for display purposes.
+
+    Examples
+    --------
+    >>> k = CustomKernel(lambda X, y=None: LinearKernel()(X, y), name="MyLinear")
+    >>> X = np.array([[1.0, 0.0], [0.0, 1.0]])
+    >>> np.allclose(k(X), X @ X.T)
+    True
+    """
+
+    def __init__(self, func: Callable, name: str = "Custom") -> None:
+        if not callable(func):
+            raise TypeError("func must be callable")
+        self._func = func
+        self.name = name
+
+    def __repr__(self) -> str:
+        return f"CustomKernel(name={self.name!r})"
+
+    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+        return self._func(X, y)
 
 
 def kernel_induced_distance(kernel: Kernel) -> Callable[[NDArray[np.floating[Any]], NDArray[np.floating[Any]] | None], NDArray[np.floating[Any]]]:

@@ -28,7 +28,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 if __name__ != "__main__":
-    from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS, BrierScore, LogLoss, Width
+    from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS, TruncatedCRPS, ConformalCRPS, BrierScore
 
 __all__ = [
     "progressive_val",
@@ -49,14 +49,7 @@ def _needs_cpd(metric):
     """Check if any metric in the composite requires a CPD."""
     if isinstance(metric, Metrics):
         return any(_needs_cpd(m) for m in metric)
-    return isinstance(metric, CRPS)
-
-
-def _needs_venn(metric):
-    """Check if any metric in the composite requires a VennPrediction."""
-    if isinstance(metric, Metrics):
-        return any(_needs_venn(m) for m in metric)
-    return isinstance(metric, (BrierScore, LogLoss, Width))
+    return isinstance(metric, (CRPS, TruncatedCRPS, ConformalCRPS))
 
 
 def _iter_data(X_or_stream, y=None):
@@ -88,6 +81,27 @@ def _should_learn(learn, i, x_i, y_i):
         return False
     # Callable: learn(i, x, y) -> bool
     return learn(i, x_i, y_i)
+
+
+def _predict_and_update(model, x_i, y_i, metric, needs_p, needs_cpd, predict_kw, epsilon, rng):
+    """Core predict-then-update step shared by progressive_val variants."""
+    kw = {}
+    if needs_p:
+        result = model.predict(x_i, return_p_values=True, **predict_kw)
+        Gamma, p_values = result
+        kw["p_values"] = p_values
+    elif needs_cpd:
+        cpd = model.predict_cpd(x_i)
+        tau = rng.uniform(0, 1)
+        Gamma = cpd.predict_set(tau, epsilon=epsilon) if epsilon is not None else None
+        kw["cpd"] = cpd
+    else:
+        Gamma = model.predict(x_i, **predict_kw)
+
+    if epsilon is not None:
+        kw["epsilon"] = epsilon
+
+    metric.update(y=y_i, Gamma=Gamma, **kw)
 
 
 def progressive_val(
@@ -142,31 +156,11 @@ def progressive_val(
         predict_kw["epsilon"] = epsilon
 
     for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
-        # Predict
-        kw = {}
-        if needs_p:
-            result = model.predict(x_i, return_p_values=True, **predict_kw)
-            Gamma, p_values = result
-            kw["p_values"] = p_values
-        elif needs_cpd:
-            cpd = model.predict_cpd(x_i)
-            tau = rng.uniform(0, 1)
-            Gamma = cpd.predict_set(tau, epsilon=epsilon) if epsilon else None
-            kw["cpd"] = cpd
-        else:
-            Gamma = model.predict(x_i, **predict_kw)
+        _predict_and_update(model, x_i, y_i, metric, needs_p, needs_cpd, predict_kw, epsilon, rng)
 
-        if epsilon is not None:
-            kw["epsilon"] = epsilon
-
-        # Update metric
-        metric.update(y=y_i, Gamma=Gamma, **kw)
-
-        # Learn (conditional)
         if _should_learn(learn, i, x_i, y_i):
             model.learn_one(x_i, y_i)
 
-        # Progress printing
         if print_every > 0 and (i + 1) % print_every == 0:
             print(f"[{i + 1}] {metric}")
 
@@ -225,23 +219,7 @@ def iter_progressive_val(
         predict_kw["epsilon"] = epsilon
 
     for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
-        kw = {}
-        if needs_p:
-            result = model.predict(x_i, return_p_values=True, **predict_kw)
-            Gamma, p_values = result
-            kw["p_values"] = p_values
-        elif needs_cpd:
-            cpd = model.predict_cpd(x_i)
-            tau = rng.uniform(0, 1)
-            Gamma = cpd.predict_set(tau, epsilon=epsilon) if epsilon else None
-            kw["cpd"] = cpd
-        else:
-            Gamma = model.predict(x_i, **predict_kw)
-
-        if epsilon is not None:
-            kw["epsilon"] = epsilon
-
-        metric.update(y=y_i, Gamma=Gamma, **kw)
+        _predict_and_update(model, x_i, y_i, metric, needs_p, needs_cpd, predict_kw, epsilon, rng)
 
         if _should_learn(learn, i, x_i, y_i):
             model.learn_one(x_i, y_i)

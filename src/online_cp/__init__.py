@@ -92,7 +92,13 @@ from online_cp.evaluate import (
     iter_progressive_val_venn as iter_progressive_val_venn,
 )
 from online_cp.kernels import (
+    CustomKernel as CustomKernel,
+)
+from online_cp.kernels import (
     GaussianKernel as GaussianKernel,
+)
+from online_cp.kernels import (
+    Kernel as Kernel,
 )
 from online_cp.kernels import (
     LinearCombinationKernel as LinearCombinationKernel,
@@ -105,6 +111,9 @@ from online_cp.kernels import (
 )
 from online_cp.kernels import (
     PolynomialKernel as PolynomialKernel,
+)
+from online_cp.kernels import (
+    ProductKernel as ProductKernel,
 )
 from online_cp.kernels import (
     kernel_induced_distance as kernel_induced_distance,

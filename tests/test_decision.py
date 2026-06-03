@@ -352,3 +352,91 @@ class TestConformalPredictiveDecisionMaker:
         # With this utility matrix and reasonable classification,
         # cumulative utility should be positive
         assert total > 0
+
+
+# ---------------------------------------------------------------------------
+# Parameter Validation
+# ---------------------------------------------------------------------------
+
+
+class TestParameterValidation:
+    """Ensure out-of-range alpha and tau raise ValueError."""
+
+    def test_alpha_utility_out_of_range(self):
+        exps = {"A": np.array([1.0, 5.0]), "B": np.array([3.0, 3.0])}
+        with pytest.raises(ValueError, match="alpha must be in"):
+            alpha_utility(exps, alpha=-0.1)
+        with pytest.raises(ValueError, match="alpha must be in"):
+            alpha_utility(exps, alpha=1.1)
+
+    def test_alpha_regret_out_of_range(self):
+        exps = {"A": np.array([4.0, 0.0]), "B": np.array([3.0, 3.0])}
+        with pytest.raises(ValueError, match="alpha must be in"):
+            alpha_regret(exps, alpha=-0.01)
+        with pytest.raises(ValueError, match="alpha must be in"):
+            alpha_regret(exps, alpha=2.0)
+
+    def test_cps_expected_utilities_tau_out_of_range(self, ridge_cpd, squared_error_utility):
+        with pytest.raises(ValueError, match="tau must be in"):
+            cps_expected_utilities(ridge_cpd, squared_error_utility, x=None, tau=-0.5)
+        with pytest.raises(ValueError, match="tau must be in"):
+            cps_expected_utilities(ridge_cpd, squared_error_utility, x=None, tau=1.5)
+
+    def test_venn_decision_alpha_out_of_range(self, multiclass_venn_pred, zero_one_utility):
+        with pytest.raises(ValueError, match="alpha must be in"):
+            venn_decision(multiclass_venn_pred, zero_one_utility, x=None, alpha=-0.1)
+        with pytest.raises(ValueError, match="alpha must be in"):
+            venn_decision(multiclass_venn_pred, zero_one_utility, x=None, alpha=1.5)
+
+    def test_cpdm_predict_tau_out_of_range(self):
+        from online_cp.decision import ConformalPredictiveDecisionMaker
+
+        utility = UtilityFunction(lambda x, y, d: -(y - d) ** 2, decisions=[0, 1])
+        cdm = ConformalPredictiveDecisionMaker(utility, a=1.0)
+        X = np.random.default_rng(0).normal(size=(20, 2))
+        y = X[:, 0]
+        cdm.learn_initial_training_set(X, y)
+
+        with pytest.raises(ValueError, match="tau must be in"):
+            cdm.predict(X[0], tau=-0.1)
+        with pytest.raises(ValueError, match="tau must be in"):
+            cdm.predict_expected_utilities(X[0], tau=1.1)
+
+    def test_alpha_utility_boundary_values(self):
+        """alpha=0.0 and alpha=1.0 should work without error."""
+        exps = {"A": np.array([1.0, 5.0]), "B": np.array([3.0, 3.0])}
+        assert alpha_utility(exps, alpha=0.0) is not None
+        assert alpha_utility(exps, alpha=1.0) is not None
+
+    def test_tau_boundary_values(self, ridge_cpd, squared_error_utility):
+        """tau=0.0 and tau=1.0 should work without error."""
+        exps0 = cps_expected_utilities(ridge_cpd, squared_error_utility, x=None, tau=0.0)
+        exps1 = cps_expected_utilities(ridge_cpd, squared_error_utility, x=None, tau=1.0)
+        assert all(np.isfinite(v) for v in exps0.values())
+        assert all(np.isfinite(v) for v in exps1.values())
+
+
+class TestCPSDecisionMaximizes:
+    """Verify cps_decision returns the decision with highest expected utility."""
+
+    def test_returns_argmax(self, ridge_cpd, squared_error_utility):
+        exps = cps_expected_utilities(ridge_cpd, squared_error_utility, x=None, tau=0.5)
+        expected = max(exps, key=exps.get)
+        actual = cps_decision(ridge_cpd, squared_error_utility, x=None, tau=0.5)
+        assert actual == expected
+
+
+class TestUtilityFunctionValidation:
+    """UtilityFunction input validation."""
+
+    def test_empty_decisions_raises(self):
+        with pytest.raises(ValueError, match="non-empty"):
+            UtilityFunction(lambda x, y, d: 0, decisions=[])
+
+    def test_non_callable_raises(self):
+        with pytest.raises(TypeError, match="callable"):
+            UtilityFunction("not a function", decisions=[0, 1])
+
+    def test_repr(self):
+        u = UtilityFunction(lambda x, y, d: 0, decisions=[0, 1, 2])
+        assert repr(u) == "UtilityFunction(|D|=3)"

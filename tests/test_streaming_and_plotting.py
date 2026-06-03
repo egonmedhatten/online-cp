@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from online_cp import ConformalRidgeRegressor
-from online_cp.evaluate import progressive_val, iter_progressive_val
-from online_cp.metrics import ErrorRate, IntervalWidth
+from online_cp.evaluate import progressive_val, iter_progressive_val, progressive_val_venn, iter_progressive_val_venn
+from online_cp.metrics import ErrorRate, IntervalWidth, BrierScore
 
 
 @pytest.fixture
@@ -97,6 +97,59 @@ class TestStreamingEval:
         assert len(snapshots) == 2
         assert snapshots[0]["step"] == 10
         assert snapshots[1]["step"] == 20
+
+
+class TestVennEval:
+    """Tests for progressive_val_venn and iter_progressive_val_venn."""
+
+    @pytest.fixture
+    def venn_model(self):
+        from online_cp import VennAbersPredictor
+        rng = np.random.default_rng(42)
+        X = np.vstack([rng.normal(loc=[2, 0], size=(30, 2)),
+                       rng.normal(loc=[-2, 0], size=(30, 2))])
+        y = np.array([0] * 30 + [1] * 30)
+        idx = rng.permutation(60)
+        X, y = X[idx], y[idx]
+        model = VennAbersPredictor(scorer="knn", k=3)
+        model.learn_initial_training_set(X[:40], y[:40])
+        return model, X[40:], y[40:]
+
+    def test_progressive_val_venn_basic(self, venn_model):
+        model, X_test, y_test = venn_model
+        metric = BrierScore()
+        result = progressive_val_venn(model, X_test, y_test, metric=metric)
+        assert result is metric
+        assert metric._n == len(X_test)
+        assert 0 <= metric.get() <= 1
+
+    def test_progressive_val_venn_streaming(self, venn_model):
+        model, X_test, y_test = venn_model
+        stream = [(X_test[i], y_test[i]) for i in range(len(X_test))]
+        metric = BrierScore()
+        progressive_val_venn(model, stream, metric=metric)
+        assert metric._n == len(X_test)
+
+    def test_progressive_val_venn_learn_false(self, venn_model):
+        model, X_test, y_test = venn_model
+        metric = BrierScore()
+        progressive_val_venn(model, X_test, y_test, metric=metric, learn=False)
+        assert metric._n == len(X_test)
+
+    def test_iter_progressive_val_venn(self, venn_model):
+        model, X_test, y_test = venn_model
+        snapshots = list(
+            iter_progressive_val_venn(model, X_test, y_test, step=5)
+        )
+        assert len(snapshots) == len(X_test) // 5
+        assert snapshots[0]["step"] == 5
+        assert "brier_score" in snapshots[0] or "BrierScore" in str(snapshots[0])
+
+    def test_iter_progressive_val_venn_timestamps(self, venn_model):
+        model, X_test, y_test = venn_model
+        stream = [(X_test[i], y_test[i], f"t{i}") for i in range(len(X_test))]
+        snapshots = list(iter_progressive_val_venn(model, stream, step=10))
+        assert snapshots[0]["t"] == "t9"
 
 
 class TestPlotting:

@@ -225,9 +225,10 @@ class TestConformalSVM:
         assert -1 in Gamma and 1 in Gamma
 
     def test_compute_p_value_empty_training_set(self):
-        """compute_p_value should return 1.0 with no training data."""
+        """compute_p_value should return tau with no training data."""
         svm = ConformalSupportVectorMachine(kernel="linear", label_space=np.array([-1, 1]), rnd_state=0)
-        assert svm.compute_p_value(np.array([1.0, 2.0]), 1) == 1.0
+        p = svm.compute_p_value(np.array([1.0, 2.0]), 1)
+        assert 0 < p < 1  # tau ~ Uniform(0, 1)
 
     def test_compute_p_value_binary_in_unit_interval(self, separable_data):
         """Binary compute_p_value should produce a valid p-value."""

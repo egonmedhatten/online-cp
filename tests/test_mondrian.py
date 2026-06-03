@@ -699,6 +699,104 @@ class TestLabelConditionalMondrianClassifier:
         assert len(wrapper.categories_) == n_before + 1
         assert wrapper.categories_[-1] == y[10]
 
+
+# ---------------------------------------------------------------------------
+# Tiny-category edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestMondrianTinyCategory:
+    """Edge cases with very small per-category sample sizes."""
+
+    def test_ridge_one_training_point_in_category(self):
+        """Category with 1 training point → n_cat=2 → inf interval at eps < 1."""
+        rng = np.random.default_rng(111)
+        # Craft data: only 1 point has x[0] > 100 (rare category)
+        X = rng.standard_normal((20, 2))
+        X[0, 0] = 200.0  # this one goes to "rare" category
+        y = X @ [1.0, -0.5] + rng.normal(0, 0.3, 20)
+
+        def cat_fn(x):
+            return "rare" if x[0] > 100 else "common"
+
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=cat_fn,
+        )
+        wrapper.learn_initial_training_set(X, y)
+
+        # Test point also in "rare" category → n_cat = 1 (train) + 1 (test) = 2
+        x_test = np.array([150.0, 0.0])
+        # eps=0.1 < 2/2=1.0 → should be inf for bounds="both"
+        interval = wrapper.predict(x_test, epsilon=0.1)
+        assert interval.lower == -np.inf
+        assert interval.upper == np.inf
+
+    def test_kernel_ridge_zero_training_gives_inf(self):
+        """Kernel ridge with no training data returns inf interval."""
+        from online_cp.kernels import GaussianKernel
+
+        wrapper = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(a=1.0, kernel=GaussianKernel(sigma=1.0)),
+            category_fn=lambda x: "all",
+        )
+        # Don't train — model.X is None
+        interval = wrapper.predict(np.array([1.0, 2.0]), epsilon=0.1)
+        assert interval.lower == -np.inf
+        assert interval.upper == np.inf
+
+    def test_ridge_p_value_before_training(self):
+        """p-value with no training data (XTXinv is None) returns tau or 1."""
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalRidgeRegressor(a=1.0),
+            category_fn=lambda x: "all",
+        )
+        # Smoothed: should return tau (a random number in [0,1])
+        p = wrapper.compute_p_value(np.array([1.0, 2.0]), 0.5, smoothed=True)
+        assert 0 <= p <= 1
+        # Unsmoothed: should return 1
+        p_unsm = wrapper.compute_p_value(np.array([1.0, 2.0]), 0.5, smoothed=False)
+        assert p_unsm == 1
+
+    def test_lasso_p_value_before_training(self):
+        """Lasso p-value with no training data returns tau or 1."""
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=lambda x: "all",
+        )
+        p = wrapper.compute_p_value(np.array([1.0, 2.0]), 0.5, smoothed=True)
+        assert 0 <= p <= 1
+        p_unsm = wrapper.compute_p_value(np.array([1.0, 2.0]), 0.5, smoothed=False)
+        assert p_unsm == 1
+
+    def test_lasso_single_category_matches_non_mondrian(self):
+        """Lasso with all-same category should behave like non-Mondrian (same set)."""
+        rng = np.random.default_rng(222)
+        n, d = 30, 5
+        X = rng.standard_normal((n, d))
+        beta = np.array([2.0, 0, 1.0, 0, 0])
+        y = X @ beta + rng.normal(0, 0.3, n)
+
+        base_model = ConformalLassoRegressor(lam=0.3)
+        wrapper = MondrianConformalRegressor(
+            base_model=base_model,
+            category_fn=lambda x: "all",
+        )
+        wrapper.learn_initial_training_set(X, y)
+
+        x_test = rng.standard_normal(d)
+        interval = wrapper.predict(x_test, epsilon=0.2)
+        # Should be a finite interval (all training data in same category = full calibration)
+        assert np.isfinite(interval.lower) or np.isfinite(interval.upper)
+
+    def test_classifier_category_fn_rejects_non_callable(self):
+        """category_fn that is neither 'label' nor callable raises TypeError."""
+        with pytest.raises(TypeError, match="category_fn must be"):
+            MondrianConformalClassifier(
+                base_model=ConformalNearestNeighboursClassifier(k=3),
+                category_fn=42,
+            )
+
     def test_invalid_category_fn_raises(self):
         """Non-string, non-callable raises TypeError."""
         with pytest.raises(TypeError):

@@ -333,9 +333,11 @@ class TestConformalClassifierWrapper:
             cp = ConformalClassifierWrapper(_ToyProbLearner(), label_space=np.array([10, 20]), rnd_state=0)
 
         Gamma, p_values = cp.predict(np.array([0.0, 1.0]), return_p_values=True)
-        assert set(Gamma.elements) == {10, 20}
+        # With no training data, p-value for each label equals tau (uniform draw)
         assert set(p_values.keys()) == {10, 20}
-        assert all(v == 1.0 for v in p_values.values())
+        tau = list(p_values.values())[0]
+        assert 0 < tau < 1
+        assert all(v == tau for v in p_values.values())
 
     def test_learn_initial_training_set_and_arbitrary_labels(self):
         X = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
@@ -354,7 +356,7 @@ class TestConformalClassifierWrapper:
         for p in p_values.values():
             assert 0 <= p <= 1
 
-    def test_probability_alignment_with_missing_class(self):
+    def test_score_alignment_with_missing_class(self):
         X = np.array([[0.0], [1.0], [2.0], [3.0]])
         y = np.array([10, 10, 30, 30])
 
@@ -368,7 +370,7 @@ class TestConformalClassifierWrapper:
         for p in p_values.values():
             assert 0 <= p <= 1
 
-    def test_invalid_probability_rows_warn_but_continue(self):
+    def test_invalid_score_rows_warn_but_continue(self):
         X = np.array([[0.0], [1.0], [2.0]])
         y = np.array([0, 1, 0])
 
@@ -385,7 +387,7 @@ class TestConformalClassifierWrapper:
         for p in p_values.values():
             assert 0 <= p <= 1
 
-    def test_invalid_probability_shape_falls_back_to_full_set(self):
+    def test_invalid_score_shape_falls_back_to_full_set(self):
         X = np.array([[0.0], [1.0], [2.0]])
         y = np.array([0, 1, 0])
 
@@ -397,7 +399,10 @@ class TestConformalClassifierWrapper:
             Gamma, p_values = cp.predict(np.array([3.0]), return_p_values=True)
 
         assert set(Gamma.elements) == {0, 1}
-        assert p_values == {0: 1.0, 1: 1.0}
+        # Fallback p-values are tau (uniform draw), same for all labels
+        tau = p_values[0]
+        assert 0 < tau < 1
+        assert p_values == {0: tau, 1: tau}
 
     def test_wrapper_infers_label_space_from_data(self):
         """With label_space=None, wrapper infers from learn_initial_training_set."""

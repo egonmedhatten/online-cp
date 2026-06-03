@@ -33,16 +33,15 @@ from typing import Any, Callable, Hashable
 import numpy as np
 from numpy.typing import NDArray
 
-if __name__ != "__main__":
-    from online_cp.regressors import (
-        ConformalLassoRegressor,
-        ConformalPredictionInterval,
-        ConformalRegressor,
-        ConformalRidgeRegressor,
-        KernelConformalRidgeRegressor,
-        MultiLevelPredictionInterval,
-        _solve_lasso,
-    )
+from online_cp.regressors import (
+    ConformalLassoRegressor,
+    ConformalPredictionInterval,
+    ConformalRegressor,
+    ConformalRidgeRegressor,
+    KernelConformalRidgeRegressor,
+    MultiLevelPredictionInterval,
+    _solve_lasso,
+)
 
 __all__ = ["MondrianConformalRegressor", "MondrianConformalClassifier"]
 
@@ -112,7 +111,7 @@ class MondrianConformalRegressor:
             return self._predict_ridge(x, epsilon, bounds, cat)
         elif isinstance(self.base_model, KernelConformalRidgeRegressor):
             return self._predict_kernel_ridge(x, epsilon, bounds, cat)
-        elif isinstance(self.base_model, ConformalLassoRegressor):
+        else:
             return self._predict_lasso(x, epsilon, cat)
 
     def _predict_ridge(self, x, epsilon, bounds, cat):
@@ -169,7 +168,7 @@ class MondrianConformalRegressor:
     def _predict_lasso(self, x, epsilon, cat):
         model = self.base_model
         x = np.atleast_1d(x).ravel()
-        if model.X.shape[0] < 2:
+        if model.X is None or model.X.shape[0] < 2:
             return self._inf_interval(epsilon)
         if hasattr(epsilon, "__iter__"):
             predictions = {}
@@ -382,7 +381,7 @@ class MondrianConformalRegressor:
             return self._p_value_ridge(x, y, cat, **kwargs)
         elif isinstance(model, KernelConformalRidgeRegressor):
             return self._p_value_kernel_ridge(x, y, cat, **kwargs)
-        elif isinstance(model, ConformalLassoRegressor):
+        else:
             return self._p_value_lasso(x, y, cat, **kwargs)
 
     def _p_value_ridge(self, x, y, cat, bounds="both", smoothed=True, tau=None):
@@ -441,6 +440,8 @@ class MondrianConformalRegressor:
         x = np.atleast_1d(x).ravel()
         if tau is None and smoothed:
             tau = model.rnd_gen.uniform()
+        if model.X is None:
+            return tau if smoothed else 1
         X_aug = np.vstack([model.X, x.reshape(1, -1)])
         y_aug = np.append(model.y, y)
         beta_aug = _solve_lasso(X_aug, y_aug, model.lam, rho=model.rho, warm_start=model.beta)
@@ -703,25 +704,3 @@ class MondrianConformalClassifier:
             f"n_total={len(self.categories_)}, "
             f"base={self.base_model.__class__.__name__})"
         )
-
-
-if __name__ == "__main__":
-    import doctest
-    import sys
-
-    # Make intra-package imports available when run as a script
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from online_cp.regressors import (  # noqa: E402, F811
-        ConformalLassoRegressor,
-        ConformalPredictionInterval,
-        ConformalRegressor,
-        ConformalRidgeRegressor,
-        KernelConformalRidgeRegressor,
-        MultiLevelPredictionInterval,
-        _solve_lasso,
-    )
-
-    (failures, _) = doctest.testmod()
-    if failures:
-        sys.exit(1)

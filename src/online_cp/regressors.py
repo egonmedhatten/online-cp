@@ -479,8 +479,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
         B[-1] += 1  # e_{-1}[-1] = 1
 
         if self.studentised:
-            A = A / np.sqrt(1 - H_diag + 1e-12)
-            B = B / np.sqrt(1 - H_diag + 1e-12)
+            leverage = np.sqrt(np.clip(1 - H_diag, 1e-12, None))
+            A = A / leverage
+            B = B / leverage
 
         return A, B
 
@@ -1303,8 +1304,9 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
         if self.studentised:
             H_diag = np.diag(H)
-            A = A / np.sqrt(1 - H_diag + 1e-12)
-            B = B / np.sqrt(1 - H_diag + 1e-12)
+            leverage = np.sqrt(np.clip(1 - H_diag, 1e-12, None))
+            A = A / leverage
+            B = B / leverage
 
         return A, B
 

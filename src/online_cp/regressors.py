@@ -1793,8 +1793,8 @@ class ConformalLassoRegressor(ConformalRegressor):
         t_min = (self.y.min() - y0) - self.search_range_factor * y_range
 
         # Run homotopy in both directions (only if search range is non-trivial)
-        intervals_pos = self._run_homotopy(x, direction=+1, t_bound=t_max) if t_max > 0 else []
-        intervals_neg = self._run_homotopy(x, direction=-1, t_bound=t_min) if t_min < 0 else []
+        intervals_pos = self._run_homotopy(x, direction=+1, t_bound=t_max, epsilon=epsilon) if t_max > 0 else []
+        intervals_neg = self._run_homotopy(x, direction=-1, t_bound=t_min, epsilon=epsilon) if t_min < 0 else []
 
         # Merge intervals (shift from t-space to y-space)
         all_intervals = []
@@ -1882,7 +1882,7 @@ class ConformalLassoRegressor(ConformalRegressor):
         rank = np.sum(abs_res <= abs_res[-1])
         return rank <= threshold
 
-    def _run_homotopy(self, x_new, direction, t_bound):
+    def _run_homotopy(self, x_new, direction, t_bound, epsilon):
         """
         Run the piecewise linear homotopy in one direction.
 
@@ -1891,7 +1891,6 @@ class ConformalLassoRegressor(ConformalRegressor):
         n = self.X.shape[0]
         p = self.X.shape[1]
         lam = self.lam
-        epsilon = self.epsilon
         threshold = int(np.ceil((n + 1) * (1 - epsilon)))
 
         # sign of direction

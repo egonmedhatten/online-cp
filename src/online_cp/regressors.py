@@ -1343,12 +1343,6 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             epsilon = self.epsilon
 
         if self.X is not None:
-            # Temporarily update kernel matrix
-            k = self.kernel(self.X, x).reshape(-1, 1)
-            kappa = self.kernel(x, x)
-            K = self._update_K(self.K, k, kappa)
-            Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
-
             # Add row to X matrix
             X = np.append(self.X, x.reshape(1, -1), axis=0)
             n = X.shape[0]
@@ -1370,6 +1364,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     else:
                         result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
+                        k = self.kernel(self.X, x).reshape(-1, 1)
+                        kappa = self.kernel(x, x)
+                        K = self._update_K(self.K, k, kappa)
+                        Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
                         return result, build_precomputed(
                             X, K, Kinv, None, None
                         )
@@ -1389,11 +1387,21 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     else:
                         result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
+                        k = self.kernel(self.X, x).reshape(-1, 1)
+                        kappa = self.kernel(x, x)
+                        K = self._update_K(self.K, k, kappa)
+                        Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
                         return result, build_precomputed(
                             X, K, Kinv, None, None
                         )
                     else:
                         return result
+
+            # Update kernel matrix (deferred until after feasibility check)
+            k = self.kernel(self.X, x).reshape(-1, 1)
+            kappa = self.kernel(x, x)
+            K = self._update_K(self.K, k, kappa)
+            Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
 
             A, B = self.compute_A_and_B(X, K, Kinv, self.y)
 

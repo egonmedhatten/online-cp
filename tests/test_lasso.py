@@ -58,7 +58,6 @@ class TestConformalLassoRegressor:
         assert cp.X.shape == (30, 10)
         assert cp.y.shape == (30,)
         assert cp.beta is not None
-        assert cp.Sigma.shape == (10, 10)
 
     def test_predict_returns_interval(self, sparse_data):
         X, y, _ = sparse_data

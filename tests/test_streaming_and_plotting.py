@@ -326,3 +326,137 @@ class TestPlotting:
             ville.update(0.01)
         assert ville.rejected
         assert 21 <= ville.rejection_time <= 120  # fires within small-p region
+
+
+# ---------------------------------------------------------------------------
+# Calibration & Venn plotting tests
+# ---------------------------------------------------------------------------
+
+
+class TestPlotReliabilityDiagram:
+    def test_from_arrays(self):
+        from online_cp.plotting import plot_reliability_diagram
+
+        predicted = np.array([0.1, 0.4, 0.6, 0.9, 0.8, 0.3])
+        observed = np.array([0, 0, 1, 1, 1, 0])
+        ax = plot_reliability_diagram(predicted, observed, n_bins=3)
+        assert ax is not None
+        assert len(ax.lines) >= 1  # at least diagonal + curve
+
+    def test_from_calibration_error(self):
+        from online_cp.metrics import CalibrationError
+        from online_cp.plotting import plot_reliability_diagram
+        from online_cp.venn import VennPrediction
+
+        m = CalibrationError()
+        for _ in range(20):
+            venn = VennPrediction.binary(0.7, 0.7)
+            m.update(y=1, venn=venn)
+        ax = plot_reliability_diagram(m, n_bins=5)
+        assert ax is not None
+
+    def test_requires_observed_for_arrays(self):
+        from online_cp.plotting import plot_reliability_diagram
+
+        with pytest.raises(ValueError, match="observed is required"):
+            plot_reliability_diagram(np.array([0.5, 0.5]))
+
+
+class TestPlotReliabilityDiagramVenn:
+    def test_smoke_binary(self):
+        from online_cp.plotting import plot_reliability_diagram_venn
+        from online_cp.venn import VennPrediction
+
+        preds = [VennPrediction.binary(0.3, 0.8) for _ in range(20)]
+        labels = np.array([0, 1] * 10)
+        ax = plot_reliability_diagram_venn(preds, labels, n_bins=5)
+        assert ax is not None
+        assert len(ax.lines) >= 2  # diagonal + at least one curve
+
+    def test_which_point_only(self):
+        from online_cp.plotting import plot_reliability_diagram_venn
+        from online_cp.venn import VennPrediction
+
+        preds = [VennPrediction.binary(0.4, 0.9) for _ in range(20)]
+        labels = np.array([0, 1] * 10)
+        ax = plot_reliability_diagram_venn(preds, labels, which="point", n_bins=5)
+        assert ax is not None
+
+    def test_unknown_label_raises(self):
+        from online_cp.plotting import plot_reliability_diagram_venn
+        from online_cp.venn import VennPrediction
+
+        preds = [VennPrediction.binary(0.5, 0.5)]
+        labels = np.array([99])  # not in label_space [0, 1]
+        with pytest.raises(ValueError, match="not found in label_space"):
+            plot_reliability_diagram_venn(preds, labels)
+
+
+class TestPlotSharpness:
+    def test_smoke(self):
+        from online_cp.plotting import plot_sharpness
+        from online_cp.venn import VennPrediction
+
+        preds = [VennPrediction.binary(0.2, 0.9) for _ in range(30)]
+        ax = plot_sharpness(preds, n_bins=10)
+        assert ax is not None
+
+    def test_empty_predictions(self):
+        from online_cp.plotting import plot_sharpness
+
+        ax = plot_sharpness([], n_bins=10)
+        assert ax is not None  # returns empty axes without crashing
+
+
+class TestPlotPitHistogram:
+    def test_smoke(self):
+        from online_cp.plotting import plot_pit_histogram
+
+        rng = np.random.default_rng(42)
+        pit_values = rng.uniform(size=100)
+        ax = plot_pit_histogram(pit_values, n_bins=10)
+        assert ax is not None
+        assert len(ax.patches) >= 10  # histogram bars
+
+
+class TestPlotCalibrationConditional:
+    def test_smoke(self):
+        from online_cp.metrics import CalibrationError
+        from online_cp.plotting import plot_calibration_conditional
+        from online_cp.venn import VennPrediction
+
+        m1 = CalibrationError()
+        m2 = CalibrationError()
+        venn = VennPrediction.binary(0.7, 0.7)
+        for _ in range(20):
+            m1.update(y=1, venn=venn)
+            m2.update(y=0, venn=venn)
+        ax = plot_calibration_conditional({"Group A": m1, "Group B": m2}, n_bins=5)
+        assert ax is not None
+        assert len(ax.lines) >= 1  # at least diagonal
+
+
+class TestPlotValidation:
+    def test_venn_reliability_invalid_which_raises(self):
+        from online_cp.plotting import plot_reliability_diagram_venn
+        from online_cp.venn import VennPrediction
+
+        preds = [VennPrediction.binary(0.5, 0.5)]
+        labels = np.array([1])
+        with pytest.raises(ValueError, match="which must be"):
+            plot_reliability_diagram_venn(preds, labels, which="typo")
+
+    def test_intervals_length_mismatch_raises(self):
+        from online_cp.plotting import plot_intervals
+
+        y_true = np.array([1.0, 2.0, 3.0])
+        intervals = [(0.5, 1.5), (1.5, 2.5)]  # only 2, need 3
+        with pytest.raises(ValueError, match="Length mismatch"):
+            plot_intervals(y_true, intervals)
+
+    def test_pit_histogram_empty(self):
+        from online_cp.plotting import plot_pit_histogram
+
+        ax = plot_pit_histogram(np.array([]))
+        assert ax is not None
+        assert "no data" in ax.get_title().lower()

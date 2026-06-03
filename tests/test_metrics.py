@@ -250,7 +250,8 @@ class TestLogLoss:
         venn = VennPrediction.binary(1.0, 1.0)
         m = LogLoss()
         result = m.update(y=1, venn=venn)
-        assert np.isclose(result, 0.0, atol=1e-10)
+        # With no upper clip, -log(1.0) = 0.0 exactly
+        assert result == 0.0
 
     def test_uniform_binary(self):
         venn = VennPrediction.binary(0.5, 0.5)
@@ -408,3 +409,202 @@ class TestCRPSDeprecation:
         m = CRPS()
         with pytest.warns(DeprecationWarning, match="deprecated"):
             m.update(y=y, cpd=cpd)
+
+
+# ---------------------------------------------------------------------------
+# CalibrationError tests
+# ---------------------------------------------------------------------------
+
+from online_cp.metrics import CalibrationError
+
+
+class TestCalibrationError:
+    def test_binary_perfect_calibration(self):
+        """Predictions perfectly matching outcomes → ECE ≈ 0."""
+        m = CalibrationError()
+        # Predict P(y=1) = 0.9, outcome is 1
+        venn = VennPrediction.binary(0.9, 0.9)
+        m.update(y=1, venn=venn)
+        # Predict P(y=1) = 0.1, outcome is 0
+        venn = VennPrediction.binary(0.1, 0.1)
+        m.update(y=0, venn=venn)
+        # With only 2 points the ECE is basically |0.9 - 1| + |0.1 - 0| / 2
+        # but with binning the values are in separate bins
+        assert m.ece(n_bins=10) < 0.15
+
+    def test_binary_miscalibrated(self):
+        """Overconfident predictions → high ECE."""
+        m = CalibrationError()
+        # Always predict P(y=1) = 0.99 but only half the time y=1
+        venn_conf = VennPrediction.binary(0.99, 0.99)
+        for _ in range(10):
+            m.update(y=1, venn=venn_conf)
+        for _ in range(10):
+            m.update(y=0, venn=venn_conf)
+        # ECE should be high: predicted ~0.99, actual 0.5
+        assert m.ece(n_bins=5) > 0.4
+
+    def test_use_hypothesis_true(self):
+        """use_hypothesis=True picks probs[label_idx, pos_idx]."""
+        # probs[1,1] = P^{y=1}(y=1) = p1 = 0.8
+        venn = VennPrediction.binary(0.3, 0.8)
+        m = CalibrationError(use_hypothesis=True)
+        score = m.update(y=1, venn=venn)
+        # indicator = 1, pred_prob = probs[1, 1] = 0.8
+        assert np.isclose(score, abs(0.8 - 1.0))
+
+    def test_use_hypothesis_false(self):
+        """use_hypothesis=False picks venn.point[pos_idx]."""
+        venn = VennPrediction.binary(0.3, 0.8)
+        m = CalibrationError(use_hypothesis=False)
+        score = m.update(y=1, venn=venn)
+        # point = mean of [[0.7, 0.3], [0.2, 0.8]] = [0.45, 0.55] → normalized
+        expected_prob = venn.point[1]
+        assert np.isclose(score, abs(expected_prob - 1.0))
+
+    def test_max_history_truncates(self):
+        m = CalibrationError(max_history=3)
+        venn = VennPrediction.binary(0.6, 0.6)
+        for _ in range(10):
+            m.update(y=1, venn=venn)
+        assert len(m._pairs) == 3
+        assert len(m.predicted) == 3
+        assert len(m.observed) == 3
+        # _values and _n should also be bounded (not grow unboundedly)
+        assert len(m._values) == 3
+        assert m._n == 3
+
+    def test_reset_clears_pairs(self):
+        """Regression test: reset() must clear _pairs (not just _values/_sum/_n)."""
+        m = CalibrationError()
+        venn = VennPrediction.binary(0.7, 0.7)
+        m.update(y=1, venn=venn)
+        assert len(m._pairs) == 1
+        m.reset()
+        assert len(m._pairs) == 0
+        assert m._n == 0
+        assert m.predicted.shape == (0,)
+        assert m.observed.shape == (0,)
+
+    def test_predicted_and_observed_properties(self):
+        m = CalibrationError()
+        venn_pos = VennPrediction.binary(0.9, 0.9)
+        venn_neg = VennPrediction.binary(0.2, 0.2)
+        m.update(y=1, venn=venn_pos)
+        m.update(y=0, venn=venn_neg)
+        assert len(m.predicted) == 2
+        assert len(m.observed) == 2
+        # y=1 is the positive class → indicator=1
+        assert m.observed[0] == 1
+        # y=0 is not the positive class → indicator=0
+        assert m.observed[1] == 0
+
+    def test_empty_returns_zero_ece(self):
+        m = CalibrationError()
+        assert m.ece() == 0.0
+        p, o, c = m.bin_data()
+        assert len(p) == 0
+        assert len(o) == 0
+        assert len(c) == 0
+
+    def test_ece_quantile_strategy(self):
+        m = CalibrationError()
+        venn = VennPrediction.binary(0.7, 0.7)
+        for _ in range(20):
+            m.update(y=1, venn=venn)
+        # Should not raise, returns a finite ECE
+        ece_val = m.ece(n_bins=5, strategy="quantile")
+        assert np.isfinite(ece_val)
+
+    def test_ece_invalid_strategy_raises(self):
+        m = CalibrationError()
+        venn = VennPrediction.binary(0.5, 0.5)
+        m.update(y=1, venn=venn)
+        with pytest.raises(ValueError, match="Unknown strategy"):
+            m.ece(strategy="invalid")
+
+    def test_bin_data_shape(self):
+        m = CalibrationError()
+        venn = VennPrediction.binary(0.7, 0.7)
+        for _ in range(20):
+            m.update(y=1, venn=venn)
+            m.update(y=0, venn=venn)
+        mean_pred, frac_pos, counts = m.bin_data(n_bins=5)
+        # All outputs should have same length (≤ n_bins, empty bins dropped)
+        assert len(mean_pred) == len(frac_pos) == len(counts)
+        assert len(mean_pred) <= 5
+        assert counts.sum() == 40
+
+    def test_target_class_explicit(self):
+        """target_class parameter lets user specify which class to track."""
+        probs = np.array([[0.5, 0.3, 0.2]] * 3)
+        venn = VennPrediction(probs, np.array([0, 1, 2]))
+        m = CalibrationError(target_class=2)
+        score = m.update(y=2, venn=venn)
+        # point = [0.5, 0.3, 0.2] normalized → same. pred_prob = point[2] = 0.2
+        # indicator = 1 (label_idx=2 == pos_idx=2)
+        expected_prob = venn.point[2]
+        assert np.isclose(score, abs(expected_prob - 1.0))
+
+    def test_multiclass_without_target_class_raises(self):
+        """Multiclass (|Y|>2) without target_class raises ValueError."""
+        probs = np.array([[0.5, 0.3, 0.2]] * 3)
+        venn = VennPrediction(probs, np.array([0, 1, 2]))
+        m = CalibrationError()
+        with pytest.raises(ValueError, match="target_class must be specified"):
+            m.update(y=1, venn=venn)
+
+    def test_target_class_not_in_label_space_raises(self):
+        venn = VennPrediction.binary(0.5, 0.5)
+        m = CalibrationError(target_class=99)
+        with pytest.raises(ValueError, match="target_class=99"):
+            m.update(y=0, venn=venn)
+
+
+# ---------------------------------------------------------------------------
+# Validation regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidation:
+    def test_brier_score_unknown_label_raises(self):
+        venn = VennPrediction.binary(0.5, 0.5)
+        m = BrierScore()
+        with pytest.raises(ValueError, match="not found in label_space"):
+            m.update(y=99, venn=venn)
+
+    def test_logloss_unknown_label_raises(self):
+        venn = VennPrediction.binary(0.5, 0.5)
+        m = LogLoss()
+        with pytest.raises(ValueError, match="not found in label_space"):
+            m.update(y=99, venn=venn)
+
+    def test_calibration_error_unknown_label_raises(self):
+        venn = VennPrediction.binary(0.5, 0.5)
+        m = CalibrationError()
+        with pytest.raises(ValueError, match="not found in label_space"):
+            m.update(y=99, venn=venn)
+
+    def test_winkler_epsilon_zero_raises(self):
+        m = WinklerScore()
+        Gamma = ConformalPredictionInterval(lower=1.0, upper=3.0, epsilon=0.1)
+        with pytest.raises(ValueError, match="epsilon must be positive"):
+            m.update(y=2.0, Gamma=Gamma, epsilon=0.0)
+
+    def test_winkler_epsilon_negative_raises(self):
+        m = WinklerScore()
+        Gamma = ConformalPredictionInterval(lower=1.0, upper=3.0, epsilon=0.1)
+        with pytest.raises(ValueError, match="epsilon must be positive"):
+            m.update(y=2.0, Gamma=Gamma, epsilon=-0.1)
+
+    def test_duplicate_metric_names_raises(self):
+        with pytest.raises(ValueError, match="Duplicate metric names"):
+            ErrorRate() + ErrorRate()
+
+    def test_duplicate_names_in_metrics_init(self):
+        with pytest.raises(ValueError, match="Duplicate metric names"):
+            Metrics([ErrorRate(), ErrorRate()])
+
+    def test_different_metric_names_ok(self):
+        m = ErrorRate() + IntervalWidth()
+        assert len(m) == 2

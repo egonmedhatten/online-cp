@@ -193,12 +193,12 @@ def _plot_ville(wrapper, *, threshold, log_scale, ax, **kwargs):
         trajectory = log_values * scale
         envelope = log_running_max * scale
         thresh_val = np.log10(thresh)
-        ylabel = r"$\log_{10}$"
+        ylabel = r"$\log_{10} M_n$"
     else:
         trajectory = np.exp(log_values)
         envelope = np.exp(log_running_max)
         thresh_val = thresh
-        ylabel = "Statistic"
+        ylabel = r"$M_n$"
 
     kwargs.setdefault("label", "Martingale")
     ax.plot(steps, trajectory, **kwargs)
@@ -306,7 +306,10 @@ def _find_alarm_times_cusum(log_values, threshold, barrier_slope):
     log_thresh = np.log(threshold)
     alarming = False
     for n, lv in enumerate(log_values):
-        effective = log_thresh if barrier_slope is None else np.log(threshold + barrier_slope * n)
+        if barrier_slope is None:
+            effective = log_thresh
+        else:
+            effective = np.log(max(threshold + barrier_slope * n, 1e-300))
         if lv >= effective:
             if not alarming:
                 alarm_times.append(n)
@@ -354,6 +357,10 @@ def plot_intervals(y_true: NDArray[np.floating[Any]] | Sequence[float], interval
     ax = _get_ax(ax)
     y_true = np.asarray(y_true)
     n = len(y_true)
+    if len(intervals) != n:
+        raise ValueError(
+            f"Length mismatch: y_true has {n} elements but intervals has {len(intervals)}"
+        )
     steps = np.arange(n)
 
     # Extract lower/upper bounds
@@ -556,6 +563,11 @@ def plot_reliability_diagram_venn(
     -------
     ax : matplotlib.axes.Axes
     """
+    if which not in ("point", "hypothesis", "both"):
+        raise ValueError(
+            f"which must be 'point', 'hypothesis', or 'both', got {which!r}"
+        )
+
     ax = _get_ax(ax)
     labels = np.asarray(labels)
 
@@ -565,8 +577,17 @@ def plot_reliability_diagram_venn(
 
     for pred, y in zip(predictions, labels):
         label_idx = int(np.searchsorted(pred.label_space, y))
+        if label_idx >= len(pred.label_space) or pred.label_space[label_idx] != y:
+            raise ValueError(
+                f"y={y!r} not found in label_space={pred.label_space.tolist()}"
+            )
         if target_label is not None:
             target_idx = int(np.searchsorted(pred.label_space, target_label))
+            if target_idx >= len(pred.label_space) or pred.label_space[target_idx] != target_label:
+                raise ValueError(
+                    f"target_label={target_label!r} not in "
+                    f"label_space={pred.label_space.tolist()}"
+                )
         else:
             target_idx = min(1, len(pred.label_space) - 1)
 
@@ -652,6 +673,10 @@ def plot_sharpness(
 
     widths = np.array(widths)
 
+    if len(widths) == 0:
+        ax.set_title("Sharpness (no data)")
+        return ax
+
     kwargs.setdefault("edgecolor", "black")
     kwargs.setdefault("alpha", 0.7)
     ax.hist(widths, bins=n_bins, **kwargs)
@@ -698,9 +723,13 @@ def plot_pit_histogram(
     """
     ax = _get_ax(ax)
     pit_values = np.asarray(pit_values)
+    n_total = len(pit_values)
+
+    if n_total == 0:
+        ax.set_title("PIT Histogram (no data)")
+        return ax
 
     counts, bin_edges = np.histogram(pit_values, bins=n_bins, range=(0, 1))
-    n_total = len(pit_values)
     freq = counts / n_total
 
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
@@ -767,7 +796,7 @@ def plot_calibration_conditional(
         kw = dict(kwargs)
         kw.setdefault("marker", "o")
         kw.setdefault("label", name)
-        kw.setdefault("color", f"C{i}")
+        kw.setdefault("color", f"C{i % 10}")
         ax.plot(mean_pred, frac_pos, **kw)
 
     ax.set_xlabel("Mean predicted probability")

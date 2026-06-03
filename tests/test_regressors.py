@@ -68,21 +68,6 @@ class TestConformalRidgeRegressor:
 
         assert np.allclose(XTXinv_incremental, XTXinv_full, atol=1e-10)
 
-    def test_compute_A_and_B_matches_old(self, linear_dataset):
-        X, y = linear_dataset
-        cp = ConformalRidgeRegressor(a=1.0, warnings=False)
-        cp.learn_initial_training_set(X[:20], y[:20])
-
-        x_test = X[20]
-        X_aug = np.append(cp.X, x_test.reshape(1, -1), axis=0)
-        XTXinv = cp.XTXinv - (cp.XTXinv @ np.outer(x_test, x_test) @ cp.XTXinv) / (1 + x_test.T @ cp.XTXinv @ x_test)
-
-        A_old, B_old = cp.compute_A_and_B_OLD(X_aug, XTXinv, y[:20])
-        A_new, B_new = cp.compute_A_and_B(X_aug, XTXinv, y[:20])
-
-        assert np.allclose(A_old, A_new, atol=1e-10)
-        assert np.allclose(B_old, B_new, atol=1e-10)
-
     def test_minimum_training_set(self):
         cp = ConformalRidgeRegressor()
         assert cp.minimum_training_set(0.1) == 20

@@ -685,12 +685,12 @@ class VennAbersPredictor:
             return pred
 
         # Dispatch: binary vs multiclass
-        # Binary path requires labels {0, 1}; other 2-class problems use multiclass OVR
+        # Binary path requires labels {0, 1}; other 2-class problems use multiclass OVR.
+        # Single-class label_space also uses binary path (hypothesizes both 0 and 1).
         _is_binary = (
             self.label_space is not None
-            and len(self.label_space) == 2
-            and self.label_space[0] == 0
-            and self.label_space[1] == 1
+            and len(self.label_space) <= 2
+            and (len(self.label_space) <= 1 or (self.label_space[0] == 0 and self.label_space[1] == 1))
         )
         if not _is_binary:
             if self.scorer == "ridge":
@@ -1081,7 +1081,7 @@ class VennAbersPredictor:
             # Distance to class 1
             others_1 = idx_1[idx_1 != i]
             if len(others_1) == 0:
-                d_to_1 = 0.0
+                d_to_1 = np.inf
             else:
                 d_1_all = D_work[i, others_1]
                 k_1 = min(k_use, len(others_1))
@@ -1362,7 +1362,13 @@ class NearestNeighboursVennPredictor:
 
         test_idx = n  # index of new example in augmented arrays
 
-        if len(self.label_space) <= 2:
+        # Binary path requires labels {0, 1}; other 2-class problems use multiclass
+        _is_binary = (
+            len(self.label_space) == 2
+            and self.label_space[0] == 0
+            and self.label_space[1] == 1
+        )
+        if _is_binary or len(self.label_space) <= 1:
             return self._predict_binary(D_aug, k_eff, test_idx)
         else:
             return self._predict_multiclass(D_aug, k_eff, test_idx)

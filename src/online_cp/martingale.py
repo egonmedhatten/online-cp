@@ -13,7 +13,6 @@ from copy import deepcopy
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 from scipy.integrate import quad
 from scipy.optimize import brentq, minimize, minimize_scalar
 from scipy.special import betaln, gammainc, gammaln, logsumexp
@@ -32,8 +31,6 @@ except ImportError:
         return lambda f: f
 
     HAS_NUMBA = False
-
-_NUMBA_BROKEN = False  # Set True on first numba runtime failure
 
 __all__ = [
     "PluginMartingale",
@@ -267,12 +264,8 @@ class GaussianKDE(BettingStrategy):
 
     def _kernel_pdf_reflect(self, x, data, h):
         """Reflected Gaussian kernel PDF."""
-        global _NUMBA_BROKEN
-        if HAS_NUMBA and not _NUMBA_BROKEN:
-            try:
-                return _reflected_kde_pdf_numba(float(x), data, h)
-            except (ModuleNotFoundError, RuntimeError, TypeError):
-                _NUMBA_BROKEN = True
+        if HAS_NUMBA:
+            return _reflected_kde_pdf_numba(float(x), data, h)
         x = np.atleast_1d(x)
         pdf_orig = np.mean(norm.pdf(x[:, None], loc=data, scale=h), axis=1)
         pdf_neg = np.mean(norm.pdf(x[:, None], loc=-data, scale=h), axis=1)
@@ -282,12 +275,8 @@ class GaussianKDE(BettingStrategy):
 
     def _kernel_cdf_reflect(self, x, data, h):
         """Reflected Gaussian kernel CDF."""
-        global _NUMBA_BROKEN
-        if HAS_NUMBA and not _NUMBA_BROKEN:
-            try:
-                return _reflected_kde_cdf_numba(float(x), data, h)
-            except (ModuleNotFoundError, RuntimeError, TypeError):
-                _NUMBA_BROKEN = True
+        if HAS_NUMBA:
+            return _reflected_kde_cdf_numba(float(x), data, h)
         x = np.atleast_1d(x)
         cdf_orig = np.mean(norm.cdf(x[:, None], loc=data, scale=h), axis=1)
         cdf_neg = np.mean(norm.cdf(x[:, None], loc=-data, scale=h), axis=1)
@@ -806,23 +795,19 @@ class ExpertAggregationStrategy(BettingStrategy):
         return float(np.dot(weights, [expert.integrate(p) for expert in self.experts]))
 
     def update(self, p: float) -> None:
-        # Update weights based on expert performance
+        # 1. Update log-weights based on expert performance
         gains = np.array([expert.bet(p) for expert in self.experts])
-        master_prediction = np.dot(self.get_current_weights(), gains)
-        loss = 1.0 - np.clip(master_prediction / self.num_experts, 0, 1)
-        alpha_t = self.base_alpha * loss
-
         log_gains = np.log(np.maximum(gains, 1e-12))
         self.log_weights += self.learning_rate * log_gains
 
-        intermediate_weights = self.get_current_weights()
-        final_weights = (1 - alpha_t) * intermediate_weights + alpha_t / self.num_experts
-        final_weights /= np.sum(final_weights)
+        # 2. Regularize: mix towards uniform (prevents weight collapse)
+        weights = self.get_current_weights()
+        final_weights = (1 - self.base_alpha) * weights + self.base_alpha / self.num_experts
         self.log_weights = np.log(np.maximum(final_weights, 1e-12))
 
         self.expert_weights_history.append(final_weights.copy())
 
-        # Then update each expert
+        # 3. Update each expert (predict-then-learn order)
         for expert in self.experts:
             expert.update(p)
 
@@ -975,33 +960,34 @@ class ConformalTestMartingale:
 
 
 class PluginMartingale(ConformalTestMartingale):
-    """Plugin martingale using a betting strategy with cautious-start mixing.
+    """Plugin martingale using a betting strategy for density estimation.
 
-    The martingale wraps a ``BettingStrategy`` and applies cautious mixing:
-    during the first ``min_sample_size`` observations, the strategy's density
-    is linearly mixed towards uniform to avoid catastrophic loss before the
-    density estimate is reliable.
+    The martingale wraps a ``BettingStrategy`` whose ``bet(p)`` method provides
+    the predictive density (betting function) at each step. The strategy is
+    updated *after* the bet — predict-then-learn order — preserving the
+    martingale property.
 
     Protocol per step:
     1. **Predict**: evaluate ``strategy.bet(p)`` (uses past data only)
-    2. **Mix**: apply cautious start ``b = λ * f + (1 - λ)``
-    3. **Accumulate**: ``logM += log(b)``
-    4. **Learn**: call ``strategy.update(p)``
-    5. **Expose**: set ``b_n`` and ``B_n`` for the *next* step
+    2. **Accumulate**: ``logM += log(bet)``
+    3. **Learn**: call ``strategy.update(p)``
+    4. **Expose**: set ``b_n`` and ``B_n`` for the *next* step
+
+    For cautious behaviour during early steps (small sample), use
+    :class:`ExpertAggregationStrategy` to mix the primary strategy with a
+    uniform baseline, or wrap in a :class:`SleeperStayer`.
 
     Parameters
     ----------
     betting_strategy : BettingStrategy or type
         An instantiated strategy, or a class to be instantiated with kwargs.
-    min_sample_size : int
-        Number of steps over which to linearly ramp up from uniform to full betting.
     **kwargs
         Passed to the strategy constructor if a class is given.
 
     Examples
     --------
     >>> strat = FixedStrategy(pdf=lambda x: 2 if x < 0.5 else 0, check_integration=False)
-    >>> m = PluginMartingale(betting_strategy=strat, min_sample_size=0)
+    >>> m = PluginMartingale(betting_strategy=strat)
     >>> m.update(0.1)
     >>> bool(np.isclose(m.M, 2.0))
     True
@@ -1013,13 +999,10 @@ class PluginMartingale(ConformalTestMartingale):
     def __init__(
         self,
         betting_strategy: type[BettingStrategy] | BettingStrategy = GaussianKDE,
-        min_sample_size: int = 100,
         store_p_values: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(store_p_values)
-        self.min_sample_size = min_sample_size
-        self._n = 0
 
         if isinstance(betting_strategy, BettingStrategy):
             self.strategy = betting_strategy
@@ -1027,50 +1010,37 @@ class PluginMartingale(ConformalTestMartingale):
             betting_kwargs = kwargs if kwargs else {}
             self.strategy = betting_strategy(**betting_kwargs)
 
-        # Expose initial b_n / B_n (with mixing at step 0)
+        # Expose initial b_n / B_n
         self._update_exposed_functions()
-
-    def _mixing_parameter(self, n):
-        """Linear ramp from 0 to 1 over min_sample_size steps."""
-        if self.min_sample_size == 0:
-            return 1.0
-        return min(n / self.min_sample_size, 1.0)
 
     def _update_exposed_functions(self):
         """Set b_n and B_n for the *next* step (using current strategy state)."""
-        lam = self._mixing_parameter(self._n)
         strategy_snapshot = deepcopy(self.strategy)
 
-        def b_n(x, _lam=lam, _s=strategy_snapshot):
-            return _lam * _s.bet(x) + (1 - _lam)
+        def b_n(x, _s=strategy_snapshot):
+            return _s.bet(x)
 
-        def B_n(x, _lam=lam, _s=strategy_snapshot):
-            return _lam * _s.integrate(x) + (1 - _lam) * x
+        def B_n(x, _s=strategy_snapshot):
+            return _s.integrate(x)
 
         self.b_n = b_n
         self.B_n = B_n
 
     def update(self, p: float) -> None:
         # 1. Predict: evaluate current betting function
-        f = self.strategy.bet(p)
-        F = self.strategy.integrate(p)
+        b = self.strategy.bet(p)
 
-        # 2. Mix (cautious start)
-        lam = self._mixing_parameter(self._n)
-        b = lam * f + (1 - lam)
-
-        # 3. Accumulate wealth
+        # 2. Accumulate wealth
         self.logM += np.log(b)
         self.log_martingale_values.append(self.logM)
 
         if self.store_p_values:
             self.p_values.append(p)
 
-        # 4. Learn
-        self._n += 1
+        # 3. Learn
         self.strategy.update(p)
 
-        # 5. Mark b_n/B_n stale (lazy recomputation on access)
+        # 4. Mark b_n/B_n stale (lazy recomputation on access)
         self._mark_stale()
 
 
@@ -1529,7 +1499,7 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         log_gamma_n_plus_1 = gammaln(n + 1)
         val_gammainc = gammainc(n + 1, arg)
         if val_gammainc <= 0:
-            log_incomplete_gamma = -700
+            log_incomplete_gamma = -700  # underflow floor (~1e-304)
         else:
             log_incomplete_gamma = log_gamma_n_plus_1 + np.log(val_gammainc)
         return -L + log_incomplete_gamma - (n + 1) * np.log(arg)
@@ -1840,19 +1810,3 @@ class ShiryaevRobertsWrapper:
         return self.R > threshold
 
 
-if __name__ == "__main__":
-    import doctest
-    import sys
-
-    # Run tests and provide feedback
-    print("Running doctests...")
-    # Suppress warnings during testing to keep output clean
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        (failures, tests) = doctest.testmod()
-
-    if failures:
-        print(f"FAILED: {failures} out of {tests} tests failed.")
-        sys.exit(1)
-    else:
-        print(f"Success: {tests} tests passed.")

@@ -207,7 +207,7 @@ class TestPluginMartingale:
     @pytest.mark.parametrize("strategy_cls", [GaussianKDE, BetaMoments, BetaMLE])
     def test_grows_under_alternative(self, strategy_cls, skewed_p_values):
         strategy = strategy_cls()
-        m = PluginMartingale(betting_strategy=strategy, min_sample_size=10)
+        m = PluginMartingale(betting_strategy=strategy)
         for p in skewed_p_values[:200]:
             m.update(p)
         assert m.logM > 0, f"{strategy_cls.__name__}: expected growth, got logM={m.logM}"
@@ -215,7 +215,7 @@ class TestPluginMartingale:
     def test_fixed_strategy(self):
         """FixedStrategy with pdf=2*(1-x) should grow on small p-values."""
         fs = FixedStrategy(pdf=lambda x: 2 * (1 - x), check_integration=False)
-        m = PluginMartingale(betting_strategy=fs, min_sample_size=0)
+        m = PluginMartingale(betting_strategy=fs)
         for _ in range(20):
             m.update(0.1)
         assert m.logM > 0

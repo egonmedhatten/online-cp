@@ -205,12 +205,12 @@ class VennPrediction:
 
     @property
     def point(self):
-        """Aggregate point prediction: normalized mean of all hypothesis rows."""
-        mean = self.probs.mean(axis=0)
-        s = mean.sum()
-        if s > 0:
-            return mean / s
-        return np.full(len(self.label_space), 1.0 / len(self.label_space))
+        """Aggregate point prediction: mean of all hypothesis rows.
+
+        Each row is already a valid probability distribution (sums to 1),
+        so their mean also sums to 1 — no renormalization needed.
+        """
+        return self.probs.mean(axis=0)
 
     def __repr__(self):
         if len(self.label_space) == 2:

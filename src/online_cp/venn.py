@@ -17,16 +17,12 @@ from scipy.spatial.distance import cdist, pdist, squareform
 
 try:
     from numba import njit
-
-    HAS_NUMBA = True
 except ImportError:
 
     def njit(*args, **kwargs):
         if args and callable(args[0]):
             return args[0]
         return lambda f: f
-
-    HAS_NUMBA = False
 
 __all__ = [
     "VennAbersPredictor",
@@ -131,10 +127,7 @@ def _isotonic_calibrate(scores, labels, query_idx):
 
     _pava_inplace(y_sorted, w_sorted)
 
-    # Find where query_idx landed in the sorted order
-    query_pos = np.searchsorted(order, query_idx)
-    # searchsorted won't work directly — we need the position of query_idx in `order`
-    # Actually we need: which position in the sorted array corresponds to query_idx
+    # Find which position in the sorted array corresponds to query_idx
     pos = np.flatnonzero(order == query_idx)[0]
     return y_sorted[pos]
 
@@ -426,7 +419,6 @@ class VennAbersPredictor:
 
         # k-NN state
         self.D = None
-        self._label_indices = None
 
         # Kernel/SVM state
         self.K = None  # Gram matrix
@@ -539,7 +531,12 @@ class VennAbersPredictor:
         if self.scorer == "ridge":
             self.p = X.shape[1]
             self.Id = np.identity(self.p)
-            self.XTXinv = np.linalg.inv(X.T @ X + self.a * self.Id)
+            try:
+                self.XTXinv = np.linalg.inv(X.T @ X + self.a * self.Id)
+            except np.linalg.LinAlgError:
+                raise ValueError(
+                    "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise."
+                ) from None
         elif self.scorer == "kernel_ridge":
             self.K = self._kernel(X)
             Ka = self.K + self.a * np.identity(self.K.shape[0])
@@ -549,7 +546,6 @@ class VennAbersPredictor:
                 self.Ka_inv = np.linalg.pinv(Ka)
         elif self.scorer == "knn":
             self.D = self.distance_func(X)
-            self._label_indices = {0: np.flatnonzero(y == 0), 1: np.flatnonzero(y == 1)}
         elif self.scorer == "svm":
             self.K = self._kernel(X)
 
@@ -589,7 +585,12 @@ class VennAbersPredictor:
             if self.scorer == "ridge":
                 self.p = self.X.shape[1]
                 self.Id = np.identity(self.p)
-                self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+                try:
+                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+                except np.linalg.LinAlgError:
+                    raise ValueError(
+                        "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise."
+                    ) from None
             elif self.scorer == "kernel_ridge":
                 self.K = self._kernel(self.X)
                 Ka = self.K + self.a * np.identity(1)
@@ -599,7 +600,6 @@ class VennAbersPredictor:
                     self.Ka_inv = np.linalg.pinv(Ka)
             elif self.scorer == "knn":
                 self.D = self.distance_func(self.X)
-                self._label_indices = {0: np.flatnonzero(self.y == 0), 1: np.flatnonzero(self.y == 1)}
             elif self.scorer == "svm":
                 self.K = self._kernel(self.X)
         else:
@@ -627,7 +627,6 @@ class VennAbersPredictor:
                     self.D = D_new
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
-                self._label_indices = {0: np.flatnonzero(self.y == 0), 1: np.flatnonzero(self.y == 1)}
 
             elif self.scorer == "kernel_ridge":
                 if precomputed is not None and "K" in precomputed and "Ka_inv" in precomputed:
@@ -686,7 +685,14 @@ class VennAbersPredictor:
             return pred
 
         # Dispatch: binary vs multiclass
-        if self.label_space is not None and len(self.label_space) > 2:
+        # Binary path requires labels {0, 1}; other 2-class problems use multiclass OVR
+        _is_binary = (
+            self.label_space is not None
+            and len(self.label_space) == 2
+            and self.label_space[0] == 0
+            and self.label_space[1] == 1
+        )
+        if not _is_binary:
             if self.scorer == "ridge":
                 return self._predict_multiclass_ridge(x, return_update)
             elif self.scorer == "kernel_ridge":
@@ -1476,11 +1482,3 @@ class NearestNeighboursVennPredictor:
 
         return taxonomies
 
-
-if __name__ == "__main__":
-    import doctest
-    import sys
-
-    (failures, _) = doctest.testmod()
-    if failures:
-        sys.exit(1)

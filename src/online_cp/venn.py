@@ -414,8 +414,6 @@ class VennAbersPredictor:
 
         # Ridge state
         self.XTXinv = None
-        self.p = None
-        self.Id = None
 
         # k-NN state
         self.D = None
@@ -425,8 +423,6 @@ class VennAbersPredictor:
         self.Ka_inv = None  # (K + aI)^-1 for kernel-ridge
         if scorer in ("svm", "kernel_ridge"):
             self._kernel = self._resolve_kernel(kernel)
-        else:
-            self._kernel_spec = kernel  # store for later if needed
 
     def _standard_distance_func(self, X, y=None):
         X = np.atleast_2d(X)
@@ -529,10 +525,9 @@ class VennAbersPredictor:
         self.y = y
 
         if self.scorer == "ridge":
-            self.p = X.shape[1]
-            self.Id = np.identity(self.p)
+            Id = np.identity(X.shape[1])
             try:
-                self.XTXinv = np.linalg.inv(X.T @ X + self.a * self.Id)
+                self.XTXinv = np.linalg.inv(X.T @ X + self.a * Id)
             except np.linalg.LinAlgError:
                 raise ValueError(
                     "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise."
@@ -583,10 +578,9 @@ class VennAbersPredictor:
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=int)
             if self.scorer == "ridge":
-                self.p = self.X.shape[1]
-                self.Id = np.identity(self.p)
+                Id = np.identity(self.X.shape[1])
                 try:
-                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
+                    self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * Id)
                 except np.linalg.LinAlgError:
                     raise ValueError(
                         "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise."
@@ -1094,14 +1088,11 @@ class VennAbersPredictor:
 
     @staticmethod
     def _compute_knn_scores(D, labels, k, agg_func):
-        """Compute k-NN nonconformity scores: agg(d_same) - agg(d_diff).
+        """Compute monotone k-NN scores for binary isotonic calibration.
 
-        For each point i, compute the aggregated distance to k nearest
-        same-class neighbours minus aggregated distance to k nearest
-        different-class neighbours. Higher score = more likely class 1.
-
-        We use d_diff - d_same so that higher scores correspond to higher
-        P(y=1) when y=1 points cluster together.
+        For each point i, computes agg(d_to_class_0) - agg(d_to_class_1)
+        using the k nearest neighbours of the appropriate class (LOO).
+        Higher score → more likely class 1 (monotone for PAVA).
         """
         n = len(labels)
         k_use = min(k, n - 1)

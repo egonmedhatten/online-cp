@@ -143,7 +143,41 @@ Items marked [OK] have been verified or are acceptable.
 
 ## venn.py
 
-*(not yet audited)*
+**Status:** Audited (4 passes). Clean.
+
+### Pass 1 changes (c741548):
+1. Removed dead code: `HAS_NUMBA` flag, unused `searchsorted` in `_isotonic_calibrate`, `__main__` block
+2. [FIX] Ridge `learn_initial_training_set` / `learn_one` cold-start: added try/except on `np.linalg.inv` calls → clear `LinAlgError` fallback
+3. [FIX] Binary dispatch: non-{0,1} 2-class labels incorrectly entered binary path that hardcodes hypothesis labels 0/1 → now routes to multiclass
+
+### Pass 2 changes (d5c9061):
+1. [FIX] `_compute_knn_scores_binary`: empty class-1 asymmetry — `d_to_1 = 0.0` when class 1 empty, but `d_to_0 = np.inf` when class 0 empty. Fixed: both now use `np.inf` for empty class.
+2. [FIX] `NearestNeighboursVennPredictor._predict_binary`: hardcodes `for v in (0, 1)` and `np.sum(labels)` — non-{0,1} 2-class now routes to multiclass path
+3. [FIX] Single-class `label_space = [1]`: added `len(label_space) <= 1` guard → enters binary path (both VennAbersPredictor and NearestNeighboursVennPredictor)
+
+### Pass 3 changes (3682d1e):
+1. Removed dead state: `self.p`, `self.Id`, `self._kernel_spec` — replaced with local `Id` variables
+2. Fixed misleading `_compute_knn_scores` docstring (title said "d_same - d_diff", body said "d_diff - d_same"; actual formula is `d_to_class0 - d_to_class1`)
+
+### Pass 3 findings (verified correct, no changes needed):
+- [OK] Sherman-Morrison hat-matrix trick (ridge scorer)
+- [OK] Kernel ridge hat matrix and `_augment_kernel_state` block inverse
+- [OK] OVR multiclass: all off-diagonal hypotheses share `p_off` (correct — new point's label only affects its own class score)
+- [OK] Precomputed kernel state timing (augment before score computation)
+- [OK] Single-class edge cases in NN Venn (hypothesise both 0 and 1)
+
+### Design notes (deferred):
+- [NOTE] `learn_one` with `precomputed=True`: caller provides kernel row/col but there is no check that the supplied `x` matches. If caller passes wrong `(x, y)` pair, state silently corrupts. This pattern is shared across regressors.py, classifiers.py, CPS.py — any precomputed path trusts the caller. **Possible future fix:** store `x` in precomputed state and raise on mismatch. Low priority — user responsibility, but easy to misuse.
+
+### Pass 4 findings (final sweep, no changes needed):
+- [OK] `_compute_knn_scores` empty same-class `d_same = 0.0` (binary path): semantically "I'm in my own class" — data-dependent score rather than -inf; doesn't affect PAVA output when entire class is empty (constant anyway)
+- [OK] `_compute_knn_scores_binary` empty-class `inf` (OVR path): symmetric treatment; also irrelevant when entire binarized class is empty
+- [OK] `VennPrediction.point` normalization: redundant (rows sum to 1 after multiclass normalization) but harmless safety
+- [OK] Row normalization all-zero guard (`row_sums == 0 → 1.0`) — correct fallback to uniform
+- [OK] Binary/multiclass taxonomy methods differ (sum-of-labels vs same-class-count): intentional, different taxonomies
+- [OK] `k_eff = min(self.k, n)` consistent with `_compute_taxonomies` `if k >= n-1` check
+- [OK] All imports used (`warnings` for deprecation, `Any`/`NDArray` for type hints, `cdist`/`pdist`/`squareform`)
+- [OK] No remaining dead code or unused variables
 
 ## martingale.py
 
@@ -215,4 +249,7 @@ path still passes and benefits from the base-class fixes.
 
 # Post audit check all modules holistically
 Once the full audit is completed, check all modules once more. Go though the entire package, including docs, README, scripts, and notebooks (excluding those that start with "z_").
-This is the final pre-flight check.
+Also go through everything and check that it agrees with the book and/or paper(s), so that
+everything is theoretically sound and rigorous. Finally, verify that the code is soundly structured and modular enough to be
+developed and maintained with relative ease.
+This is the final pre-flight check. After the full audit, the package should be ready to release version 0.3.0.

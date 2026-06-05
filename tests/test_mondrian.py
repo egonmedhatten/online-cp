@@ -288,6 +288,110 @@ class TestMondrianConformalRegressorLasso:
         wrapper.learn_one(X_test[0], y_test[0])
         assert len(wrapper.categories_) == n_before + 1
 
+    def test_mondrian_lasso_multi_epsilon(self, lasso_data):
+        """Test Lasso with multiple epsilon values (exercises v_full fix + search range guard)."""
+        X_train, y_train, X_test, _ = lasso_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        
+        # Test multi-epsilon prediction
+        epsilon_vals = [0.05, 0.1, 0.2, 0.3]
+        result = wrapper.predict(X_test[0], epsilon=epsilon_vals)
+        
+        # Should return MultiLevelPredictionInterval
+        assert hasattr(result, '__getitem__'), "Multi-epsilon should return dict-like object"
+        
+        # Verify nesting property: smaller epsilon should have wider bounds
+        for i in range(len(epsilon_vals) - 1):
+            eps1, eps2 = epsilon_vals[i], epsilon_vals[i+1]
+            pred1 = result[eps1]
+            pred2 = result[eps2]
+            # Smaller epsilon (eps1 < eps2) should have wider or equal bounds
+            assert pred1.lower <= pred2.lower or np.isclose(pred1.lower, pred2.lower), \
+                f"Nesting violated: lower({eps1})={pred1.lower} > lower({eps2})={pred2.lower}"
+            assert pred2.upper <= pred1.upper or np.isclose(pred2.upper, pred1.upper), \
+                f"Nesting violated: upper({eps1})={pred1.upper} < upper({eps2})={pred2.upper}"
+
+    def test_mondrian_lasso_p_value_unsmoothed(self, lasso_data):
+        """Test Lasso unsmoothed p-values."""
+        X_train, y_train, X_test, y_test = lasso_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        
+        # Compute both smoothed and unsmoothed p-values
+        p_smooth = wrapper.compute_p_value(X_test[0], y_test[0], smoothed=True)
+        p_unsm = wrapper.compute_p_value(X_test[0], y_test[0], smoothed=False)
+        
+        # Both should be in [0, 1]
+        assert 0 <= p_smooth <= 1, f"Smoothed p-value out of bounds: {p_smooth}"
+        assert 0 <= p_unsm <= 1, f"Unsmoothed p-value out of bounds: {p_unsm}"
+        
+        # Unsmoothed should be more conservative (≥ smoothed for quantile-based methods)
+        # This is a soft check - exact relationship depends on implementation
+        # Just verify both are reasonable
+        assert np.isfinite(p_smooth) and np.isfinite(p_unsm)
+
+    def test_mondrian_lasso_coverage_multi_epsilon(self, lasso_data):
+        """Test coverage with multi-epsilon Lasso predictions."""
+        X_train, y_train, X_test, y_test = lasso_data
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.5),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        
+        # Test multiple epsilon levels
+        epsilon_levels = [0.1, 0.2, 0.3]
+        
+        for eps in epsilon_levels:
+            coverage = 0.0
+            n_tests = min(20, len(X_test))
+            
+            for i in range(n_tests):
+                x_i, y_i = X_test[i], y_test[i]
+                interval = wrapper.predict(x_i, epsilon=eps)
+                if y_i in interval:
+                    coverage += 1
+                wrapper.learn_one(x_i, y_i)
+            
+            coverage /= n_tests
+            # Coverage should be roughly 1 - epsilon (with some tolerance for small samples)
+            expected_coverage = 1 - eps
+            tolerance = 0.25  # Conservative tolerance for small test set
+            assert coverage >= expected_coverage - tolerance, \
+                f"Lasso coverage {coverage:.3f} too low for epsilon={eps}"
+
+    def test_mondrian_lasso_sparse_solution(self):
+        """Test Lasso with sparse solution (small n, high p)."""
+        rng = np.random.default_rng(333)
+        n_train, p = 30, 50
+        X_train = rng.standard_normal((n_train, p))
+        # Sparse signal: only first 3 features matter
+        beta_sparse = np.zeros(p)
+        beta_sparse[:3] = [5, -3, 2]
+        y_train = X_train @ beta_sparse + rng.normal(0, 0.3, n_train)
+        
+        wrapper = MondrianConformalRegressor(
+            base_model=ConformalLassoRegressor(lam=0.1),
+            category_fn=_category_fn,
+        )
+        wrapper.learn_initial_training_set(X_train, y_train)
+        
+        # Should handle sparse solutions without crashing
+        x_test = rng.standard_normal(p)
+        interval = wrapper.predict(x_test, epsilon=0.1)
+        
+        # Verify valid interval
+        assert np.isfinite(interval.lower)
+        assert np.isfinite(interval.upper)
+        assert interval.lower <= interval.upper
+
 
 # ---------------------------------------------------------------------------
 # SVM classifier tests

@@ -234,17 +234,28 @@ class PluginMartingale(ConformalTestMartingale):
         # 1. Predict: evaluate current betting function
         b = self.strategy.bet(p)
 
-        # 2. Accumulate wealth
+        # 2. Safeguard: ensure b is a valid positive density
+        # Betting functions should be > 0 (probability densities/likelihoods)
+        if not np.isfinite(b) or b <= 0:
+            warnings.warn(
+                f"Betting function returned invalid value b={b} for p={p}. "
+                f"Using fallback b=1.0 (uniform betting)",
+                RuntimeWarning,
+                stacklevel=2
+            )
+            b = 1.0
+
+        # 3. Accumulate wealth
         self.logM += np.log(b)
         self.log_martingale_values.append(self.logM)
 
         if self.store_p_values:
             self.p_values.append(p)
 
-        # 3. Learn
+        # 4. Learn
         self.strategy.update(p)
 
-        # 4. Mark b_n/B_n stale (lazy recomputation on access)
+        # 5. Mark b_n/B_n stale (lazy recomputation on access)
         self._mark_stale()
 
 
@@ -308,6 +319,15 @@ class SimpleJumper(ConformalTestMartingale):
             term2 = log_J_div_E + self.log_C
             log_C_mixed = np.logaddexp(term1, term2)
             bet_val = self.b_epsilon(p, epsilon)
+            # Safeguard: betting function must be > 0
+            if bet_val <= 0 or not np.isfinite(bet_val):
+                warnings.warn(
+                    f"Betting function returned invalid value for epsilon={epsilon}, "
+                    f"p={p}: b={bet_val}. Using fallback b=1.0",
+                    RuntimeWarning,
+                    stacklevel=2
+                )
+                bet_val = 1.0
             new_log_C_epsilon[epsilon] = log_C_mixed + np.log(bet_val)
 
         self.log_C_epsilon = new_log_C_epsilon

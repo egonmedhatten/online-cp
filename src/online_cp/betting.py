@@ -310,7 +310,10 @@ class GaussianKDE(BettingStrategy):
         n = data.size
         if self.bandwidth == "silverman":
             sigma = np.std(data)
-            h = ((4 * sigma**5) / (3 * n)) ** (1 / 5)
+            if sigma > 1e-14:  # avoid zero or near-zero bandwidth
+                h = ((4 * sigma**5) / (3 * n)) ** (1 / 5)
+            else:
+                h = self.bw_min  # fallback for zero variance
         elif self.bandwidth == "lcv":
             should_recalculate = (
                 (self._current_bw is None)
@@ -321,9 +324,11 @@ class GaussianKDE(BettingStrategy):
                 h = result.x
                 self._n_last_update = n
             else:
-                h = self._current_bw
+                h = self._current_bw if self._current_bw is not None else self.bw_min
         else:
             h = float(self.bandwidth)
+        # Clamp to valid bounds
+        h = np.clip(h, self.bw_min, self.bw_max)
         return h
 
     def _get_data(self):
@@ -337,6 +342,9 @@ class GaussianKDE(BettingStrategy):
         data = self._get_data()
         if data.std() < 1e-6:
             return 1.0
+        # _current_bw should always be set by update(), but guard against None
+        if self._current_bw is None:
+            return 1.0
         return self._kernel_pdf_reflect(p, data, self._current_bw)
 
     def integrate(self, p: float) -> float:
@@ -344,6 +352,9 @@ class GaussianKDE(BettingStrategy):
             return p
         data = self._get_data()
         if data.std() < 1e-6:
+            return p
+        # _current_bw should always be set by update(), but guard against None
+        if self._current_bw is None:
             return p
         return self._kernel_cdf_reflect(p, data, self._current_bw)
 
@@ -450,9 +461,10 @@ class BetaMLE(BettingStrategy):
 
             result = minimize(
                 neg_ll, [self._ahat, self._bhat],
-                bounds=[(1e-5, None), (1e-5, None)]
+                bounds=[(1e-5, 1e5), (1e-5, 1e5)],
+                method='L-BFGS-B'
             )
-            if result.success:
+            if result.success and np.all(np.isfinite(result.x)):
                 self._ahat, self._bhat = result.x
 
 
@@ -549,7 +561,16 @@ class ParticleFilterStrategy(BettingStrategy):
         return indexes
 
     def _get_alphas_betas(self):
-        return np.exp(self.particles[:, 0]), np.exp(self.particles[:, 1])
+        """Safe extraction of alpha and beta values with overflow protection."""
+        # Clip particles to prevent overflow (max exponent for float64 is ~709)
+        log_alphas = np.clip(self.particles[:, 0], -700, 700)
+        log_betas = np.clip(self.particles[:, 1], -700, 700)
+        alphas = np.exp(log_alphas)
+        betas = np.exp(log_betas)
+        # Replace any inf or nan with sensible default
+        alphas = np.where(np.isfinite(alphas), alphas, 1.0)
+        betas = np.where(np.isfinite(betas), betas, 1.0)
+        return alphas, betas
 
     def bet(self, p: float) -> float:
         alphas, betas_param = self._get_alphas_betas()
@@ -565,8 +586,12 @@ class ParticleFilterStrategy(BettingStrategy):
         self._resample()
 
         alphas, betas_param = self._get_alphas_betas()
-        self.alpha_history.append(np.percentile(alphas, [50, 2.5, 97.5]))
-        self.beta_history.append(np.percentile(betas_param, [50, 2.5, 97.5]))
+        # Only record finite values
+        alpha_vals = alphas[np.isfinite(alphas)]
+        beta_vals = betas_param[np.isfinite(betas_param)]
+        if len(alpha_vals) > 0 and len(beta_vals) > 0:
+            self.alpha_history.append(np.percentile(alpha_vals, [50, 2.5, 97.5]))
+            self.beta_history.append(np.percentile(beta_vals, [50, 2.5, 97.5]))
 
     def plot_parameters(self, title="Particle Filter Parameter Evolution"):
         """Plot the evolution of the learned Beta parameters."""

@@ -18,17 +18,32 @@ from scipy.optimize import brentq, minimize_scalar
 from scipy.special import gammainc, gammaln, logsumexp
 from scipy.stats import norm
 
-from .betting import (
-    BettingStrategy,
-    BetaKernel,
-    BetaMLE,
-    BetaMoments,
-    ExpertAggregationStrategy,
-    FixedStrategy,
-    GaussianKDE,
-    ParticleFilterStrategy,
-    PiecewiseConstantBetting,
-)
+# Handle relative imports for both package and direct script execution
+try:
+    from .betting import (
+        BettingStrategy,
+        BetaKernel,
+        BetaMLE,
+        BetaMoments,
+        ExpertAggregationStrategy,
+        FixedStrategy,
+        GaussianKDE,
+        ParticleFilterStrategy,
+        PiecewiseConstantBetting,
+    )
+except ImportError:
+    # Fallback for direct script execution
+    from betting import (
+        BettingStrategy,
+        BetaKernel,
+        BetaMLE,
+        BetaMoments,
+        ExpertAggregationStrategy,
+        FixedStrategy,
+        GaussianKDE,
+        ParticleFilterStrategy,
+        PiecewiseConstantBetting,
+    )
 
 __all__ = [
     "PluginMartingale",

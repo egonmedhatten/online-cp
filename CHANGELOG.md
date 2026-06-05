@@ -57,6 +57,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type annotations on all public API methods.
 - "Which method?" decision guide (`docs/guide.md`, `notebooks/guide.ipynb`).
 - Benchmarking infrastructure: 5 datasets, 12 model configs, CLI.
+- **API contract specification** (`.roadmap/REQUIREMENTS.md`):
+  - Formal interface contracts for all 8 module categories: regressors, classifiers, Venn, CPS, martingales, betting strategies, decision-making, evaluation.
+  - Versioning & deprecation policy (SemVer, 1-minor deprecation cycle).
+  - Stability classification (Stable/Beta/Experimental per category).
+  - Thread safety disclaimer.
+
+### Fixed
+
+- **martingale.py direct script execution**: Handle relative imports with try/except fallback for both package context and direct script execution (needed for CI `run-modules` step).
+- **Holistic audit findings** (pre-v0.3.0 freeze):
+  - Exported but undocumented classes added to API docs: `Kernel`, `CustomKernel` (kernels.md), `ConformalPredictiveDecisionMaker` (decision.md), `MulticlassVennPrediction` (venn.md).
+  - New dedicated documentation page for betting strategies (`docs/api/betting.md`, was scattered in martingale.md).
+  - Removed experimental `ConformalClassifierWrapper` reference from README (not exported).
+  - Version alignment: CITATION.cff updated 0.1.1 → 0.2.0.
 
 ### Changed
 

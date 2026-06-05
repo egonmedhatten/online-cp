@@ -13,3 +13,5 @@
 ::: online_cp.decision.alpha_utility
 
 ::: online_cp.decision.alpha_regret
+
+::: online_cp.decision.ConformalPredictiveDecisionMaker

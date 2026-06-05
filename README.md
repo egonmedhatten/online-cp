@@ -51,18 +51,6 @@ Gamma = cp.predict(x_new, epsilon=0.1)
 print(f"Prediction set: {Gamma}")  # e.g. array([1])
 ```
 
-### Experimental sklearn wrapper
-
-`ConformalClassifierWrapper` is available as an experimental adapter for
-sklearn-style classifiers with `predict_proba`, but it is slow by design
-(refits once per candidate label).
-
-Recommended estimators for practical use:
-- `LogisticRegression`
-- `RandomForestClassifier`
-- `ExtraTreesClassifier`
-- `HistGradientBoostingClassifier`
-- `GaussianNB`
 
 Other estimators may still run, but should be treated as unverified and are
 expected to be less stable or slower in this transductive setting.

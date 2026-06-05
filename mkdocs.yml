@@ -35,6 +35,7 @@ nav:
     - Predictive Systems: api/cps.md
     - Decision Making: api/decision.md
     - Martingales: api/martingale.md
+    - Betting Strategies: api/betting.md
     - Evaluation: api/evaluation.md
     - Metrics: api/metrics.md
     - Plotting: api/plotting.md

@@ -143,6 +143,9 @@ class ConformalClassifier:
             p = (lt + tau * eq) / Alpha.shape[0]
             string = f"({lt} + {eq}*tau)/{Alpha.shape[0]}"
 
+        else:
+            raise ValueError(f"score_type must be 'nonconformity' or 'conformity', got '{score_type}'")
+
         if return_string:
             return float(p), string
         else:
@@ -165,8 +168,6 @@ class ConformalClassifier:
         return ConformalPredictionSet(np.array(Gamma), epsilon)
 
 
-
-
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
     """
     Classifier using nearest neighbours as the nonconformity measure.
@@ -187,10 +188,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
     [0.1855, 0.1855]
     """
 
-    # TODO: implement: cp.learn_several([[3,1],[4,7],[5,2]], [1, -1, 1])
-
-    # TODO Write tests
-
     def __init__(
         self,
         k=1,
@@ -207,6 +204,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self._label_space_fixed = label_space is not None
         self.label_space = np.asarray(label_space) if label_space is not None else None
 
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
         self.k = k
 
         if aggregation not in ("mean", "median"):
@@ -229,10 +228,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
-
-    def reset(self):
-
-        self.__init__(self.k, self.label_space)
 
     def _standard_distance_func(self, X, y=None):
         """
@@ -334,15 +329,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
         return same_label_distances, different_label_distances
 
-    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None, *, D: NDArray[np.floating[Any]] | None = None) -> None:
-        if D is not None:
-            warnings.warn(
-                "The 'D' parameter is deprecated, use 'precomputed' instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if precomputed is None:
-                precomputed = D
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None) -> None:
         new_index = 0 if self.X is None else self.X.shape[0]
 
         # Enforce label-space policy
@@ -421,6 +408,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         if epsilon is None:
             epsilon = self.epsilon
 
+        if self.label_space is None:
+            Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, '__iter__') else epsilon[0])
+            if hasattr(epsilon, '__iter__'):
+                Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+            if return_update:
+                return (Gamma, {}, None) if return_p_values else (Gamma, None)
+            return (Gamma, {}) if return_p_values else Gamma
+
         if self.y.shape[0] >= 1:
             tic = time.time()
             d = self.distance_func(self.X, x)
@@ -438,12 +433,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                         D, label_indices=label_indices
                     )
 
-                    Alpha = same_label_distances / different_label_distances
-                    if verbose > 10:
-                        print(f"Nonconformity scores for hypothesis y={label}: {Alpha}")
-                        _, string = self._compute_p_value(Alpha, tau, "nonconformity", return_string=True)
-                        print(f"p-value for hypothesis y={label}: {string}")
-
+                    Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
                     return label, self._compute_p_value(Alpha, tau, "nonconformity")
 
                 results = Parallel(n_jobs=self.n_jobs)(delayed(process_label)(label) for label in self.label_space)
@@ -457,12 +447,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                     )
 
                     Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
-
-                    if verbose > 10:
-                        print(f"Nonconformity scores for hypothesis y={label}: {Alpha}")
-                        p_values[label], string = self._compute_p_value(Alpha, tau, "nonconformity", return_string=True)
-                        print(f"p-value for hypothesis y={label}: {string}")
-
                     p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
             time_compute_p_values = time.time() - tic
 
@@ -479,10 +463,6 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         else:
             for label in self.label_space:
                 Alpha = np.array([np.inf])
-                if verbose > 10:
-                    print(f"Nonconformity scores for hypothesis y={label}: {Alpha}")
-                    p_values[label], string = self._compute_p_value(Alpha, tau, "nonconformity", return_string=True)
-                    print(f"p-value for hypothesis y={label}: {string}")
                 p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
             Gamma = self._compute_Gamma(p_values, epsilon)
             D = None
@@ -509,8 +489,8 @@ class ConformalClassifierWrapper(ConformalClassifier):
     -------
     - Slow by design: the wrapped learner is refit once per candidate label.
     - Not a first-class supported classifier in this package.
-    - Semantics are narrow: probabilities are aligned via ``learner.classes_``.
-    - Labels absent from the current fit are assigned zero probability mass.
+    - Semantics are narrow: scores are aligned via ``learner.classes_``.
+    - Labels absent from the current fit are assigned zero score.
 
     Validity assumptions
     --------------------
@@ -552,7 +532,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         warnings.warn(
             "ConformalClassifierWrapper is experimental, slow, and only reliable "
-            "for narrowly aligned label/probability conventions.",
+            "for narrowly aligned label/score conventions.",
             UserWarning,
             stacklevel=2,
         )
@@ -604,7 +584,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             stacklevel=2,
         )
 
-    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, D: Any = None) -> None:
+    def learn_one(self, x: NDArray[np.floating[Any]], y: Any) -> None:
         # Invalidate base fit cache
         self._base_fitted = False
         self._base_learner = None
@@ -651,42 +631,42 @@ class ConformalClassifierWrapper(ConformalClassifier):
                     np.unique(np.concatenate([self.label_space, np.unique(y)]))
                 )
 
-    def _align_probabilities(self, Prob, classes):
-        """Align predict_proba columns to self.label_space order."""
-        aligned = np.zeros((Prob.shape[0], self.label_space.size), dtype=Prob.dtype)
+    def _align_scores(self, S, classes):
+        """Align predict_proba score columns to self.label_space order."""
+        aligned = np.zeros((S.shape[0], self.label_space.size), dtype=S.dtype)
         class_to_col = {cls: i for i, cls in enumerate(classes)}
         for j, label in enumerate(self.label_space):
             col = class_to_col.get(label)
             if col is not None:
-                aligned[:, j] = Prob[:, col]
+                aligned[:, j] = S[:, col]
         return aligned
 
-    def _fallback_prediction(self, epsilon):
-        p_values = {label: 1.0 for label in self.label_space}
+    def _fallback_prediction(self, epsilon, tau):
+        p_values = {label: tau for label in self.label_space}
         return self._compute_Gamma(p_values, epsilon), p_values
 
-    def _validate_probabilities(self, Prob, classes, expected_rows):
-        if Prob.ndim != 2:
+    def _validate_scores(self, S, classes, expected_rows):
+        if S.ndim != 2:
             warnings.warn("predict_proba must return a 2D array", UserWarning, stacklevel=3)
             return False
-        if Prob.shape[0] != expected_rows:
+        if S.shape[0] != expected_rows:
             warnings.warn("predict_proba row count does not match fitted data", UserWarning, stacklevel=3)
             return False
-        if Prob.shape[1] != len(classes):
+        if S.shape[1] != len(classes):
             warnings.warn("predict_proba columns do not match learner.classes_", UserWarning, stacklevel=3)
             return False
-        if not np.all(np.isfinite(Prob)):
+        if not np.all(np.isfinite(S)):
             warnings.warn("predict_proba contains non-finite values", UserWarning, stacklevel=3)
             return False
 
-        row_sums = Prob.sum(axis=1)
+        row_sums = S.sum(axis=1)
         if not np.allclose(row_sums, 1.0, atol=1e-6):
             warnings.warn(
                 "predict_proba rows are not normalized to 1.0; continuing with provided scores",
                 UserWarning,
                 stacklevel=3,
             )
-        if np.any(Prob < 0) or np.any(Prob > 1):
+        if np.any(S < 0) or np.any(S > 1):
             warnings.warn(
                 "predict_proba contains values outside [0, 1]; continuing with provided scores",
                 UserWarning,
@@ -694,7 +674,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             )
         return True
 
-    def _ensure_base_fit(self, X):
+    def _ensure_base_fit(self):
         """Lazily fit the base learner on (X_train, y_train) and cache a copy."""
         if not self._base_fitted:
             try:
@@ -711,7 +691,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
         Y_aug = np.append(self.y, y_candidate)
         try:
             learner.fit(X, Y_aug)
-            Prob = learner.predict_proba(X)
+            S = learner.predict_proba(X)
         except Exception as exc:
             return None  # Signal failure
 
@@ -719,15 +699,15 @@ class ConformalClassifierWrapper(ConformalClassifier):
         if classes is None:
             return None
 
-        if not self._validate_probabilities(Prob, classes, expected_rows=len(Y_aug)):
+        if not self._validate_scores(S, classes, expected_rows=len(Y_aug)):
             return None
 
-        Prob = self._align_probabilities(Prob, classes)
+        S = self._align_scores(S, classes)
         label_idx = np.array([label_to_idx.get(label, -1) for label in Y_aug], dtype=int)
         if np.any(label_idx < 0):
             return None
 
-        Alpha = Prob[np.arange(len(Y_aug)), label_idx]
+        Alpha = S[np.arange(len(Y_aug)), label_idx]
         p_value = self._compute_p_value(Alpha, tau, "conformity")
         return (y_candidate, p_value)
 
@@ -738,8 +718,14 @@ class ConformalClassifierWrapper(ConformalClassifier):
         if epsilon is None:
             epsilon = self.epsilon
 
-        if self.X is None or self.y.shape[0] == 0:
-            Gamma, p_values = self._fallback_prediction(epsilon)
+        if self.label_space is None or self.X is None or self.y.shape[0] == 0:
+            if self.label_space is None:
+                Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, '__iter__') else epsilon[0])
+                if hasattr(epsilon, '__iter__'):
+                    Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                p_values = {}
+            else:
+                Gamma, p_values = self._fallback_prediction(epsilon, tau)
             if return_p_values:
                 return Gamma, p_values
             if return_update:
@@ -750,7 +736,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         if np.any(np.array([label_to_idx.get(label, -1) for label in self.y], dtype=int) < 0):
             warnings.warn("Observed training labels are not present in label_space", UserWarning, stacklevel=2)
-            Gamma, p_values = self._fallback_prediction(epsilon)
+            Gamma, p_values = self._fallback_prediction(epsilon, tau)
             if return_p_values:
                 return Gamma, p_values
             if return_update:
@@ -760,7 +746,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
         X = np.append(self.X, x.reshape(1, -1), axis=0)
 
         # Build base fit cache (lazy)
-        self._ensure_base_fit(X)
+        self._ensure_base_fit()
 
         # Parallel execution
         if self.n_jobs is not None and self.n_jobs != 1:
@@ -776,7 +762,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             )
             for result in results:
                 if result is None:
-                    Gamma, p_values = self._fallback_prediction(epsilon)
+                    Gamma, p_values = self._fallback_prediction(epsilon, tau)
                     if return_p_values:
                         return Gamma, p_values
                     return Gamma
@@ -798,7 +784,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
                     # Restore learner state on failure
                     if use_warm and orig_warm_start is not None:
                         self.learner.warm_start = orig_warm_start
-                    Gamma, p_values = self._fallback_prediction(epsilon)
+                    Gamma, p_values = self._fallback_prediction(epsilon, tau)
                     if return_p_values:
                         return Gamma, p_values
                     return Gamma
@@ -839,9 +825,9 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         - A string: 'linear', 'rbf', 'poly'.
     C : float
         Regularization parameter (upper bound on alpha_i). Default 1.0.
-    label_space : array-like
+    label_space : array-like or None
         The set of possible labels. Supports any number of classes.
-        Default [-1, 1].
+        If None, inferred from the first training data.
     sigma : float
         Bandwidth for RBF kernel when kernel='rbf'. Default 1.0.
     degree : int
@@ -975,11 +961,9 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         else:
             # Compute new kernel row
             k_row = self._compute_kernel_row(self.X, x)
-            kappa = (
-                self._kernel(x.reshape(1, -1)).item()
-                if self._kernel(x.reshape(1, -1)).ndim > 0
-                else self._kernel(x.reshape(1, -1))
-            )
+            kappa = self._kernel(x.reshape(1, -1))
+            if np.ndim(kappa) > 0:
+                kappa = kappa.item()
             # Extend Gram matrix
             n = self.K.shape[0]
             K_new = np.empty((n + 1, n + 1))
@@ -1005,10 +989,17 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         tau = self.rnd_gen.uniform()
         p_values = {}
 
-        if self.X is None or self.y.shape[0] == 0:
-            # No training data — predict all labels
+        if self.label_space is None or self.X is None or self.y.shape[0] == 0:
+            # No training data — predict all labels (or empty if no label_space)
+            if self.label_space is None:
+                Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, '__iter__') else epsilon[0])
+                if hasattr(epsilon, '__iter__'):
+                    Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                if return_p_values:
+                    return Gamma, {}
+                return Gamma
             for label in self.label_space:
-                p_values[label] = 1.0
+                p_values[label] = tau
             Gamma = self._compute_Gamma(p_values, epsilon)
             if return_p_values:
                 return Gamma, p_values
@@ -1060,7 +1051,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         tau = self.rnd_gen.uniform()
 
         if self.X is None or self.y.shape[0] == 0:
-            return 1.0
+            return tau
 
         # Build augmented Gram matrix
         k_row = self._compute_kernel_row(self.X, x)
@@ -1255,10 +1246,4 @@ def _smo_solve(K, y, C, tol=1e-3, max_iter=5000, warm_start=None):
     return alpha, b
 
 
-if __name__ == "__main__":
-    import doctest
-    import sys
 
-    (failures, _) = doctest.testmod()
-    if failures:
-        sys.exit(1)

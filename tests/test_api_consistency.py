@@ -194,17 +194,3 @@ class TestWrapperReturnUpdate:
         result = wrapper.predict(X[0], return_update=False)
         # Should not be a tuple
         assert not isinstance(result, tuple)
-
-
-class TestDeprecatedDParameter:
-    def test_d_param_emits_deprecation(self):
-        from online_cp import ConformalNearestNeighboursClassifier
-        rng = np.random.default_rng(42)
-        X = rng.standard_normal((10, 2))
-        y = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
-        cp = ConformalNearestNeighboursClassifier(k=3, label_space=np.array([0, 1]))
-        cp.learn_initial_training_set(X, y)
-        # Get a D matrix
-        _, D = cp.predict(X[0], return_update=True)
-        with pytest.warns(DeprecationWarning, match="'D' parameter is deprecated"):
-            cp.learn_one(X[0], 0, D=D)

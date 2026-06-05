@@ -8,7 +8,6 @@ object, which can be used to form prediction sets at any significance level.
 
 from __future__ import annotations
 
-import time
 import warnings
 from typing import Any
 
@@ -81,13 +80,11 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         Whether to automatically tune the ridge parameter via GCV (default False).
     verbose : int, optional
         Verbosity level (default 0).
-    rnd_state : int or None, optional
-        Random seed for reproducibility.
     epsilon : float, optional
         Default significance level (default 0.1).
     """
 
-    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, epsilon=default_epsilon):
+    def __init__(self, a=0, warnings=True, autotune=False, verbose=0, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
         self.a = a
         self.X = None
@@ -98,11 +95,10 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
         # Should we raise warnings
         self.warnings = warnings
-        # Do we autotune ridge prarmeter on warning
+        # Do we autotune ridge parameter on warning
         self.autotune = autotune
 
         self.verbose = verbose
-        self.rnd_gen = np.random.default_rng(rnd_state)
 
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
@@ -128,10 +124,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         if self.y is None:
             self.y = np.array([y])
         else:
-            if hasattr(self, "h"):
-                self.y = np.append(self.y, y.reshape(1, self.h), axis=0)
-            else:
-                self.y = np.append(self.y, y)
+            self.y = np.append(self.y, y)
 
         if precomputed is not None:
             X = precomputed["X"]
@@ -149,8 +142,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                 if self.X.shape[0] == 1:
                     self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
                 else:
-                    # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
-                    # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                    # Update (X^T X + aI)^{-1} via Sherman-Morrison
                     self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
 
                     # Check the rank
@@ -168,8 +160,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                 self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
             else:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
-                # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+                # Update (X^T X + aI)^{-1} via Sherman-Morrison
                 self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
 
                 # Check the rank
@@ -231,7 +222,7 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
         # Initial guess
         if a0 is None:
-            a0 = 1e-6  # Just a small pertubation to avoid numerical issues
+            a0 = 1e-6  # Small perturbation to avoid numerical issues
 
         # Bounds to ensure a >= 0
         res = minimize(
@@ -243,29 +234,21 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
             print(f"New ridge parameter: {a}")
         self.change_ridge_parameter(a)
 
-    def predict_cpd(self, x, return_update=False, save_time=False):
-        def build_precomputed(X, XTXinv, C):
+    def predict_cpd(self, x, return_update=False):
+        def build_precomputed(X, XTXinv):
             computed = {
                 "X": X,  # The updated matrix of objects
-                "XTXinv": XTXinv,  # The updated kernel matrix
-                "C": C,
+                "XTXinv": XTXinv,  # The updated inverse
             }
             return computed
 
-        tic = time.time()
         # Add row to X matrix
         X = np.append(self.X, x.reshape(1, -1), axis=0)
         n = X.shape[0]
         y = self.y
 
-        tic = time.time()
-        # Update XTX_inv (inverse of Kernel matrix plus regularisation) Use the Sherman-Morrison formula to update the hat matrix
-        # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-
+        # Update XTX_inv via Sherman-Morrison formula
         XTXinv = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
-        toc_update_XTXinv = time.time() - tic
-
-        tic = time.time()
 
         # Efficient computation avoiding full O(n²d) hat matrix.
         # Only compute the diagonal, last row, and H[:-1,:-1]@y in O(nd²).
@@ -283,14 +266,10 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
         C[-1] = np.inf
         C.sort()
 
-        toc_compute_C = time.time() - tic
-
-        time_dict = {"Update hat matrix": toc_update_XTXinv, "Compute C": toc_compute_C}
-        time_dict = time_dict if save_time else None
-        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict, epsilon=self.epsilon)
+        cpd = RidgePredictiveDistributionFunction(C=C, epsilon=self.epsilon)
 
         if return_update:
-            return cpd, build_precomputed(X, XTXinv, C)
+            return cpd, build_precomputed(X, XTXinv)
         else:
             return cpd
 
@@ -301,7 +280,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
     Algorithm 7.3 in Algorithmic Learning in a Random World (2nd edition).
     """
 
-    def __init__(self, kernel, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, epsilon=default_epsilon):
+    def __init__(self, kernel, a=0, autotune=False, verbose=0, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
 
         self.kernel = kernel
@@ -310,26 +289,23 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         self.X = None
         self.y = None
 
-        # Should we raise warnings
-        self.warnings = warnings
-        # Do we autotune ridge prarmeter on warning
+        # Do we autotune ridge parameter on warning
         self.autotune = autotune
 
         self.verbose = verbose
-        self.rnd_gen = np.random.default_rng(rnd_state)
 
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
-        Id = np.identity(self.X.shape[0])
         self.K = self.kernel(self.X)
         if self.autotune:
             self._tune_ridge_parameter()
         else:
+            Id = np.identity(self.X.shape[0])
             self.Kinv = np.linalg.inv(self.K + self.a * Id)
-        H = self.K @ self.Kinv
-        self.h_diag = H.diagonal().copy()
-        self.Hy = H @ y
+            H = self.K @ self.Kinv
+            self.h_diag = H.diagonal().copy()
+            self.Hy = H @ y
 
     def _tune_ridge_parameter(self, a0=None):
         """
@@ -362,12 +338,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
 
     def change_ridge_parameter(self, a):
         """
-        Change the ridge parameter
-        >>> cps = RidgePredictionMachine()
-        >>> cps.learn_one(np.array([1, 0]), 1)
-        >>> cps.change_ridge_parameter(1)
-        >>> cps.a
-        1
+        Change the ridge parameter and recompute cached intermediates.
         """
         self.a = a
         if self.X is not None:
@@ -453,7 +424,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
                 self.Kinv = self._update_Kinv(self.Kinv, k, d_val)
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
-    def predict_cpd(self, x, return_update=False, save_time=False):
+    def predict_cpd(self, x, return_update=False):
 
         def build_precomputed(v, d_val, k, kappa):
             computed = {
@@ -500,8 +471,7 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
         assert not np.isnan(C).any(), "C contains NaN values"
         C.sort()
 
-        time_dict = None
-        cpd = RidgePredictiveDistributionFunction(C=C, time_dict=time_dict, epsilon=self.epsilon)
+        cpd = RidgePredictiveDistributionFunction(C=C, epsilon=self.epsilon)
 
         if return_update:
             return cpd, build_precomputed(v, d_val, k, kappa)
@@ -515,18 +485,8 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         k,
         distance="euclidean",
         distance_func=None,
-        warnings=True,
-        verbose=0,
-        rnd_state=None,
         epsilon=default_epsilon,
     ):
-        """
-        Consider adding possibility to update self.k as the training set grows, e.g. by some heuristic or something.
-        Two rules of thumb are quite simple:
-            1. Choose k close to sqrt(n) where n is the training set size
-            2. If the data has large variance, choose k larger. If the variance is small, choose k smaller. This is less clear, however.
-        """
-        # TODO: The sorting of conformity scores is the most time consuming step. Can it be done with parallel processing to speed things up?
         super().__init__(epsilon=epsilon)
 
         self.k = k
@@ -542,17 +502,10 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         self.y = None
         self.D = None
 
-        # Should we raise warnings
-        self.warnings = warnings
-
-        self.verbose = verbose
-        self.rnd_gen = np.random.default_rng(rnd_state)
-
     def _standard_distance_func(self, X, y=None):
         """
         By default we use scipy to compute distances
         """
-        # TODO: Can this be done using parallel processing?
         X = np.atleast_2d(X)
         if y is None:
             dists = squareform(pdist(X, metric=self.distance))
@@ -563,8 +516,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         """
-        The Nearest neighbours prediction machine assumes all labels are unique. If they are not, we add noise to break ties.
-
         >>> cps = NearestNeighboursPredictionMachine(k=3)
         >>> X = np.array([[1], [2]])
         >>> y = np.array([1, 2])
@@ -588,13 +539,14 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """
-        The Nearest neighbours prediction machine assumes all labels are unique. If they are not, we add noise to break ties.
+        Learn a single example.
+
         precomputed is a dictionary
         {
             'X': X,
             'D': D,
         }
-        >>> cps = NearestNeighboursPredictionMachine(k=3, rnd_state=2024)
+        >>> cps = NearestNeighboursPredictionMachine(k=3)
         >>> X = np.array([[1], [2]])
         >>> y = np.array([1, 2])
         >>> cps.learn_initial_training_set(X, y)
@@ -629,7 +581,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             self.X = precomputed["X"]
             self.D = precomputed["D"]
 
-    def predict_cpd(self, x, return_update=False, save_time=False):
+    def predict_cpd(self, x, return_update=False):
         """
         >>> import numpy as np
         >>> rnd_gen = np.random.default_rng(2024)
@@ -645,18 +597,13 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         >>> cpd.U
         array([0.17821782, 0.18811881, 0.54455446, 0.76237624, 1.        ])
         """
-        tic = time.time()
         # Temporarily update the distance matrix
-        if self.X.shape[0] < self.k:
-            # FIXME: Make some graceful error handling here
-            raise Exception("Training set is too small...")
-        else:
-            d = self.distance_func(self.X, x)
-            D = self.update_distance_matrix(self.D, d)
-            y = np.append(self.y, -np.inf)  # Initialise label as -inf
-        toc_dist = time.time() - tic
+        if self.X.shape[0] <= self.k:
+            raise ValueError("Training set is too small for k-NN prediction")
+        d = self.distance_func(self.X, x)
+        D = self.update_distance_matrix(self.D, d)
+        y = np.append(self.y, -np.inf)  # Initialise label as -inf
 
-        tic = time.time()
         # Find all neighbours and semi-neighbours
         # Use argpartition for O(n) selection of k+1 smallest, then sort them
         # for deterministic tie-breaking consistent with full argsort.
@@ -666,9 +613,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             order = np.argsort(D[idx, col])
             top_k1[:, col] = idx[order]
         k_nearest = top_k1[1:]  # skip self (distance=0, always first after sort)
-        toc_sort = time.time() - tic
 
-        tic = time.time()
         n = self.X.shape[0]
 
         full_neighbours = set()
@@ -692,7 +637,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         idx_all_neighbours_and_semi_neighbours = np.array(
             sorted(full_neighbours | single_neighbours | semi_neighbours)
         )
-        toc_find_neighbours = time.time() - tic
 
         # Line 1
         Kprime = len(idx_all_neighbours_and_semi_neighbours)
@@ -715,7 +659,6 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         L[0] = 0
         U[0] = N[0] / (n + 1)
 
-        tic = time.time()
         # Line 6
         for k in range(1, Kprime + 1):
             idx = idx_mem[sorted_indices[k - 1]]
@@ -729,17 +672,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
                 N[Alpha[idx]] += 1
             L[k] = N[: Alpha[-1]].sum() / (n + 1) if Alpha[-1] != 0 else 0
             U[k] = N[: Alpha[-1] + 1].sum() / (n + 1) if Alpha[-1] != 0 else N[0] / (n + 1)
-        toc_loop = time.time() - tic
 
-        time_dict = {
-            "Compute distance matrix": toc_dist,
-            "Sort distance matrix": toc_sort,
-            "Find all neighbours and semi-neighbours": toc_find_neighbours,
-            "Loop": toc_loop,
-        }
-        time_dict = time_dict if save_time else None
         # Line 12
-        cpd = NearestNeighboursPredictiveDistributionFunction(L, U, Y, time_dict, epsilon=self.epsilon)
+        cpd = NearestNeighboursPredictiveDistributionFunction(L, U, Y, epsilon=self.epsilon)
 
         if return_update:
             X = np.append(self.X, x.reshape(1, -1), axis=0)
@@ -749,14 +684,12 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
 
 class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
-    def __init__(self, verbose=0, rnd_state=None, epsilon=default_epsilon):
+    def __init__(self, epsilon=default_epsilon):
         """
         The Dempster-Hill conformal predictive system uses only the labels of the examples, so the latter can be ignored.
         """
         super().__init__(epsilon=epsilon)
         self.y = None
-        self.verbose = verbose
-        self.rnd_gen = np.random.default_rng(rnd_state)
 
     def learn_initial_training_set(self, y):
         self.y = y
@@ -764,18 +697,20 @@ class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
     def learn_one(self, y):
         self.y = np.append(self.y, y)
 
-    def predict_cpd(self, save_time=False):
-        tic = time.time()
+    def learn_many(self, y):
+        self.y = np.append(self.y, y)
+
+    def predict(self):
+        return self.predict_cpd()
+
+    def predict_cpd(self):
         Y = np.zeros(shape=self.y.shape[0] + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
         Y[1:-1] = self.y
         Y.sort()
-        time_sort = time.time() - tic
 
-        time_dict = {"Sort labels": time_sort} if save_time else None
-
-        return DempsterHillConformalPredictiveDistribution(Y, time_dict, epsilon=self.epsilon)
+        return DempsterHillConformalPredictiveDistribution(Y, epsilon=self.epsilon)
 
 
 class ConformalPredictiveDistributionFunction:
@@ -790,8 +725,50 @@ class ConformalPredictiveDistributionFunction:
     def __init__(self, epsilon=default_epsilon):
         self.epsilon = epsilon
 
+    def __call__(self, y, tau=None):
+        """Evaluate the CPD at y.
+
+        Returns (Pi0, Pi1) if tau is None, else (1-tau)*Pi0 + tau*Pi1.
+        """
+        Pi0, Pi1 = self._cdf_bounds(y)
+        if tau is None:
+            return Pi0, Pi1
+        return (1 - tau) * Pi0 + tau * Pi1
+
+    def _cdf_bounds(self, y):
+        """Compute lower and upper CDF bounds at y.
+
+        Default implementation for CPDs with sorted Y array where
+        len(Y) == len(L) == len(U), Y[0]=-inf, Y[-1]=+inf.
+        Override for different array conventions.
+        """
+        if y == self.Y[0]:
+            return 0.0, 0.0
+        if y == self.Y[-1]:
+            return 1.0, 1.0
+        Y_trimmed = self.Y[:-1]
+        n = len(Y_trimmed)
+        left = np.searchsorted(Y_trimmed, y, side='left')
+        right = np.searchsorted(Y_trimmed, y, side='right')
+        if left < right:
+            # y matches one or more breakpoints
+            return (left - 1) / n, right / n
+        else:
+            # y is between breakpoints
+            i = left - 1
+            return i / n, (i + 1) / n
+
     def quantile(self, p, tau=None):
-        raise NotImplementedError("Parent class has no quantile function")
+        """Compute the p-quantile of the CPD.
+
+        If tau is None, returns (quantile at tau=0, quantile at tau=1).
+        """
+        if tau is not None:
+            return self._compute_quantile(p, tau)
+        return self._compute_quantile(p, 0), self._compute_quantile(p, 1)
+
+    def _compute_quantile(self, p, tau):
+        raise NotImplementedError("Subclass must implement _compute_quantile")
 
     def predict_set(self, tau, epsilon=None, bounds="both", minimise_width=False):
         """
@@ -813,32 +790,47 @@ class ConformalPredictiveDistributionFunction:
 
         if minimise_width:
             if bounds != "both":
-                raise Exception('bounds must be "both" if we are to minimise the interval width')
+                raise ValueError('bounds must be "both" when minimise_width=True')
 
-            # Exact O(n) sweep: for piecewise-constant CPDs, the shortest
-            # interval with coverage ≥ 1-epsilon is found by checking all
-            # pairs of critical points where the CDF jump spans ≥ 1-epsilon.
-            Q = (1 - tau) * self.L + tau * self.U
+            # Find narrowest [a, b] = [quantile(l), quantile(l+1-eps)]
+            # over l. The width W(l) is piecewise-constant, changing only
+            # when l or l+target crosses a CDF level. So candidate l's are
+            # {all CDF levels} ∪ {all CDF levels - target}.
             target_coverage = 1 - epsilon
-            n_pts = len(self.Y)
+
+            # Collect all distinct CDF levels the step function can take
+            if len(self.L) == len(self.Y):
+                # Ridge/DH: at-breakpoint levels from stored L/U;
+                # between-breakpoint levels = (j+tau)/n from _cdf_bounds
+                n_trim = len(self.Y) - 1
+                at_levels = (1 - tau) * self.L + tau * self.U
+                btwn_levels = (np.arange(n_trim) + tau) / n_trim
+                all_cdf_levels = np.unique(np.concatenate([at_levels, btwn_levels]))
+            else:
+                # NN: between-levels from L/U, at-levels from L[:-1]/U[1:]
+                btwn_levels = (1 - tau) * self.L + tau * self.U
+                at_levels = (1 - tau) * self.L[:-1] + tau * self.U[1:]
+                all_cdf_levels = np.unique(np.concatenate([btwn_levels, at_levels]))
+
+            # Candidates: CDF levels AND (CDF levels - target)
+            shifted = all_cdf_levels - target_coverage
+            candidate_levels = np.unique(np.concatenate([all_cdf_levels, shifted]))
+            candidate_levels = candidate_levels[
+                (candidate_levels >= 0) & (candidate_levels + target_coverage <= 1.0)
+            ]
 
             best_width = np.inf
             best_lower = -np.inf
             best_upper = np.inf
 
-            # Two-pointer sweep: find narrowest [Y[i], Y[j]] with Q[j]-Q[i] >= target
-            j = 0
-            for i in range(n_pts):
-                # Advance j until coverage is met
-                while j < n_pts and Q[j] - Q[i] < target_coverage:
-                    j += 1
-                if j >= n_pts:
-                    break
-                w = self.Y[j] - self.Y[i]
+            for l in candidate_levels:
+                lower_q = self.quantile(l, tau)
+                upper_q = self.quantile(l + target_coverage, tau)
+                w = upper_q - lower_q
                 if w < best_width:
                     best_width = w
-                    best_lower = self.Y[i]
-                    best_upper = self.Y[j]
+                    best_lower = lower_q
+                    best_upper = upper_q
 
             lower = best_lower
             upper = best_upper
@@ -856,21 +848,23 @@ class ConformalPredictiveDistributionFunction:
                 lower = -np.inf
                 upper = self.quantile(q2, tau)
             else:
-                raise Exception
+                raise ValueError('bounds must be "both", "lower", or "upper"')
 
         CP_int = get_ConformalPredictionInterval()
         return CP_int(lower, upper, epsilon)
 
     def find_smallest_epsilon(self, tau, increment=0.001):
         """
-        Find the smallest epsilon such that the prediction set is finite
+        Find the smallest epsilon such that the prediction set is finite.
+        Returns None if no such epsilon <= 1 exists.
         """
-        epsilon = 0
-        while True:
+        epsilon = 0.0
+        while epsilon <= 1.0:
             prediction_set = self.predict_set(tau=tau, epsilon=epsilon)
             if np.isfinite(prediction_set.width()):
                 return epsilon
-            epsilon += increment  # Increment epsilon by a small amount
+            epsilon += increment
+        return None
 
     def median(self, tau: float = 0.5):
         """Median of the CPD: shortcut for ``quantile(0.5, tau)``.
@@ -911,11 +905,10 @@ class ConformalPredictiveDistributionFunction:
 
 
 class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
-    def __init__(self, C, time_dict=None, epsilon=default_epsilon):
+    def __init__(self, C, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
         self.C = C
         self.Y = C
-        self.time_dict = time_dict
 
         # Analytical computation of L, U (O(n) instead of O(n²))
         # C is sorted with C[0]=-inf, C[-1]=+inf. Trimmed array has n = len(C)-1 elements.
@@ -925,137 +918,90 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
         self.L = np.where(j == 0, 0.0, np.where(j == len(C) - 1, 1.0, (j - 1) / n))
         self.U = np.where(j == 0, 0.0, np.where(j == len(C) - 1, 1.0, (j + 1) / n))
 
-    def __call__(self, y, tau=None):
-        if y == -np.inf:
-            Pi0, Pi1 = 0.0, 0.0
-        elif y == np.inf:
-            Pi0, Pi1 = 1.0, 1.0
+    def _compute_quantile(self, p, tau):
+        # Analytical inversion: find smallest y where Pi(y, tau) >= p
+        if p <= 0:
+            return -np.inf
+        if p > 1:
+            return np.inf
+        # Pi values at C[j] are (1-tau)*L[j] + tau*U[j]
+        # Pi values just above C[j] (between C[j] and C[j+1]) are (j+tau)/n
+        n = len(self.C) - 1
+        # Check "between" levels: (j+tau)/n for j=0..n-1
+        # The smallest j where (j+tau)/n >= p is j = ceil(p*n - tau)
+        j_between = max(0, int(np.ceil(p * n - tau)))
+        # Check "at breakpoint" levels for j = 1..n-1 (no ties for Ridge)
+        # At C[j]: Pi = (1-tau)*(j-1)/n + tau*(j+1)/n = (j - 1 + 2*tau)/n
+        # Smallest j where (j-1+2*tau)/n >= p: j = ceil(p*n - 2*tau + 1)
+        j_at = max(0, int(np.ceil(p * n - 2 * tau + 1)))
+
+        # The quantile is the smallest y: either C[j_at] or C[j_between]+eps
+        # C[j_between]+eps corresponds to y just above C[j_between]
+        if 1 <= j_at < len(self.C) - 1 and j_at <= j_between:
+            return self.C[j_at]
+        elif 0 <= j_between < len(self.C) - 1:
+            # Return a value just above C[j_between]
+            if j_between == 0:
+                return -np.inf
+            return np.nextafter(self.C[j_between], np.inf)
         else:
-            C = self.C[:-1]
-            idx_eq = np.where(y == C)[0]
-            if idx_eq.shape[0] > 0:
-                i_prime = idx_eq.min()
-                i_bis = idx_eq.max()
-                interval = ((i_prime - 1) / C.shape[0], (i_bis + 1) / C.shape[0])
-            else:
-                i = np.where(C <= y)[0].max()
-                interval = (i / C.shape[0], (i + 1) / C.shape[0])
-
-            Pi0 = interval[0]
-            Pi1 = interval[1]
-
-        if tau is None:
-            return Pi0, Pi1
-        else:
-            return (1 - tau) * Pi0 + tau * Pi1
-
-    def quantile(self, p, tau=None):
-        def compute_quantile(p, tau):
-            # Analytical inversion: find smallest y where Pi(y, tau) >= p
-            # Pi values at C[j] are (1-tau)*L[j] + tau*U[j]
-            # Pi values just above C[j] (between C[j] and C[j+1]) are (j+tau)/n
-            n = len(self.C) - 1
-            # Check "between" levels: (j+tau)/n for j=0..n-1
-            # The smallest j where (j+tau)/n >= p is j = ceil(p*n - tau)
-            j_between = int(np.ceil(p * n - tau))
-            # Check "at breakpoint" levels for j = 1..n-1 (no ties for Ridge)
-            # At C[j]: Pi = (1-tau)*(j-1)/n + tau*(j+1)/n = (j - 1 + 2*tau)/n
-            # Smallest j where (j-1+2*tau)/n >= p: j = ceil(p*n - 2*tau + 1)
-            j_at = int(np.ceil(p * n - 2 * tau + 1))
-
-            # The quantile is the smallest y: either C[j_at] or C[j_between]+eps
-            # C[j_between]+eps corresponds to y just above C[j_between]
-            if 1 <= j_at < len(self.C) - 1 and j_at <= j_between:
-                return self.C[j_at]
-            elif 0 <= j_between < len(self.C) - 1:
-                # Return a value just above C[j_between]
-                eps = np.abs(self.C[j_between]) * np.finfo(np.float64).eps
-                if j_between == 0:
-                    return -np.inf
-                return self.C[j_between] + eps
-            else:
-                return np.inf
-
-        if tau is not None:
-            return compute_quantile(p, tau)
-        else:
-            q0 = compute_quantile(p, 0)
-            q1 = compute_quantile(p, 1)
-            return q0, q1
+            return np.inf
 
 class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
-    """
-    TODO: Write tests
-    """
-
-    # NOTE: It would be possible to pass a protection function here...
-    def __init__(self, L, U, Y, time_dict=None, epsilon=default_epsilon):
+    def __init__(self, L, U, Y, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
         self.L = L
         self.U = U
         self.Y = Y
-        self.time_dict = time_dict
 
-    def __call__(self, y, tau=None):
+    def _cdf_bounds(self, y):
+        """NN override: len(L) == len(Y) - 1, different indexing convention."""
         if y == self.Y[0]:
-            Pi0, Pi1 = 0.0, 0.0
-        elif y == self.Y[-1]:
-            Pi0, Pi1 = 1.0, 1.0
+            return 0.0, 0.0
+        if y == self.Y[-1]:
+            return 1.0, 1.0
+        Y_trimmed = self.Y[:-1]
+        left = np.searchsorted(Y_trimmed, y, side='left')
+        right = np.searchsorted(Y_trimmed, y, side='right')
+        if left < right:
+            # y matches breakpoint(s): Pi = [L[left-1], U[right-1]]
+            return self.L[left - 1], self.U[right - 1]
         else:
-            Y = self.Y[:-1]
-            idx_eq = np.where(y == Y)[0]
-            if idx_eq.shape[0] > 0:
-                Pi0 = self.L[idx_eq.min() - 1]
-                Pi1 = self.U[idx_eq.max()]
+            # y is between breakpoints: Pi = [L[k], U[k]]
+            k = left - 1
+            return self.L[k], self.U[k]
+
+    def _compute_quantile(self, p, tau):
+        # NN CPD: Pi(Y[k], tau) = (1-tau)*L[k-1] + tau*U[k] at breakpoint Y[k] (k=1..K')
+        # Between Y[k] and Y[k+1]: Pi = (1-tau)*L[k] + tau*U[k]
+        # L and U have K'+1 entries (indices 0..K')
+        # Find smallest y where Pi(y, tau) >= p
+        Kprime = len(self.L) - 1
+
+        # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=0..K'
+        between_levels = (1 - tau) * self.L + tau * self.U
+
+        # Check "at breakpoint" levels: (1-tau)*L[k-1] + tau*U[k] for k=1..K'
+        at_levels = (1 - tau) * self.L[:-1] + tau * self.U[1:]
+
+        # Find first index where level >= p
+        between_idx = np.where(between_levels >= p)[0]
+        at_idx = np.where(at_levels >= p)[0]
+
+        best_y = np.inf
+        if len(at_idx) > 0:
+            k = at_idx[0] + 1  # +1 because at_levels[i] corresponds to Y[i+1]
+            best_y = self.Y[k]
+        if len(between_idx) > 0:
+            k = between_idx[0]
+            # "between Y[k] and Y[k+1]" — infimum is Y[k] (or -inf if k=0)
+            if k == 0:
+                candidate = -np.inf
             else:
-                k = np.where(Y <= y)[0].max()
-                Pi0 = self.L[k]
-                Pi1 = self.U[k]
-
-        if tau is None:
-            return Pi0, Pi1
-        else:
-            return (1 - tau) * Pi0 + tau * Pi1
-
-    def quantile(self, p, tau=None):
-        def compute_quantile(p, tau):
-            # NN CPD: Pi(Y[k], tau) = (1-tau)*L[k-1] + tau*U[k] at breakpoint Y[k] (k=1..K')
-            # Between Y[k] and Y[k+1]: Pi = (1-tau)*L[k] + tau*U[k]
-            # L and U have K'+1 entries (indices 0..K')
-            # Find smallest y where Pi(y, tau) >= p
-            Kprime = len(self.L) - 1
-
-            # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=0..K'
-            between_levels = (1 - tau) * self.L + tau * self.U
-
-            # Check "at breakpoint" levels: (1-tau)*L[k-1] + tau*U[k] for k=1..K'
-            at_levels = (1 - tau) * self.L[:-1] + tau * self.U[1:]
-
-            # Find first index where level >= p
-            between_idx = np.where(between_levels >= p)[0]
-            at_idx = np.where(at_levels >= p)[0]
-
-            best_y = np.inf
-            if len(at_idx) > 0:
-                k = at_idx[0] + 1  # +1 because at_levels[i] corresponds to Y[i+1]
-                best_y = self.Y[k]
-            if len(between_idx) > 0:
-                k = between_idx[0]
-                # "between Y[k] and Y[k+1]" — infimum is Y[k] (or -inf if k=0)
-                if k == 0:
-                    candidate = -np.inf
-                else:
-                    candidate = self.Y[k] + np.abs(self.Y[k]) * np.finfo(np.float64).eps
-                if candidate < best_y:
-                    best_y = candidate
-            return best_y
-
-        if tau is not None:
-            return compute_quantile(p, tau)
-        else:
-            q0 = compute_quantile(p, 0)
-            q1 = compute_quantile(p, 1)
-            return q0, q1
+                candidate = np.nextafter(self.Y[k], np.inf)
+            if candidate < best_y:
+                best_y = candidate
+        return best_y
 
     def plot(self, tau=None):
         # Override: NN has len(L) = len(Y) - 1, so x-axis uses Y[1:]
@@ -1077,74 +1023,47 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
 
 
 class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributionFunction):
-    def __init__(self, Y, time_dict=None, epsilon=default_epsilon):
+    def __init__(self, Y, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
         self.Y = Y
-        self.time_dict = time_dict
 
-        # Analytical computation of L, U (O(n) instead of O(n²))
+        # Vectorized computation of L, U
         # Y is sorted with Y[0]=-inf, Y[-1]=+inf.
         n = len(Y) - 1  # size of trimmed array Y[:-1]
         self.L = np.zeros(len(Y))
         self.U = np.zeros(len(Y))
         self.L[-1] = 1.0
         self.U[-1] = 1.0
-        # For finite interior values, handle ties using searchsorted
-        for j in range(1, len(Y) - 1):
-            trimmed = Y[:-1]
-            i_prime = np.searchsorted(trimmed, Y[j], side='left')
-            i_bis = np.searchsorted(trimmed, Y[j], side='right') - 1
-            self.L[j] = (i_prime - 1) / n
-            self.U[j] = (i_bis + 1) / n
+        # For interior values, handle ties using searchsorted (vectorized)
+        trimmed = Y[:-1]
+        interior = Y[1:-1]
+        left = np.searchsorted(trimmed, interior, side='left')
+        right = np.searchsorted(trimmed, interior, side='right') - 1
+        self.L[1:-1] = (left - 1) / n
+        self.U[1:-1] = (right + 1) / n
 
-    def __call__(self, y, tau=None):
-        if y == self.Y[0]:
-            Pi0, Pi1 = 0.0, 0.0
-        elif y == self.Y[-1]:
-            Pi0, Pi1 = 1.0, 1.0
-        else:
-            Y = self.Y[:-1]
-            idx_eq = np.where(y == Y)[0]
-            if idx_eq.shape[0] > 0:
-                i_prime = idx_eq.min()
-                i_bis = idx_eq.max()
-                Pi0 = (i_prime - 1) / Y.shape[0]
-                Pi1 = (i_bis + 1) / Y.shape[0]
-            else:
-                k = np.where(Y <= y)[0].max()
-                Pi0 = k / Y.shape[0]
-                Pi1 = (k + 1) / Y.shape[0]
+    def _compute_quantile(self, p, tau):
+        # CDF at breakpoint Y[j]: (1-tau)*L[j] + tau*U[j]
+        # CDF between Y[j] and Y[j+1]: (j + tau) / n
+        n = len(self.Y) - 1  # size of trimmed Y[:-1]
 
-        if tau is None:
-            return Pi0, Pi1
-        else:
-            return (1 - tau) * Pi0 + tau * Pi1
+        # First j where at-knot level >= p
+        pi_at = (1 - tau) * self.L + tau * self.U
+        at_candidates = np.where(pi_at >= p)[0]
+        j_at = at_candidates[0] if len(at_candidates) > 0 else len(self.Y)
 
-    def quantile(self, p, tau=None):
-        def compute_quantile(p, tau):
-            # Analytical inversion using precomputed L, U
-            # Find smallest j where (1-tau)*L[j] + tau*U[j] >= p
-            pi_at = (1 - tau) * self.L + tau * self.U
-            candidates = np.where(pi_at >= p)[0]
-            if len(candidates) == 0:
-                return np.inf
-            j = candidates[0]
-            if j == 0:
+        # First j where between-level (j+tau)/n >= p
+        j_between = max(0, int(np.ceil(p * n - tau)))
+
+        if j_at <= j_between and j_at < len(self.Y):
+            # At-breakpoint reached first
+            if j_at == 0:
                 return -np.inf
-            return self.Y[j]
-
-        if tau is not None:
-            return compute_quantile(p, tau)
+            return self.Y[j_at]
+        elif j_between < len(self.Y) - 1:
+            # Between-level reached first; quantile is just above Y[j_between]
+            if j_between == 0:
+                return -np.inf
+            return np.nextafter(self.Y[j_between], np.inf)
         else:
-            q0 = compute_quantile(p, 0)
-            q1 = compute_quantile(p, 1)
-            return q0, q1
-
-
-if __name__ == "__main__":
-    import doctest
-    import sys
-
-    (failures, _) = doctest.testmod()
-    if failures:
-        sys.exit(1)
+            return np.inf

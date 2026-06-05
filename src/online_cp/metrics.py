@@ -29,6 +29,8 @@ __all__ = [
     "IntervalWidth",
     "WinklerScore",
     "CRPS",
+    "TruncatedCRPS",
+    "ConformalCRPS",
     "BrierScore",
     "LogLoss",
     "Width",
@@ -127,6 +129,13 @@ class Metrics:
 
     def __init__(self, metrics: list[Metric]) -> None:
         self._metrics = list(metrics)
+        names = [m.name for m in self._metrics]
+        dupes = [n for n in names if names.count(n) > 1]
+        if dupes:
+            raise ValueError(
+                f"Duplicate metric names: {sorted(set(dupes))}. "
+                "Subclass and override .name to disambiguate."
+            )
 
     def update(self, y: Any = None, Gamma: Any = None, **kw: Any) -> None:
         """Update all contained metrics."""
@@ -233,6 +242,8 @@ class WinklerScore(Metric):
     def _score(self, y, Gamma, *, epsilon=None, **kw):
         if epsilon is None:
             epsilon = getattr(Gamma, "epsilon", 0.1)
+        if epsilon <= 0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
         lower = Gamma.lower
         upper = Gamma.upper
         if not np.isfinite(lower) or not np.isfinite(upper):
@@ -260,7 +271,7 @@ class CRPS(Metric):
         warnings.warn(
             "CRPS is deprecated. Use TruncatedCRPS or ConformalCRPS instead.",
             DeprecationWarning,
-            stacklevel=4,
+            stacklevel=3,
         )
         return TruncatedCRPS()._score(y, Gamma, cpd=cpd, **kw)
 
@@ -370,7 +381,11 @@ class BrierScore(Metric):
         if venn is None:
             raise ValueError("BrierScore requires venn keyword argument")
         point = venn.point  # shape (|Y|,), sums to 1
-        label_idx = np.searchsorted(venn.label_space, y)
+        label_idx = int(np.searchsorted(venn.label_space, y))
+        if label_idx >= len(venn.label_space) or venn.label_space[label_idx] != y:
+            raise ValueError(
+                f"y={y!r} not found in label_space={venn.label_space.tolist()}"
+            )
         indicator = np.zeros(len(venn.label_space))
         indicator[label_idx] = 1.0
         return float(np.sum((point - indicator) ** 2))
@@ -391,17 +406,20 @@ class LogLoss(Metric):
         if venn is None:
             raise ValueError("LogLoss requires venn keyword argument")
         point = venn.point
-        label_idx = np.searchsorted(venn.label_space, y)
-        prob_y = np.clip(point[label_idx], self._EPS, 1.0 - self._EPS)
+        label_idx = int(np.searchsorted(venn.label_space, y))
+        if label_idx >= len(venn.label_space) or venn.label_space[label_idx] != y:
+            raise ValueError(
+                f"y={y!r} not found in label_space={venn.label_space.tolist()}"
+            )
+        prob_y = np.clip(point[label_idx], self._EPS, None)
         return float(-np.log(prob_y))
 
 
 class Width(Metric):
     """Width (sharpness) of a Venn multiprobability prediction.
 
-    For binary predictions: :math:`p_1 - p_0`.
-    For multiclass: mean over labels of (max − min) probability across
-    hypotheses.
+    Mean over labels of (max − min) probability across hypotheses.
+    For binary predictions, this equals :math:`|p_1 - p_0|`.
 
     Requires ``venn`` keyword argument (a ``VennPrediction`` object).
     """
@@ -432,12 +450,11 @@ class CalibrationError(Metric):
       validity guarantee (ALRW2 Theorem 6.4).
 
     The per-step ``_score()`` returns :math:`|p - \\mathbf{1}\\{y = k\\}|`
-    (absolute calibration gap), so ``metric.value`` gives the running mean
+    (absolute calibration gap), so ``metric.get()`` gives the running mean
     absolute error. Use :meth:`ece` for the standard binned ECE.
 
-    For binary classification, the predicted probability is :math:`P(y=1)`.
-    For multiclass, probabilities are stored per-class (one-vs-rest) and
-    ECE is computed as a weighted average across classes.
+    For binary classification, the tracked class defaults to ``label_space[1]``
+    (the "positive" class). For multiclass, specify ``target_class`` explicitly.
 
     Requires ``venn`` keyword argument (a ``VennPrediction`` object).
 
@@ -446,32 +463,73 @@ class CalibrationError(Metric):
     use_hypothesis : bool, default False
         If True, use the correct-hypothesis probability :math:`P^y(y)`
         instead of the point estimate.
+    target_class : int or None, default None
+        Which class to track calibration for. If None, defaults to
+        ``label_space[1]`` (binary positive class). For multiclass problems,
+        this must be specified explicitly.
     max_history : int or None, default None
         Maximum number of (predicted, observed) pairs to store.
         If None, stores all. When exceeded, oldest pairs are discarded.
     """
 
-    def __init__(self, use_hypothesis: bool = False, max_history: int | None = None) -> None:
+    def __init__(
+        self,
+        use_hypothesis: bool = False,
+        target_class: Any = None,
+        max_history: int | None = None,
+    ) -> None:
         super().__init__()
         self.use_hypothesis = use_hypothesis
+        self.target_class = target_class
         self.max_history = max_history
         self._pairs: list[tuple[float, int]] = []  # (predicted_prob, true_indicator)
+
+    def reset(self) -> None:
+        """Reset the metric and clear stored calibration pairs."""
+        super().reset()
+        self._pairs = []
+
+    def update(self, y: Any = None, Gamma: Any = None, **kw: Any) -> float:
+        """Record one observation, respecting max_history for all state."""
+        val = super().update(y=y, Gamma=Gamma, **kw)
+        if self.max_history is not None and len(self._values) > self.max_history:
+            removed = self._values.pop(0)
+            self._sum -= removed
+            self._n -= 1
+        return val
 
     def _score(self, y, Gamma=None, *, venn=None, **kw):
         if venn is None:
             raise ValueError("CalibrationError requires venn keyword argument")
 
         label_idx = int(np.searchsorted(venn.label_space, y))
-        # For calibration we track P(y = positive_class) vs 1{y = positive_class}
-        # For binary: positive_class = label_space[1]
-        # For multiclass: use label_space[-1] (or user can filter externally)
-        pos_idx = min(1, len(venn.label_space) - 1)
+        if label_idx >= len(venn.label_space) or venn.label_space[label_idx] != y:
+            raise ValueError(
+                f"y={y!r} not found in label_space={venn.label_space.tolist()}"
+            )
+
+        # Determine target class index
+        if self.target_class is not None:
+            pos_idx = int(np.searchsorted(venn.label_space, self.target_class))
+            if pos_idx >= len(venn.label_space) or venn.label_space[pos_idx] != self.target_class:
+                raise ValueError(
+                    f"target_class={self.target_class!r} not in "
+                    f"label_space={venn.label_space.tolist()}"
+                )
+        elif len(venn.label_space) <= 2:
+            # Binary: default to label_space[1] (positive class)
+            pos_idx = min(1, len(venn.label_space) - 1)
+        else:
+            raise ValueError(
+                "For multiclass (|Y| > 2), target_class must be specified. "
+                f"label_space={venn.label_space.tolist()}"
+            )
 
         if self.use_hypothesis:
-            # P^y(positive_class): probability of positive class under correct hypothesis
+            # P^y(positive_class): probability of target class under correct hypothesis
             pred_prob = float(venn.probs[label_idx, pos_idx])
         else:
-            # Point estimate probability for positive class
+            # Point estimate probability for target class
             pred_prob = float(venn.point[pos_idx])
 
         indicator = int(label_idx == pos_idx)
@@ -496,6 +554,29 @@ class CalibrationError(Metric):
             return np.array([])
         return np.array([o for _, o in self._pairs])
 
+    def _bin_edges(self, predicted: NDArray, n_bins: int, strategy: str) -> NDArray:
+        """Compute bin edges for calibration binning."""
+        if strategy == "uniform":
+            return np.linspace(0.0, 1.0, n_bins + 1)
+        elif strategy == "quantile":
+            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+            edges = np.quantile(predicted, quantiles)
+            edges[0] = 0.0
+            edges[-1] = 1.0
+            return edges
+        else:
+            raise ValueError(f"Unknown strategy {strategy!r}. Choose 'uniform' or 'quantile'.")
+
+    def _bin_masks(self, predicted: NDArray, bin_edges: NDArray, n_bins: int) -> list[NDArray]:
+        """Compute boolean masks for each bin."""
+        masks = []
+        for i in range(n_bins):
+            if i < n_bins - 1:
+                masks.append((predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1]))
+            else:
+                masks.append((predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1]))
+        return masks
+
     def ece(self, n_bins: int = 10, strategy: str = "uniform") -> float:
         """Compute binned Expected Calibration Error.
 
@@ -518,30 +599,16 @@ class CalibrationError(Metric):
 
         predicted = self.predicted
         observed = self.observed
-
-        if strategy == "uniform":
-            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
-        elif strategy == "quantile":
-            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
-            bin_edges = np.quantile(predicted, quantiles)
-            bin_edges[0] = 0.0
-            bin_edges[-1] = 1.0
-        else:
-            raise ValueError(f"Unknown strategy {strategy!r}. Choose 'uniform' or 'quantile'.")
+        bin_edges = self._bin_edges(predicted, n_bins, strategy)
+        masks = self._bin_masks(predicted, bin_edges, n_bins)
 
         ece_val = 0.0
         n_total = len(predicted)
 
-        for i in range(n_bins):
-            if i < n_bins - 1:
-                mask = (predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1])
-            else:
-                mask = (predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1])
-
+        for mask in masks:
             n_bin = mask.sum()
             if n_bin == 0:
                 continue
-
             mean_pred = predicted[mask].mean()
             frac_pos = observed[mask].mean()
             ece_val += (n_bin / n_total) * abs(mean_pred - frac_pos)
@@ -572,31 +639,17 @@ class CalibrationError(Metric):
 
         predicted = self.predicted
         observed = self.observed
-
-        if strategy == "uniform":
-            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
-        elif strategy == "quantile":
-            quantiles = np.linspace(0.0, 1.0, n_bins + 1)
-            bin_edges = np.quantile(predicted, quantiles)
-            bin_edges[0] = 0.0
-            bin_edges[-1] = 1.0
-        else:
-            raise ValueError(f"Unknown strategy {strategy!r}.")
+        bin_edges = self._bin_edges(predicted, n_bins, strategy)
+        masks = self._bin_masks(predicted, bin_edges, n_bins)
 
         mean_preds = []
         frac_pos = []
         counts = []
 
-        for i in range(n_bins):
-            if i < n_bins - 1:
-                mask = (predicted >= bin_edges[i]) & (predicted < bin_edges[i + 1])
-            else:
-                mask = (predicted >= bin_edges[i]) & (predicted <= bin_edges[i + 1])
-
+        for mask in masks:
             n_bin = mask.sum()
             if n_bin == 0:
                 continue
-
             mean_preds.append(predicted[mask].mean())
             frac_pos.append(observed[mask].mean())
             counts.append(n_bin)

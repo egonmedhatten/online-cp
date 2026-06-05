@@ -9,36 +9,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `VennAbersPredictor`: now supports multiclass labels (|Y| > 2) using OVR isotonic calibration with 2|Y| PAVA calls per prediction. All 4 scorers (ridge, kernel_ridge, knn, svm) supported. Binary behaviour unchanged. Accepts optional `label_space` constructor argument.
-- `MulticlassVennPrediction`: Output type for multiclass Venn predictors — a |Y| × |Y| multiprobability matrix with `.point` aggregation property.
-- `NearestNeighboursVennPredictor`: now supports multiclass labels (|Y| > 2) using same-class-count taxonomy. Binary behaviour unchanged. Accepts optional `label_space` constructor argument.
-- `NearestNeighboursVennPredictor`: Online Venn predictor with k-NN voting taxonomy (ALRW2 §6.2). Produces calibrated multiprobability predictions via taxonomy-based frequency counting. Generalises the 1-NN taxonomy from the textbook to arbitrary k.
-- `VennAbersPredictor`: Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4) producing calibrated multi-probability predictions for binary classification. Supports ridge regression, k-NN, and SVM scoring functions. First known Python implementation of the full/transductive variant.
-- `VennPrediction`: Unified output type for all Venn predictors — the multiprobability pair (p0, p1).
-- `log_loss_point(p0, p1)`: Merge a Venn pair into a single probability minimising log loss (ALRW2 §6.4).
-- `brier_point(p0, p1)`: Merge a Venn pair into a single probability minimising Brier loss.
-- `ConformalNearestNeighboursRegressor`: Online conformal k-NN regressor (§2.4, ALRW2) with leave-one-out k-NN predictions, configurable k, mean/median aggregation, and custom distance functions.
-- `VilleWrapper`: Ville's inequality wrapper for any conformal test martingale — rejects when running maximum exceeds threshold (§8.4.1, ALRW2).
-- `SleeperStayer`: Sleeper/Stayer martingale (Algorithm 9.4, ALRW2) for change-point detection.
-- `SleeperDrifter`: Sleeper/Drifter martingale (Algorithm 9.5, ALRW2) for gradual drift detection.
-- `CUSUMWrapper`: Page CUSUM wrapper for any conformal test martingale (§8.3, ALRW2).
-- `ShiryaevRobertsWrapper`: Shiryaev-Roberts wrapper for any conformal test martingale (§8.3, ALRW2).
-- `PiecewiseConstantBetting`: Piecewise-constant betting function f_{(a,b)} (§9.2, ALRW2).
+- **Decision-making module** (`online_cp.decision`):
+  - `ConformalPredictiveDecisionMaker`: Vovk & Bendtsen (2018) Algorithm 1 —
+    maintains one CPS per decision, trained on utility-transformed labels.
+  - `UtilityFunction`: bundles a utility callable with its decision space.
+  - `cps_decision`, `cps_expected_utilities`: single-CPD decision making.
+  - `venn_decision`, `venn_expected_utilities`: Venn multiprobability decisions.
+  - `alpha_utility`, `alpha_regret`: Hurwicz and minimax-regret criteria.
+- **Calibration diagnostics**:
+  - `CalibrationError` metric (binned ECE, uniform/quantile strategies,
+    `use_hypothesis` mode for Venn validity checking).
+  - `plot_reliability_diagram`, `plot_reliability_diagram_venn`,
+    `plot_sharpness`, `plot_pit_histogram`, `plot_calibration_conditional`.
+- **Venn/probabilistic metrics**: `BrierScore`, `LogLoss`, `Width` for
+  scoring Venn multiprobability predictions.
+- **CPD scoring metrics**: `TruncatedCRPS`, `ConformalCRPS` (exact
+  piecewise-constant summation, no numerical quadrature).
+- **sklearn wrapper improvements**:
+  - `warm_start` parameter ("auto"/True/False) on `ConformalClassifierWrapper`.
+  - `n_jobs` parameter for parallel label loop via joblib.
+  - Base fit caching between predict calls (invalidated on `learn_one`).
+- `VennAbersPredictor`: multiclass support (|Y| > 2) via OVR isotonic
+  calibration. All 4 scorers (ridge, kernel_ridge, knn, svm) supported.
+- `VennAbersPredictor`: kernel-ridge scorer added.
+- `MulticlassVennPrediction`: output type for multiclass Venn predictors —
+  |Y| × |Y| multiprobability matrix with `.point` aggregation property.
+- `NearestNeighboursVennPredictor`: Online Venn predictor with k-NN voting
+  taxonomy (ALRW2 §6.2). Binary and multiclass.
+- `VennAbersPredictor`: Full online Venn-Abers predictor (Algorithm 6.1,
+  ALRW2 §6.4). First known Python implementation of full/transductive variant.
+- `VennPrediction`: Unified output type for all Venn predictors.
+- `log_loss_point(p0, p1)`, `brier_point(p0, p1)`: merge Venn pairs into
+  single probabilities minimising log loss / Brier loss.
+- `ConformalNearestNeighboursRegressor`: Online conformal k-NN regressor
+  (§2.4, ALRW2) with leave-one-out predictions, configurable k,
+  mean/median aggregation, and custom distance functions.
+- `VilleWrapper`: Ville's inequality procedure (§8.4.1, ALRW2).
+- `SleeperStayer`: Algorithm 9.4 (ALRW2) for change-point detection.
+- `SleeperDrifter`: Algorithm 9.5 (ALRW2) for gradual drift detection.
+- `CUSUMWrapper`: Page CUSUM wrapper (§8.3, ALRW2).
+- `ShiryaevRobertsWrapper`: Shiryaev-Roberts wrapper (§8.3, ALRW2).
+- `PiecewiseConstantBetting`: betting function f_{(a,b)} (§9.2, ALRW2).
+- `plot_detector`: visualise change-point detection wrappers with alarm markers.
+- `kernel_induced_distance`, `kernel_matrix_to_distance_matrix`: convert
+  kernels to distance metrics for k-NN methods.
+- Label-conditional Mondrian classifier (`category_fn='label'`).
+- Type annotations on all public API methods.
+- "Which method?" decision guide (`docs/guide.md`, `notebooks/guide.ipynb`).
+- Benchmarking infrastructure: 5 datasets, 12 model configs, CLI.
+- **API contract specification** (`.roadmap/REQUIREMENTS.md`):
+  - Formal interface contracts for all 8 module categories: regressors, classifiers, Venn, CPS, martingales, betting strategies, decision-making, evaluation.
+  - Versioning & deprecation policy (SemVer, 1-minor deprecation cycle).
+  - Stability classification (Stable/Beta/Experimental per category).
+  - Thread safety disclaimer.
+
+### Fixed
+
+- **martingale.py direct script execution**: Handle relative imports with try/except fallback for both package context and direct script execution (needed for CI `run-modules` step).
+- **Holistic audit findings** (pre-v0.3.0 freeze):
+  - Exported but undocumented classes added to API docs: `Kernel`, `CustomKernel` (kernels.md), `ConformalPredictiveDecisionMaker` (decision.md), `MulticlassVennPrediction` (venn.md).
+  - New dedicated documentation page for betting strategies (`docs/api/betting.md`, was scattered in martingale.md).
+  - Removed experimental `ConformalClassifierWrapper` reference from README (not exported).
+  - Version alignment: CITATION.cff updated 0.1.1 → 0.2.0.
 
 ### Changed
 
-- **BREAKING**: `VennPrediction` is now a unified class for binary *and* multiclass predictions. Binary predictions use `VennPrediction.binary(p0, p1)` factory method; multiclass use `VennPrediction(probs, label_space)` constructor directly. `MulticlassVennPrediction` is retained as an alias.
-- **BREAKING**: Label-space policy for `NearestNeighboursVennPredictor` and conformal classifiers (`ConformalNearestNeighboursClassifier`, `ConformalClassifierWrapper`, `ConformalSupportVectorMachine`): default is now `label_space=None` (adaptive — infer from data). Pass explicit `label_space=[...]` to lock; `learn_one` raises `ValueError` on unknown labels when fixed.
-- **BREAKING**: `VennAbersPrediction` renamed to `VennPrediction` — unified output type for all Venn predictors.
-- Martingale architecture redesigned: martingales are now pure evidence processes. Statistical decision procedures (`VilleWrapper`, `CUSUMWrapper`, `ShiryaevRobertsWrapper`) are separate wrappers.
-- CPS module refactored: removed unnecessary parameter constraints, improved performance with `solve_triangular`, improved tie handling in `NearestNeighboursPredictionMachine`.
-- `GaussianKDE` numba functions use `cache=False` to avoid stale bytecode cache issues.
+- **BREAKING**: `VennPrediction` is now a unified class for binary *and*
+  multiclass predictions. Binary: `VennPrediction.binary(p0, p1)`.
+  Multiclass: `VennPrediction(probs, label_space)`.
+- **BREAKING**: Label-space policy for `NearestNeighboursVennPredictor` and
+  conformal classifiers: default is now `label_space=None` (adaptive).
+  Pass explicit `label_space=[...]` to lock.
+- **BREAKING**: `VennAbersPrediction` renamed to `VennPrediction`.
+- **BREAKING**: `CRPS` now delegates to `TruncatedCRPS` (identical
+  behaviour, emits deprecation warning).
+- Decision criteria renamed: `alpha_utility` / `alpha_regret` (was
+  `hurwicz` / `minimax_regret`).
+- Martingale architecture: martingales are pure evidence processes;
+  statistical decision procedures are separate wrappers.
+- CPS module: removed unnecessary parameter constraints, improved
+  performance with `solve_triangular`, improved tie handling.
+- `GaussianKDE` numba functions use `cache=False` to avoid stale bytecode.
+- API consistency fixes: `PeriodicKernel.name`, `LinearCombinationKernel.name`,
+  `evaluate.py` tau handling, `predict()` canonical on Venn/CPS.
+- README updated with decision-making section, expanded Features table,
+  and proper references (Lei 2019, Vovk & Bendtsen 2018).
 
 ### Removed
 
 - `update_martingale_value()` alias — use `.update(p)` directly.
-- `warnings` and `warning_level` parameters removed from all martingale constructors.
-- `check_warning()`, `.max`, `.log_max` removed from martingale base class (use `VilleWrapper` instead).
+- `warnings` and `warning_level` parameters from martingale constructors.
+- `check_warning()`, `.max`, `.log_max` from martingale base class.
+- `conformal_expectation` from CPS module (use `cps_decision` instead).
 
 ## [0.2.0] — 2026-05-19
 

@@ -22,6 +22,17 @@ from typing import Any, Callable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
+__all__ = [
+    "UtilityFunction",
+    "cps_expected_utilities",
+    "venn_expected_utilities",
+    "alpha_utility",
+    "alpha_regret",
+    "cps_decision",
+    "venn_decision",
+    "ConformalPredictiveDecisionMaker",
+]
+
 
 # ---------------------------------------------------------------------------
 # Layer 1: Utility Function
@@ -48,11 +59,18 @@ class UtilityFunction:
     """
 
     def __init__(self, fn: Callable[..., float], decisions: Sequence[Any]) -> None:
+        if not callable(fn):
+            raise TypeError("fn must be callable")
         self.fn = fn
         self.decisions = list(decisions)
+        if not self.decisions:
+            raise ValueError("decisions must be non-empty")
 
     def __call__(self, x: Any, y: Any, d: Any) -> float:
         return self.fn(x, y, d)
+
+    def __repr__(self) -> str:
+        return f"UtilityFunction(|D|={len(self.decisions)})"
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +112,9 @@ def cps_expected_utilities(
     dict
         Mapping from each decision to its expected utility (float).
     """
+    if not (0 <= tau <= 1):
+        raise ValueError(f"tau must be in [0, 1], got {tau}")
+
     delta_Q = _cpd_masses(cpd, tau)
     # Pre-compute Y values where mass is non-zero AND finite
     finite_mask = np.isfinite(cpd.Y)
@@ -176,13 +197,16 @@ def alpha_utility(expectations: dict[Any, float | NDArray | tuple], alpha: float
         Mapping from decision to expected utility. Values can be:
         scalars (point), ndarrays (one per hypothesis), or tuples (lo, hi).
     alpha : float, default 0.0
-        Optimism index (0 = pessimistic, 1 = optimistic).
+        Optimism index in [0, 1] (0 = pessimistic, 1 = optimistic).
 
     Returns
     -------
     any
         The optimal decision.
     """
+    if not (0 <= alpha <= 1):
+        raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+
     def score(d):
         lo = _lower(expectations[d])
         hi = _upper(expectations[d])
@@ -211,13 +235,16 @@ def alpha_regret(expectations: dict[Any, NDArray | tuple], alpha: float = 0.0) -
     expectations : dict
         Mapping from decision to imprecise expectations (ndarray or tuple).
     alpha : float, default 0.0
-        Optimism index (0 = pessimistic, 1 = optimistic).
+        Optimism index in [0, 1] (0 = pessimistic, 1 = optimistic).
 
     Returns
     -------
     any
         The decision minimising the α-regret score.
     """
+    if not (0 <= alpha <= 1):
+        raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+
     decisions = list(expectations.keys())
     cols = [_as_array(expectations[d]) for d in decisions]
     matrix = np.column_stack(cols)  # shape (n_scenarios, n_decisions)
@@ -261,7 +288,7 @@ def cps_decision(
     x : any
         Features of the test object.
     tau : float, default 0.5
-        Randomisation parameter.
+        Randomisation parameter in [0, 1].
 
     Returns
     -------
@@ -269,7 +296,7 @@ def cps_decision(
         The optimal decision.
     """
     exps = cps_expected_utilities(cpd, utility, x, tau)
-    return alpha_utility(exps, alpha=0.5)
+    return max(exps, key=exps.get)
 
 
 def venn_decision(
@@ -307,6 +334,9 @@ def venn_decision(
     any
         The optimal decision.
     """
+    if not (0 <= alpha <= 1):
+        raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+
     exps = venn_expected_utilities(venn_pred, utility, x)
     return _apply_criterion(exps, criterion, alpha)
 
@@ -400,24 +430,15 @@ class ConformalPredictiveDecisionMaker:
         x : array-like of shape (p,)
             Test object features.
         tau : float, default 0.5
-            Randomisation parameter.
+            Randomisation parameter in [0, 1].
 
         Returns
         -------
         any
             The optimal decision.
         """
-        best_d = None
-        best_eu = -np.inf
-        for d, model in self._models.items():
-            cpd = model.predict_cpd(x)
-            masses = _cpd_masses(cpd, tau)
-            finite_mask = np.isfinite(cpd.Y)
-            eu = float((cpd.Y[finite_mask] * masses[finite_mask]).sum())
-            if eu > best_eu:
-                best_eu = eu
-                best_d = d
-        return best_d
+        eus = self.predict_expected_utilities(x, tau)
+        return max(eus, key=eus.get)
 
     def predict_expected_utilities(self, x: Any, tau: float = 0.5) -> dict[Any, float]:
         """Return expected utilities for all decisions (without selecting one).
@@ -427,13 +448,16 @@ class ConformalPredictiveDecisionMaker:
         x : array-like of shape (p,)
             Test object features.
         tau : float, default 0.5
-            Randomisation parameter.
+            Randomisation parameter in [0, 1].
 
         Returns
         -------
         dict
             Mapping from each decision to its expected utility.
         """
+        if not (0 <= tau <= 1):
+            raise ValueError(f"tau must be in [0, 1], got {tau}")
+
         result = {}
         for d, model in self._models.items():
             cpd = model.predict_cpd(x)
@@ -458,6 +482,11 @@ class ConformalPredictiveDecisionMaker:
         for d, model in self._models.items():
             u = self.utility(x, y, d)
             model.learn_one(x, u)
+
+    def __repr__(self) -> str:
+        cps_name = self._cps_class.__name__
+        n_decisions = len(self.utility.decisions)
+        return f"ConformalPredictiveDecisionMaker(|D|={n_decisions}, cps={cps_name})"
 
 
 # ---------------------------------------------------------------------------

@@ -177,7 +177,7 @@ class TestKernelRidgePredictionMachine:
         """CPD(y, tau=0) <= CPD(y, tau=1) for all y."""
         X, Y = kernel_cps_dataset
         kernel = GaussianKernel(sigma=1.0)
-        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1)
         cps.learn_initial_training_set(X[:15], Y[:15])
 
         cpd = cps.predict_cpd(X[15])
@@ -189,7 +189,7 @@ class TestKernelRidgePredictionMachine:
         """CPD values should be in [0, 1]."""
         X, Y = kernel_cps_dataset
         kernel = GaussianKernel(sigma=1.0)
-        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1)
         cps.learn_initial_training_set(X[:15], Y[:15])
 
         cpd = cps.predict_cpd(X[15])
@@ -203,7 +203,7 @@ class TestKernelRidgePredictionMachine:
         X, Y = kernel_cps_dataset
         epsilon = 0.1
         kernel = GaussianKernel(sigma=1.0)
-        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False, epsilon=epsilon)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, epsilon=epsilon)
         cps.learn_initial_training_set(X[:15], Y[:15])
 
         rng = np.random.default_rng(42)
@@ -225,13 +225,13 @@ class TestKernelRidgePredictionMachine:
         kernel = GaussianKernel(sigma=1.0)
 
         # With precomputed
-        cps1 = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps1 = KernelRidgePredictionMachine(kernel=kernel, a=1)
         cps1.learn_initial_training_set(X[:15], Y[:15])
         _, precomputed = cps1.predict_cpd(X[15], return_update=True)
         cps1.learn_one(X[15], Y[15], precomputed=precomputed)
 
         # Without precomputed
-        cps2 = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps2 = KernelRidgePredictionMachine(kernel=kernel, a=1)
         cps2.learn_initial_training_set(X[:15], Y[:15])
         cps2.learn_one(X[15], Y[15])
 
@@ -243,7 +243,7 @@ class TestKernelRidgePredictionMachine:
     def test_learn_one_from_empty(self):
         """Can learn points one by one starting from empty."""
         kernel = GaussianKernel(sigma=1.0)
-        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1)
 
         rng = np.random.default_rng(0)
         for _i in range(5):
@@ -259,7 +259,7 @@ class TestKernelRidgePredictionMachine:
     def test_predict_after_learn_from_empty(self):
         """Can predict after learning from empty."""
         kernel = GaussianKernel(sigma=1.0)
-        cps = KernelRidgePredictionMachine(kernel=kernel, a=1, warnings=False)
+        cps = KernelRidgePredictionMachine(kernel=kernel, a=1)
 
         rng = np.random.default_rng(1)
         for _i in range(10):

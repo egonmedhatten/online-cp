@@ -22,20 +22,4 @@
 
 ::: online_cp.martingale.ShiryaevRobertsWrapper
 
-## Betting Strategies
-
-::: online_cp.martingale.GaussianKDE
-
-::: online_cp.martingale.BetaKernel
-
-::: online_cp.martingale.BetaMoments
-
-::: online_cp.martingale.BetaMLE
-
-::: online_cp.martingale.ParticleFilterStrategy
-
-::: online_cp.martingale.FixedStrategy
-
-::: online_cp.martingale.ExpertAggregationStrategy
-
-::: online_cp.martingale.PiecewiseConstantBetting
+For betting strategies (density estimators used by martingales), see [Betting Strategies](betting.md).

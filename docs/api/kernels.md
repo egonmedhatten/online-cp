@@ -1,5 +1,9 @@
 # Kernels
 
+::: online_cp.kernels.Kernel
+
+::: online_cp.kernels.CustomKernel
+
 ::: online_cp.kernels.GaussianKernel
 
 ::: online_cp.kernels.LinearKernel

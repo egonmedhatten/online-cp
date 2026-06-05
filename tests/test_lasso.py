@@ -58,7 +58,6 @@ class TestConformalLassoRegressor:
         assert cp.X.shape == (30, 10)
         assert cp.y.shape == (30,)
         assert cp.beta is not None
-        assert cp.Sigma.shape == (10, 10)
 
     def test_predict_returns_interval(self, sparse_data):
         X, y, _ = sparse_data
@@ -349,6 +348,21 @@ class TestElasticNet:
 
         coverage = covered / total
         assert coverage >= 0.5, f"Coverage too low: {coverage:.2f}"
+
+    def test_predict_epsilon_passthrough(self, correlated_data):
+        """Predict with non-default epsilon should use that epsilon in homotopy."""
+        X, y, _ = correlated_data
+        cp = ConformalLassoRegressor(lam=0.5, rho=1.0, epsilon=0.2, rnd_state=0)
+        cp.learn_initial_training_set(X[:30], y[:30])
+
+        x_test = X[30]
+        # Predict at a TIGHTER epsilon than default → interval should be WIDER
+        interval_tight = cp.predict(x_test, epsilon=0.05)
+        interval_default = cp.predict(x_test, epsilon=0.2)
+
+        # Tighter epsilon must give at least as wide an interval
+        assert interval_tight.lower <= interval_default.lower + 1e-10
+        assert interval_tight.upper >= interval_default.upper - 1e-10
 
     def test_large_rho_approaches_ridge(self):
         """With very large rho and lam=0, should behave like ridge regression."""

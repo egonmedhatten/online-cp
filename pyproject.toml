@@ -49,8 +49,11 @@ ci = [
 	"validate-pyproject",
 	"trove-classifiers",
 ]
+progress = [
+	"tqdm",
+]
 all = [
-	"online-cp[fast,dev]",
+	"online-cp[fast,dev,progress]",
 ]
 benchmark = [
 	"scikit-learn",

@@ -83,6 +83,20 @@ def _should_learn(learn, i, x_i, y_i):
     return learn(i, x_i, y_i)
 
 
+def _wrap_progress(iterable, total=None, enabled=False, desc=None):
+    """Optionally wrap an iterable with a tqdm progress bar."""
+    if not enabled:
+        return iterable
+    try:
+        from tqdm.auto import tqdm
+    except ImportError as exc:
+        raise ImportError(
+            "tqdm is required for progress bars. "
+            "Install it with: pip install online-cp[progress]"
+        ) from exc
+    return tqdm(iterable, total=total, desc=desc)
+
+
 def _predict_and_update(model, x_i, y_i, metric, needs_p, needs_cpd, predict_kw, epsilon, rng):
     """Core predict-then-update step shared by progressive_val variants."""
     kw = {}
@@ -113,6 +127,7 @@ def progressive_val(
     metric: Metric | Metrics | None = None,
     learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
     print_every: int = 0,
+    progress: bool = False,
 ) -> Metric | Metrics:
     """Run the progressive validation (test-then-train) protocol.
 
@@ -155,7 +170,9 @@ def progressive_val(
     if epsilon is not None:
         predict_kw["epsilon"] = epsilon
 
-    for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
+    total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
+    data_iter = _wrap_progress(_iter_data(X, y), total=total, enabled=progress)
+    for i, (x_i, y_i, t_i) in enumerate(data_iter):
         _predict_and_update(model, x_i, y_i, metric, needs_p, needs_cpd, predict_kw, epsilon, rng)
 
         if _should_learn(learn, i, x_i, y_i):
@@ -176,6 +193,7 @@ def iter_progressive_val(
     metric: Metric | Metrics | None = None,
     learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
     step: int = 1,
+    progress: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """Iterate the progressive validation protocol, yielding checkpoints.
 
@@ -218,7 +236,9 @@ def iter_progressive_val(
     if epsilon is not None:
         predict_kw["epsilon"] = epsilon
 
-    for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
+    total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
+    data_iter = _wrap_progress(_iter_data(X, y), total=total, enabled=progress)
+    for i, (x_i, y_i, t_i) in enumerate(data_iter):
         _predict_and_update(model, x_i, y_i, metric, needs_p, needs_cpd, predict_kw, epsilon, rng)
 
         if _should_learn(learn, i, x_i, y_i):
@@ -246,6 +266,7 @@ def progressive_val_venn(
     metric: Metric | Metrics | None = None,
     learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
     print_every: int = 0,
+    progress: bool = False,
 ) -> Metric | Metrics:
     """Run progressive validation for Venn predictors.
 
@@ -278,7 +299,9 @@ def progressive_val_venn(
     if metric is None:
         metric = BrierScore()
 
-    for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
+    total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
+    data_iter = _wrap_progress(_iter_data(X, y), total=total, enabled=progress)
+    for i, (x_i, y_i, t_i) in enumerate(data_iter):
         venn_pred = model.predict(x_i)
         metric.update(y=y_i, Gamma=None, venn=venn_pred)
 
@@ -299,6 +322,7 @@ def iter_progressive_val_venn(
     metric: Metric | Metrics | None = None,
     learn: bool | Callable[[int, NDArray[np.floating[Any]], Any], bool] = True,
     step: int = 1,
+    progress: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """Iterate progressive validation for Venn predictors, yielding checkpoints.
 
@@ -327,7 +351,9 @@ def iter_progressive_val_venn(
     if metric is None:
         metric = BrierScore()
 
-    for i, (x_i, y_i, t_i) in enumerate(_iter_data(X, y)):
+    total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
+    data_iter = _wrap_progress(_iter_data(X, y), total=total, enabled=progress)
+    for i, (x_i, y_i, t_i) in enumerate(data_iter):
         venn_pred = model.predict(x_i)
         metric.update(y=y_i, Gamma=None, venn=venn_pred)
 

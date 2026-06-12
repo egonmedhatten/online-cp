@@ -31,6 +31,7 @@ fast = [
 dev = [
 	"pytest",
 	"ruff",
+	"leancheck",
 ]
 docs = [
 	"mkdocs-material",
@@ -70,6 +71,12 @@ benchmark = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Fast lane by default: structural (leancheck) + unit tests only.
+# Heavy statistical-validity tests are opt-in via `pytest -m slow`.
+addopts = "-m 'not slow'"
+markers = [
+	"slow: statistical-validity tests (law of large numbers over generated streams); run with -m slow",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/online_cp"]

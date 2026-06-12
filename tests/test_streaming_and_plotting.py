@@ -98,6 +98,81 @@ class TestStreamingEval:
         assert snapshots[0]["step"] == 10
         assert snapshots[1]["step"] == 20
 
+    def test_delay_int_resolves_all_labels(self, linear_dataset):
+        """Fixed delay: all labels are resolved after progressive_val returns."""
+        X, y = linear_dataset
+        model = ConformalRidgeRegressor(a=1.0)
+        model.learn_initial_training_set(X[:50], y[:50])
+        metric = ErrorRate()
+        progressive_val(model, X[50:100], y[50:100], epsilon=0.1, metric=metric, delay=3)
+        assert len(metric.values) == 50
+
+    def test_delay_callable(self, linear_dataset):
+        """Callable delay returning 0 behaves identically to delay=0."""
+        X, y = linear_dataset
+        model = ConformalRidgeRegressor(a=1.0)
+        model.learn_initial_training_set(X[:50], y[:50])
+        metric = ErrorRate()
+        progressive_val(
+            model, X[50:80], y[50:80], epsilon=0.1, metric=metric,
+            delay=lambda i, x, y: 0,
+        )
+        assert len(metric.values) == 30
+
+    def test_lazy_teacher_none_labels(self, linear_dataset):
+        """y=None in stream skips metric update and learning."""
+        X, y = linear_dataset
+        model = ConformalRidgeRegressor(a=1.0)
+        model.learn_initial_training_set(X[:50], y[:50])
+        n_before = model.X.shape[0]
+        # Every other label is missing.
+        stream = [(X[i], y[i] if i % 2 == 0 else None) for i in range(50, 70)]
+        metric = ErrorRate()
+        progressive_val(model, stream, epsilon=0.1, metric=metric)
+        assert len(metric.values) == 10  # only even-index labels
+        assert model.X.shape[0] == n_before + 10
+
+    def test_iter_delay_teardown(self, linear_dataset):
+        """iter_progressive_val emits a teardown snapshot when delay > 0."""
+        X, y = linear_dataset
+
+        # delay=0: 20 samples, step=10 -> exactly 2 snapshots, no teardown.
+        model1 = ConformalRidgeRegressor(a=1.0)
+        model1.learn_initial_training_set(X[:50], y[:50])
+        snaps_no_delay = list(
+            iter_progressive_val(model1, X[50:70], y[50:70], epsilon=0.1, step=10, delay=0)
+        )
+        assert len(snaps_no_delay) == 2
+
+        # delay=5: items 15-19 have arrival steps 20-24, resolved in teardown.
+        model2 = ConformalRidgeRegressor(a=1.0)
+        model2.learn_initial_training_set(X[:50], y[:50])
+        snaps_delayed = list(
+            iter_progressive_val(model2, X[50:70], y[50:70], epsilon=0.1, step=10, delay=5)
+        )
+        # step=10 snapshot, step=20 snapshot, teardown snapshot.
+        assert len(snaps_delayed) == 3
+        assert snaps_delayed[-1]["step"] == 20
+
+    def test_progressive_val_with_progress_bar(self, ridge_model):
+        """progress=True displays running metrics via tqdm postfix (smoke test)."""
+        try:
+            import tqdm  # noqa: F401
+        except ImportError:
+            pytest.skip("tqdm not installed; skipping progress bar test")
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate() + IntervalWidth()
+        result = progressive_val(
+            model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric, progress=True
+        )
+        assert result is metric
+        # Verify metrics were updated (check via get() dict).
+        metric_dict = metric.get()
+        assert "ErrorRate" in metric_dict
+        assert "IntervalWidth" in metric_dict
+
+
 
 class TestVennEval:
     """Tests for progressive_val_venn and iter_progressive_val_venn."""
@@ -150,6 +225,34 @@ class TestVennEval:
         stream = [(X_test[i], y_test[i], f"t{i}") for i in range(len(X_test))]
         snapshots = list(iter_progressive_val_venn(model, stream, step=10))
         assert snapshots[0]["t"] == "t9"
+
+    def test_progressive_val_venn_delay(self, venn_model):
+        """Fixed delay: all labels resolved after progressive_val_venn returns."""
+        model, X_test, y_test = venn_model
+        metric = BrierScore()
+        progressive_val_venn(model, X_test, y_test, metric=metric, delay=3)
+        assert metric._n == len(X_test)
+
+    def test_lazy_teacher_venn(self, venn_model):
+        """y=None in stream skips metric update and learning for Venn predictor."""
+        model, X_test, y_test = venn_model
+        # Every other label is missing.
+        stream = [(X_test[i], y_test[i] if i % 2 == 0 else None) for i in range(len(X_test))]
+        metric = BrierScore()
+        progressive_val_venn(model, stream, metric=metric)
+        expected = sum(1 for i in range(len(X_test)) if i % 2 == 0)
+        assert metric._n == expected
+
+    def test_iter_progressive_val_venn_delay_teardown(self, venn_model):
+        """iter_progressive_val_venn emits a teardown snapshot when delay > 0."""
+        model, X_test, y_test = venn_model
+        n = len(X_test)  # 20
+        snaps = list(
+            iter_progressive_val_venn(model, X_test, y_test, step=5, delay=3)
+        )
+        # n//step regular snapshots + 1 teardown (delay=3 leaves last 3 unresolved).
+        assert len(snaps) == n // 5 + 1
+        assert snaps[-1]["step"] == n
 
 
 class TestPlotting:

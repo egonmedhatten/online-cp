@@ -159,7 +159,30 @@ for snapshot in iter_progressive_val(model, stream, epsilon=0.1, step=50):
 progressive_val(model, X, y, learn=lambda i, x, y: i % 2 == 0)
 ```
 
-### Plotting utilities
+#### Weak & Lazy Teachers (delayed and sparse feedback)
+
+To model real-world label latency, pass a `delay` (in steps) to any
+progressive-validation function. Labels are scheduled in a min-heap and
+applied when they arrive; all outstanding labels are flushed at the end of
+the stream:
+
+```python
+# Fixed lag: label for step i arrives at step i+5
+progressive_val(model, X_test, y_test, epsilon=0.1, delay=5)
+
+# Dynamic latency: callable (step_index, x, y) → int
+progressive_val(model, stream, epsilon=0.1, delay=lambda i, x, y: i % 10)
+
+# Lazy Teacher: pass y=None for steps with no feedback
+sparse_stream = ((x, y if oracle_available else None) for x, y in stream)
+iter_progressive_val(model, sparse_stream, epsilon=0.1, step=50)
+```
+
+Asymptotic validity is retained for invariant conformal predictors
+(ALRW2, §3.3, Thm 3.7–3.11). A fixed lag `delay=l` gives equally-spaced
+feedback ($n_k = O(k)$) and enjoys the strongest (LIL) guarantee;
+a lazy teacher is valid as long as feedback arrives at more than a
+logarithmic fraction of trials.
 
 ```python
 from online_cp.plotting import plot_coverage, plot_martingale, plot_intervals

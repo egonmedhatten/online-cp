@@ -62,6 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Versioning & deprecation policy (SemVer, 1-minor deprecation cycle).
   - Stability classification (Stable/Beta/Experimental per category).
   - Thread safety disclaimer.
+- **Weak & Lazy Teacher evaluation** (ALRW2, §3.3): all four progressive-
+  validation functions (`progressive_val`, `iter_progressive_val`,
+  `progressive_val_venn`, `iter_progressive_val_venn`) now accept a
+  `delay` parameter (int or callable `(step, x, y) → int`) that schedules
+  labels in a min-heap priority queue and resolves them when they arrive,
+  directly implementing Vovk's teaching-schedule formalism:
+  - **Weak / slow teacher**: fixed or dynamic label lag; LIL-rate asymptotic
+    validity preserved for invariant conformal predictors (Thm 3.7–3.11).
+  - **Lazy teacher**: pass `y = None` in stream items to skip metric update
+    and learning for that step while still emitting a prediction.
+  - `iter_*` functions emit a final teardown snapshot after the stream is
+    exhausted so the last yielded snapshot is always fully resolved.
+  - `delay=0` (default) is backward-compatible with prior behaviour.
 
 ### Fixed
 

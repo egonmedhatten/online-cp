@@ -41,6 +41,7 @@ docs = [
 ci = [
 	"online-cp[all]",
 	"coverage",
+	"leancheck",
 	"nbconvert",
 	"ipykernel",
 	"scikit-learn",

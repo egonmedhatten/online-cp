@@ -178,10 +178,19 @@ class VennPrediction:
         Parameters
         ----------
         p0 : float
-            P(y=1) under hypothesis y=0.
+            P(y=1) under hypothesis y=0.  Must be in [0, 1].
         p1 : float
-            P(y=1) under hypothesis y=1.
+            P(y=1) under hypothesis y=1.  Must be in [0, 1].
+
+        Raises
+        ------
+        ValueError
+            If p0 or p1 is outside [0, 1].
         """
+        if not (0.0 <= p0 <= 1.0):
+            raise ValueError(f"p0 must be in [0, 1], got {p0}")
+        if not (0.0 <= p1 <= 1.0):
+            raise ValueError(f"p1 must be in [0, 1], got {p1}")
         probs = np.array([[1.0 - p0, p0], [1.0 - p1, p1]])
         return cls(probs, np.array([0, 1]))
 
@@ -252,6 +261,11 @@ def log_loss_point(p0, p1):
     float
         Single probability minimising expected log loss.
 
+    Raises
+    ------
+    ValueError
+        If p0 or p1 is outside [0, 1].
+
     Examples
     --------
     >>> log_loss_point(0.2, 0.8)
@@ -259,6 +273,10 @@ def log_loss_point(p0, p1):
     >>> log_loss_point(0.0, 1.0)
     0.5
     """
+    if not (0.0 <= p0 <= 1.0):
+        raise ValueError(f"p0 must be in [0, 1], got {p0}")
+    if not (0.0 <= p1 <= 1.0):
+        raise ValueError(f"p1 must be in [0, 1], got {p1}")
     denom = 1 - p0 + p1
     if denom == 0:
         return 0.5

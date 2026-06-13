@@ -841,9 +841,14 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         D_work = D.copy()
         np.fill_diagonal(D_work, np.inf)
 
-        # Find k nearest neighbour indices for all points at once
-        # np.argpartition is O(n) per row
-        knn_idx = np.argpartition(D_work, k - 1, axis=1)[:, :k]
+        # Find k nearest neighbour indices for all points at once.
+        # Use lexsort (distance primary, y-value secondary) so that ties in
+        # distance are broken canonically by y rather than by insertion order.
+        # This makes the result invariant to the order in which training points
+        # were added (np.argpartition is unstable on ties).
+        knn_idx = np.array(
+            [np.lexsort((y, D_work[i]))[:k] for i in range(n)]
+        )
 
         # Gather neighbour labels and aggregate
         y_neighbours = y[knn_idx]  # shape (n, k)
@@ -974,9 +979,6 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         D_work = D_aug.copy()
         np.fill_diagonal(D_work, np.inf)
 
-        # k-NN predictions for all n+1 points (leave-one-out)
-        knn_idx = np.argpartition(D_work, k - 1, axis=1)[:, :k]
-
         # For training points (0..n-1): their predictions don't depend on
         # the test label since we only use labels of their k neighbours.
         # BUT if the test point (index n) is among a training point's k-NN,
@@ -1005,9 +1007,11 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         alpha_train = np.abs(self.y - y_hat_train)
 
         # Test point k-NN prediction (using training data only)
-        # Its k nearest neighbours among training points:
+        # Its k nearest neighbours among training points.
+        # Use lexsort (distance primary, y-value secondary) for canonical
+        # tie-breaking that is independent of insertion order.
         k_test = min(self.k, n)
-        test_knn_idx = np.argpartition(d, k_test - 1)[:k_test]
+        test_knn_idx = np.lexsort((self.y, d))[:k_test]
         y_hat_test = agg_func(self.y[test_knn_idx])
 
         # The test nonconformity score is |y - y_hat_test| and we need

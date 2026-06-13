@@ -1,0 +1,225 @@
+"""Layer 1 adversarial: LeanCheck falsification on degenerate inputs.
+
+Each property *should* hold as a mathematical invariant.  The test is written
+BEFORE the corresponding library fix so that LeanCheck can produce a minimal
+counterexample.  After each fix the property turns green and becomes a
+permanent regression guard.
+
+Attacks implemented here
+------------------------
+A1  KNN regressor order-invariance on tie-rich data
+    ``np.argpartition`` is documented as unstable on ties; with equidistant
+    training points at the k-boundary, different insertion orders yield
+    different neighbour selections and thus different prediction intervals.
+    Fix: use ``np.lexsort((y, distances))`` as a canonical tie-break.
+
+A4  CPD quantile lower-bound with duplicate training rows
+    ``RidgePredictiveDistributionFunction._compute_quantile`` assumes that
+    all interior C values are distinct ("from A*y+B formula").  Duplicate
+    training rows produce tied C values; the closed-form formula then returns
+    a quantile Q where Pi(Q, tau) < p, violating the quantile lower-bound.
+    Fix: check the actual ``_cdf_bounds(C[j_at])`` before accepting j_at.
+
+A5  ``VennPrediction.binary`` entries in [0, 1]
+    No bounds check on p0, p1; ``binary(-0.5, 0.5)`` silently produces
+    probability entries outside [0, 1].
+    Fix: raise ``ValueError`` when p0 or p1 is outside [0, 1].
+
+A6  ``log_loss_point`` output in [0, 1]
+    No bounds check on p0, p1; ``log_loss_point(-0.5, -0.5) == -0.5``.
+    Fix: raise ``ValueError`` when p0 or p1 is outside [0, 1].
+
+NOTE: do *not* add ``from __future__ import annotations`` — leancheck reads
+``__annotations__`` and needs real type objects, not PEP-563 strings.
+"""
+
+import leancheck
+import numpy as np
+
+from online_cp import ConformalNearestNeighboursRegressor, RidgePredictionMachine, VennPrediction
+from online_cp.venn import log_loss_point
+
+MAX_TESTS = 300
+
+
+def _check(prop) -> bool:
+    """Run a leancheck property silently and return pass/fail as a bool."""
+    return bool(leancheck.check(prop, max_tests=MAX_TESTS, silent=True))
+
+
+def _perm_from_keys(keys: list[int], n: int) -> list[int]:
+    """Map any ``list[int]`` to a permutation of ``range(n)`` via stable argsort."""
+    pad = [keys[i] if i < len(keys) else 0 for i in range(n)]
+    return [int(j) for j in np.argsort(np.array(pad), kind="stable")]
+
+
+# ======================================================================= #
+# A1 – KNN regressor order-invariance on tie-rich data                    #
+#                                                                          #
+# Dataset: 8 training points.  The first 4 are equidistant from the query #
+# at d=1.0 and carry *distinct* y-values (0, 25, 50, 75).  The last 4 are #
+# far away (d=10) and carry the same y-value so they cannot contribute to  #
+# tie ambiguity.  With k=2 and epsilon=0.25 (needs ≥ 8 points), the two   #
+# nearest neighbours for the test query are always drawn from the 4 tied   #
+# equidistant points – but which two depends on argpartition tie-breaking. #
+# ======================================================================= #
+
+_TIE_N = 8
+_TIE_X = np.array(
+    [
+        [ 1.0,  0.0],  # 0 – d=1.0 from origin, y=0
+        [-1.0,  0.0],  # 1 – d=1.0 from origin, y=25
+        [ 0.0,  1.0],  # 2 – d=1.0 from origin, y=50
+        [ 0.0, -1.0],  # 3 – d=1.0 from origin, y=75
+        [10.0,  0.0],  # 4 – far, y=37.5
+        [-10.0, 0.0],  # 5 – far, y=37.5
+        [ 0.0, 10.0],  # 6 – far, y=37.5
+        [ 0.0,-10.0],  # 7 – far, y=37.5
+    ],
+    dtype=float,
+)
+_TIE_Y = np.array([0.0, 25.0, 50.0, 75.0, 37.5, 37.5, 37.5, 37.5])
+_TIE_XQ = np.array([0.0, 0.0])
+_TIE_K = 2
+_TIE_EPS = 0.25  # needs ceil(2/0.25)=8 ≤ n_aug=9; n_aug=9 ≥ 2/0.25=8 ✓
+
+
+def _fit_knn_reg_in_order(order: list[int]) -> ConformalNearestNeighboursRegressor:
+    m = ConformalNearestNeighboursRegressor(k=_TIE_K, rnd_state=0)
+    for i in order:
+        m.learn_one(_TIE_X[i], float(_TIE_Y[i]))
+    return m
+
+
+def prop_knn_regressor_tie_order_invariant(keys: list[int]) -> bool:
+    """Prediction interval must be identical regardless of insertion order.
+
+    Different insertion orders produce permuted distance arrays; on tie-rich
+    data ``np.argpartition`` selects different tied neighbours → different
+    predictions → property falsifies BEFORE the lexsort fix.
+    """
+    ref = _fit_knn_reg_in_order(list(range(_TIE_N)))
+    out = _fit_knn_reg_in_order(_perm_from_keys(keys, _TIE_N))
+    iv_ref = ref.predict(_TIE_XQ, epsilon=_TIE_EPS, bounds="both")
+    iv_out = out.predict(_TIE_XQ, epsilon=_TIE_EPS, bounds="both")
+    return bool(
+        np.isclose(iv_ref.lower, iv_out.lower) and np.isclose(iv_ref.upper, iv_out.upper)
+    )
+
+
+def test_knn_regressor_tie_order_invariant():
+    assert _check(prop_knn_regressor_tie_order_invariant)
+
+
+# ======================================================================= #
+# A4 – CPD quantile lower-bound with duplicate training rows               #
+#                                                                          #
+# 4 identical training rows cause ``predict_cpd`` to produce              #
+# C = [-inf, v, v, v, v, +inf] (all interior C values equal).             #
+# The Ridge closed-form ``_compute_quantile`` assumes distinct C; it then  #
+# may return Q where Pi(Q, tau) < p.                                       #
+# ======================================================================= #
+
+_CPD_N_DUPS = 4
+_CPD_X_DUP = np.tile(np.array([[1.0, 0.0]]), (_CPD_N_DUPS, 1))
+_CPD_Y_DUP = np.ones(_CPD_N_DUPS)
+_CPD_XQ = np.array([0.5, 0.0])
+
+
+def _p_grid(k: int) -> float:
+    """Map int to p ∈ (0, 1) on a fine grid."""
+    return 0.01 + (abs(k) % 99) / 100.0  # 0.01, 0.02, …, 0.99
+
+
+def _tau_grid(k: int) -> float:
+    """Map int to tau ∈ [0, 1]."""
+    return (abs(k) % 101) / 100.0
+
+
+def prop_cpd_quantile_lower_bound_with_dups(k1: int, k2: int) -> bool:
+    """F(Q(p, tau), tau) ≥ p must hold even when C has tied values.
+
+    Before the _compute_quantile fix: with C=[-inf,v,v,v,v,+inf] and
+    p=0.6, tau=0.5 the formula returns Q=v but Pi(v,0.5)=0.5 < 0.6.
+
+    Degenerate tails (Q = ±inf) are skipped the same way as P18, because
+    Pi(−inf, tau) = 0 for all tau by definition and the infimum quantile
+    does not satisfy the lower-bound at the exact boundary.
+    """
+    m = RidgePredictionMachine(a=1.0, warnings=False)
+    m.learn_initial_training_set(_CPD_X_DUP, _CPD_Y_DUP)
+    cpd = m.predict_cpd(_CPD_XQ)
+    p = _p_grid(k1)
+    tau = _tau_grid(k2)
+    Q = cpd.quantile(p, tau)
+    if not np.isfinite(Q):
+        return True  # skip degenerate tails (same guard as P18)
+    pi = cpd(Q, tau)
+    return bool(pi >= p - 1e-9)
+
+
+def test_cpd_quantile_lower_bound_with_dups():
+    assert _check(prop_cpd_quantile_lower_bound_with_dups)
+
+
+# ======================================================================= #
+# A5 – VennPrediction.binary: probability matrix entries in [0, 1]         #
+#                                                                          #
+# ``binary(p0, p1)`` builds [[1-p0, p0], [1-p1, p1]].  Without a bounds   #
+# check, out-of-range p0 / p1 produce entries < 0 or > 1.                 #
+# After fix: ValueError is raised for out-of-range inputs, which the       #
+# property treats as "correctly rejected" (returns True).                  #
+# ======================================================================= #
+
+_P_VALS = [-0.5, 0.0, 0.1, 0.5, 0.9, 1.0, 1.5]  # includes out-of-range
+
+
+def _pv(k: int) -> float:
+    return _P_VALS[abs(k) % len(_P_VALS)]
+
+
+def prop_venn_binary_entries_in_unit_interval(k0: int, k1: int) -> bool:
+    """Probability matrix entries must lie in [0, 1] or a ValueError must be raised.
+
+    Before fix: ``VennPrediction.binary(-0.5, 0.5)`` silently returns an
+    entry of -0.5 → property falsifies.
+    After fix: ValueError raised for out-of-range inputs → True.
+    """
+    p0, p1 = _pv(k0), _pv(k1)
+    try:
+        vp = VennPrediction.binary(p0, p1)
+    except (ValueError, TypeError):
+        return True  # out-of-range input correctly rejected
+    return bool(np.all(vp.probs >= 0.0) and np.all(vp.probs <= 1.0))
+
+
+def test_venn_binary_entries_in_unit_interval():
+    assert _check(prop_venn_binary_entries_in_unit_interval)
+
+
+# ======================================================================= #
+# A6 – log_loss_point: output in [0, 1]                                   #
+#                                                                          #
+# ``log_loss_point(p0, p1) = p1 / (1 - p0 + p1)`` guards only denom==0.  #
+# Out-of-range inputs (e.g. p0=p1=-0.5) produce negative outputs.         #
+# After fix: ValueError raised for out-of-range inputs → True.            #
+# ======================================================================= #
+
+
+def prop_log_loss_point_in_unit_interval(k0: int, k1: int) -> bool:
+    """Output must lie in [0, 1] or a ValueError must be raised.
+
+    Before fix: ``log_loss_point(-0.5, -0.5) == -0.5`` → property
+    falsifies immediately (k0=k1=0 hits p0=p1=-0.5).
+    After fix: ValueError raised → True.
+    """
+    p0, p1 = _pv(k0), _pv(k1)
+    try:
+        result = log_loss_point(p0, p1)
+    except (ValueError, TypeError):
+        return True  # out-of-range input correctly rejected
+    return bool(0.0 <= result <= 1.0)
+
+
+def test_log_loss_point_in_unit_interval():
+    assert _check(prop_log_loss_point_in_unit_interval)

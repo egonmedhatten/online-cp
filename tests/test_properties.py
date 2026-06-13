@@ -1,0 +1,827 @@
+"""Layer 1: enumerative property-based tests (``leancheck``).
+
+These tests assert *structural / mathematical invariants* that must hold across
+a wide enumeration of discrete edge cases (insertion orders, delay sequences,
+quantized p-value streams, significance grids). They are fast and run in the
+default lane.
+
+``leancheck`` selects test generators from type annotations, so each ``prop_*``
+function takes typed arguments (``int``, ``list[int]``) that drive a
+deterministic reconstruction of the numeric inputs inside the property.
+
+Run with::
+
+    pytest tests/test_properties.py
+"""
+
+# NOTE: do *not* add ``from __future__ import annotations`` here. leancheck
+# reads ``__annotations__`` to select generators and needs real type objects,
+# not stringized annotations (PEP 563), to enumerate ``int`` / ``list[int]``.
+#
+# leancheck is a declared test dependency (``dev`` and ``ci`` extras in
+# pyproject.toml).  We use a hard import rather than ``pytest.importorskip``
+# so that a missing package causes a loud collection error instead of silently
+# skipping the entire module and letting CI stay green vacuously.
+
+import leancheck
+import numpy as np
+
+from online_cp import (
+    ConformalNearestNeighboursClassifier,
+    ConformalNearestNeighboursRegressor,
+    ConformalRidgeRegressor,
+    CUSUMWrapper,
+    ErrorRate,
+    IntervalWidth,
+    ObservedExcess,
+    PluginMartingale,
+    RidgePredictionMachine,
+    SetSize,  # noqa: F401 — imported for completeness; used in P16 comment
+    ShiryaevRobertsWrapper,
+    SimpleJumper,
+    VennPrediction,
+    VilleWrapper,
+    progressive_val,
+)
+from online_cp.classifiers import ConformalClassifier, ConformalPredictionSet
+from online_cp.regressors import ConformalPredictionInterval, ConformalRegressor
+from online_cp.venn import _pava_inplace
+
+# Number of enumerated cases per property. Kept modest so the structural lane
+# stays fast (each case may fit a model or run a streaming loop).
+MAX_TESTS = 200
+
+
+def _check(prop) -> bool:
+    """Run a leancheck property silently and return pass/fail as a bool."""
+    return bool(leancheck.check(prop, max_tests=MAX_TESTS, silent=True))
+
+
+# --------------------------------------------------------------------------- #
+# Property 1: order-invariance of transductive conformal prediction.
+#
+# Conformal p-values are rank-based, so the prediction for a fixed test object
+# must not depend on the order in which the calibration points were learned.
+# --------------------------------------------------------------------------- #
+
+_OI_RNG = np.random.default_rng(0)
+_OI_N, _OI_D = 12, 2
+_OI_X = _OI_RNG.normal(size=(_OI_N, _OI_D))
+_OI_Y = _OI_X @ np.array([1.5, -0.7]) + 0.05 * _OI_RNG.normal(size=_OI_N)
+_OI_XQ = np.array([0.3, -0.2])
+_OI_EPS = 0.5  # needs ceil(2/eps)=4 points for a finite interval; we have 12
+
+
+def _perm_from_keys(keys: list[int]) -> list[int]:
+    """Map any ``list[int]`` to a valid permutation of ``range(_OI_N)``.
+
+    Pads/truncates the enumerated keys to length ``_OI_N`` and returns a stable
+    argsort, so every enumerated list yields a genuine reordering.
+    """
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_OI_N)]
+    return [int(j) for j in np.argsort(np.array(pad), kind="stable")]
+
+
+def _fit_ridge_in_order(order: list[int]) -> ConformalRidgeRegressor:
+    cp = ConformalRidgeRegressor(a=1.0, warnings=False)
+    for i in order:
+        cp.learn_one(_OI_X[i], float(_OI_Y[i]))
+    return cp
+
+
+def prop_ridge_prediction_order_invariant(keys: list[int]) -> bool:
+    ref = _fit_ridge_in_order(list(range(_OI_N)))
+    out = _fit_ridge_in_order(_perm_from_keys(keys))
+    iv_ref = ref.predict(_OI_XQ, epsilon=_OI_EPS, bounds="both")
+    iv_out = out.predict(_OI_XQ, epsilon=_OI_EPS, bounds="both")
+    return bool(np.isclose(iv_ref.lower, iv_out.lower) and np.isclose(iv_ref.upper, iv_out.upper))
+
+
+def test_ridge_prediction_order_invariant():
+    assert _check(prop_ridge_prediction_order_invariant)
+
+
+# --------------------------------------------------------------------------- #
+# Property 2: streaming heap / delayed-label accounting integrity.
+#
+# Regardless of how labels are delayed (any permutation of arrival times),
+# every labelled point must be drained exactly once and the metric's internal
+# accounting must stay consistent. NOTE: the metric *value* is deliberately not
+# asserted invariant - under delay the model learns later, so predictions
+# legitimately change; only the bookkeeping is invariant.
+# --------------------------------------------------------------------------- #
+
+_ST_RNG = np.random.default_rng(1)
+_ST_N, _ST_D = 10, 2
+_ST_X = _ST_RNG.normal(size=(_ST_N, _ST_D))
+_ST_Y = _ST_X @ np.array([1.0, 0.5]) + 0.1 * _ST_RNG.normal(size=_ST_N)
+
+
+def _delay_array(delays: list[int]) -> np.ndarray:
+    """Build a non-negative integer delay of length ``_ST_N`` from enumerated ints."""
+    if len(delays) == 0:
+        return np.zeros(_ST_N, dtype=int)
+    base = np.array([abs(int(delays[i % len(delays)])) % 6 for i in range(_ST_N)], dtype=int)
+    return base
+
+
+def prop_streaming_accounting_integrity(delays: list[int]) -> bool:
+    d = _delay_array(delays)
+    model = ConformalRidgeRegressor(a=1.0, warnings=False)
+    metric = ErrorRate()
+    progressive_val(
+        model,
+        _ST_X,
+        _ST_Y,
+        epsilon=0.2,
+        metric=metric,
+        delay=lambda i, x, y: int(d[i]),
+    )
+    counted_all = metric._n == _ST_N
+    list_consistent = len(metric._values) == metric._n
+    sum_consistent = abs(metric._sum - float(np.sum(metric._values))) < 1e-9
+    return bool(counted_all and list_consistent and sum_consistent)
+
+
+def test_streaming_accounting_integrity():
+    assert _check(prop_streaming_accounting_integrity)
+
+
+# --------------------------------------------------------------------------- #
+# Property 3: change-point detector running-statistic invariants.
+#
+# For ANY sequence of valid p-values:
+#   - CUSUM gamma_n >= 1 always (log_gamma = logM - running_min >= 0).
+#   - Ville running maximum is non-decreasing and never below the current logM.
+#   - Shiryaev-Roberts statistic R_n >= 0 always.
+# --------------------------------------------------------------------------- #
+
+
+def _pvals(ks: list[int]) -> list[float]:
+    """Map enumerated ints to quantized p-values in the open interval (0, 1)."""
+    if len(ks) == 0:
+        return [0.5]
+    return [((abs(int(k)) % 100) + 0.5) / 100.0 for k in ks]
+
+
+def prop_cusum_gamma_at_least_one(ks: list[int]) -> bool:
+    cusum = CUSUMWrapper(SimpleJumper(J=0.01))
+    for p in _pvals(ks):
+        cusum.update(p)
+        if cusum.gamma < 1.0 - 1e-9:
+            return False
+    return True
+
+
+def prop_ville_max_monotone_and_dominates(ks: list[int]) -> bool:
+    ville = VilleWrapper(SimpleJumper(J=0.01), threshold=20)
+    prev_max = ville.log_max
+    for p in _pvals(ks):
+        ville.update(p)
+        if ville.log_max < prev_max - 1e-12:
+            return False
+        if ville.log_max < ville.martingale.logM - 1e-9:
+            return False
+        prev_max = ville.log_max
+    return True
+
+
+def prop_shiryaev_roberts_nonnegative(ks: list[int]) -> bool:
+    sr = ShiryaevRobertsWrapper(SimpleJumper(J=0.01))
+    for p in _pvals(ks):
+        sr.update(p)
+        if sr.R < -1e-9:
+            return False
+    return True
+
+
+def test_cusum_gamma_at_least_one():
+    assert _check(prop_cusum_gamma_at_least_one)
+
+
+def test_ville_max_monotone_and_dominates():
+    assert _check(prop_ville_max_monotone_and_dominates)
+
+
+def test_shiryaev_roberts_nonnegative():
+    assert _check(prop_shiryaev_roberts_nonnegative)
+
+
+# --------------------------------------------------------------------------- #
+# Property 4: prediction intervals are nested in the significance level.
+#
+# Smaller epsilon => wider (or equal) interval: eps1 < eps2 => width1 >= width2.
+# --------------------------------------------------------------------------- #
+
+_NS_RNG = np.random.default_rng(2)
+_NS_N, _NS_D = 60, 3
+_NS_X = _NS_RNG.normal(size=(_NS_N, _NS_D))
+_NS_Y = _NS_X @ np.array([1.0, -0.5, 0.25]) + 0.2 * _NS_RNG.normal(size=_NS_N)
+_NS_XQ = np.array([0.1, 0.2, -0.1])
+_NS_MODEL = ConformalRidgeRegressor(a=1.0, warnings=False)
+_NS_MODEL.learn_initial_training_set(_NS_X, _NS_Y)
+
+
+def _eps(k: int) -> float:
+    """Map an int to a significance level in [0.05, 0.5]."""
+    return 0.05 + (abs(int(k)) % 10) * 0.05
+
+
+def prop_intervals_nested_in_epsilon(a: int, b: int) -> bool:
+    e1, e2 = _eps(a), _eps(b)
+    lo, hi = min(e1, e2), max(e1, e2)
+    if hi - lo < 1e-9:
+        return True  # identical levels: nothing to compare
+    iv_small_eps = _NS_MODEL.predict(_NS_XQ, epsilon=lo, bounds="both")
+    iv_large_eps = _NS_MODEL.predict(_NS_XQ, epsilon=hi, bounds="both")
+    return bool(iv_small_eps.width() >= iv_large_eps.width() - 1e-9)
+
+
+def test_intervals_nested_in_epsilon():
+    assert _check(prop_intervals_nested_in_epsilon)
+
+
+# --------------------------------------------------------------------------- #
+# Property 5: PAVA isotonic regression invariants.
+#
+# _pava_inplace is the core of Venn-Abers calibration. As a pure function it
+# is an ideal leancheck target. Four invariants must hold for any input:
+#   (a) output is non-decreasing;
+#   (b) output is bounded by [min(input), max(input)];
+#   (c) the (unweighted) sum is preserved (unit weights => weighted-sum = sum);
+#   (d) applying PAVA twice is idempotent.
+# venn.py has a no-op njit fallback, so this works with or without numba.
+# --------------------------------------------------------------------------- #
+
+
+def _pava_array(ks: list[int]) -> tuple[np.ndarray, np.ndarray]:
+    """Map enumerated ints to a float64 value array and unit weight array."""
+    vals = np.array([float(k % 20) for k in ks] if ks else [0.0], dtype=np.float64)
+    return vals.copy(), np.ones(len(vals), dtype=np.float64)
+
+
+def prop_pava_non_decreasing(ks: list[int]) -> bool:
+    y, w = _pava_array(ks)
+    _pava_inplace(y, w)
+    return bool(np.all(np.diff(y) >= -1e-9))
+
+
+def prop_pava_bounded_by_input(ks: list[int]) -> bool:
+    if not ks:
+        return True
+    y, w = _pava_array(ks)
+    lo, hi = y.min(), y.max()
+    _pava_inplace(y, w)
+    return bool(y.min() >= lo - 1e-9 and y.max() <= hi + 1e-9)
+
+
+def prop_pava_preserves_sum(ks: list[int]) -> bool:
+    y, w = _pava_array(ks)
+    total_before = float(y.sum())
+    _pava_inplace(y, w)
+    return bool(abs(float(y.sum()) - total_before) < 1e-6)
+
+
+def prop_pava_idempotent(ks: list[int]) -> bool:
+    y, w = _pava_array(ks)
+    _pava_inplace(y, w)
+    y_once = y.copy()
+    _pava_inplace(y, w)
+    return bool(np.allclose(y, y_once))
+
+
+def test_pava_non_decreasing():
+    assert leancheck.check(prop_pava_non_decreasing, max_tests=500, silent=True)
+
+
+def test_pava_bounded_by_input():
+    assert leancheck.check(prop_pava_bounded_by_input, max_tests=500, silent=True)
+
+
+def test_pava_preserves_sum():
+    assert leancheck.check(prop_pava_preserves_sum, max_tests=500, silent=True)
+
+
+def test_pava_idempotent():
+    assert leancheck.check(prop_pava_idempotent, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 6: streaming metric value is delay-invariant when learn=False.
+#
+# When the model never updates (learn=False), every prediction is made from
+# the same frozen model state, so the final mean metric must be identical
+# regardless of how the labels are delayed. The ordering of per-step scores
+# changes under delay, but the set of scores — and therefore the mean — is
+# invariant. This catches scheduler bugs invisible to the accounting-only test.
+# --------------------------------------------------------------------------- #
+
+_DI_RNG = np.random.default_rng(3)
+_DI_N, _DI_D = 10, 2
+_DI_X = _DI_RNG.normal(size=(_DI_N, _DI_D))
+_DI_Y = _DI_X @ np.array([1.0, 0.5]) + 0.1 * _DI_RNG.normal(size=_DI_N)
+_DI_MODEL = ConformalRidgeRegressor(a=1.0, warnings=False)
+_DI_MODEL.learn_initial_training_set(_DI_X, _DI_Y)
+# Baseline: no delay, frozen model.
+_DI_BASELINE = progressive_val(
+    _DI_MODEL, _DI_X, _DI_Y, epsilon=0.2, metric=ErrorRate(), learn=False
+).get()
+
+
+def prop_metric_value_delay_invariant(delays: list[int]) -> bool:
+    d = np.array(
+        [abs(int(delays[i % len(delays)])) % 6 for i in range(_DI_N)] if delays else [0] * _DI_N,
+        dtype=int,
+    )
+    metric = progressive_val(
+        _DI_MODEL,
+        _DI_X,
+        _DI_Y,
+        epsilon=0.2,
+        metric=ErrorRate(),
+        learn=False,
+        delay=lambda i, x, y: int(d[i]),
+    )
+    return bool(abs(metric.get() - _DI_BASELINE) < 1e-9)
+
+
+def test_metric_value_delay_invariant():
+    assert _check(prop_metric_value_delay_invariant)
+
+
+# --------------------------------------------------------------------------- #
+# Property 7: classifier prediction sets are nested in the significance level.
+#
+# For ε₁ < ε₂ the prediction set at ε₁ must be a superset of the set at ε₂
+# (smaller ε → larger set). We use a SINGLE predict() call with a sorted
+# epsilon array so both levels share the same p-values / smoothing draw,
+# making the nesting guarantee exact (not just probabilistic).
+# --------------------------------------------------------------------------- #
+
+_CS_RNG = np.random.default_rng(4)
+_CS_N, _CS_D = 60, 3
+_CS_LABELS = np.array([0, 1] * (_CS_N // 2))
+_CS_X = _CS_RNG.normal(size=(_CS_N, _CS_D))
+_CS_X[_CS_LABELS == 0] -= 1.5
+_CS_X[_CS_LABELS == 1] += 1.5
+_CS_XQ = np.array([0.1, 0.2, -0.1])
+_CS_CLF = ConformalNearestNeighboursClassifier(k=1, label_space=np.array([0, 1]), rnd_state=0)
+_CS_CLF.learn_initial_training_set(_CS_X, _CS_LABELS)
+
+
+def prop_classifier_sets_nested_in_epsilon(a: int, b: int) -> bool:
+    e1, e2 = _eps(a), _eps(b)  # reuse _eps helper from Property 4
+    if abs(e1 - e2) < 1e-9:
+        return True
+    lo, hi = min(e1, e2), max(e1, e2)
+    # Single predict call: both levels share the same smoothing draw.
+    ml = _CS_CLF.predict(_CS_XQ, epsilon=np.array([lo, hi]))
+    set_lo = set(ml[lo].elements.tolist())
+    set_hi = set(ml[hi].elements.tolist())
+    # Smaller ε (lo) → larger or equal set.
+    superset_ok = set_hi.issubset(set_lo)
+    size_ok = len(ml[lo]) >= len(ml[hi])
+    return bool(superset_ok and size_ok)
+
+
+def test_classifier_sets_nested_in_epsilon():
+    assert _check(prop_classifier_sets_nested_in_epsilon)
+
+
+# --------------------------------------------------------------------------- #
+# Property 8: VennPrediction.binary structural bounds.
+#
+# For any (p0, p1) in [0, 1]:                                               
+#   - All four matrix entries are in [0, 1].                                  
+#   - Each row of the probability matrix sums to 1.                           
+#   - .p0 and .p1 round-trip through the matrix.                              
+#   - .point sums to 1 and point[1] == (p0 + p1) / 2.                        
+# --------------------------------------------------------------------------- #
+
+
+def _unit_prob(k: int) -> float:
+    """Map an enumerated int to a probability in [0, 1]."""
+    return (abs(int(k)) % 101) / 100.0
+
+
+def prop_venn_binary_rows_sum_to_one(a: int, b: int) -> bool:
+    p0, p1 = _unit_prob(a), _unit_prob(b)
+    vp = VennPrediction.binary(p0, p1)
+    row0_sum = float(vp.probs[0].sum())
+    row1_sum = float(vp.probs[1].sum())
+    return bool(abs(row0_sum - 1.0) < 1e-9 and abs(row1_sum - 1.0) < 1e-9)
+
+
+def prop_venn_binary_entries_in_unit_interval(a: int, b: int) -> bool:
+    p0, p1 = _unit_prob(a), _unit_prob(b)
+    vp = VennPrediction.binary(p0, p1)
+    return bool(np.all((vp.probs >= -1e-9) & (vp.probs <= 1.0 + 1e-9)))
+
+
+def prop_venn_binary_point_sums_to_one(a: int, b: int) -> bool:
+    p0, p1 = _unit_prob(a), _unit_prob(b)
+    vp = VennPrediction.binary(p0, p1)
+    point_sum = float(vp.point.sum())
+    point1_expected = (p0 + p1) / 2.0
+    return bool(abs(point_sum - 1.0) < 1e-9 and abs(float(vp.point[1]) - point1_expected) < 1e-9)
+
+
+def test_venn_binary_rows_sum_to_one():
+    assert _check(prop_venn_binary_rows_sum_to_one)
+
+
+def test_venn_binary_entries_in_unit_interval():
+    assert _check(prop_venn_binary_entries_in_unit_interval)
+
+
+def test_venn_binary_point_sums_to_one():
+    assert _check(prop_venn_binary_point_sums_to_one)
+
+
+# --------------------------------------------------------------------------- #
+# Property 9: order-invariance of KNN regressor prediction.
+#
+# Mirrors Property 1 for ConformalNearestNeighboursRegressor, extending the
+# exchangeability guarantee to a second estimator family.
+# --------------------------------------------------------------------------- #
+
+_KNN_RNG = np.random.default_rng(5)
+_KNN_N, _KNN_D = 12, 2
+_KNN_X = _KNN_RNG.normal(size=(_KNN_N, _KNN_D))
+_KNN_Y = _KNN_X @ np.array([1.5, -0.7]) + 0.05 * _KNN_RNG.normal(size=_KNN_N)
+_KNN_XQ = np.array([0.3, -0.2])
+_KNN_EPS = 0.5  # needs ceil(2/eps)=4 points; we have 12
+
+
+def _perm_knn(keys: list[int]) -> list[int]:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_KNN_N)]
+    return [int(j) for j in np.argsort(np.array(pad), kind="stable")]
+
+
+def _fit_knn_in_order(order: list[int]) -> ConformalNearestNeighboursRegressor:
+    knn = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
+    for i in order:
+        knn.learn_one(_KNN_X[i], float(_KNN_Y[i]))
+    return knn
+
+
+def prop_knn_prediction_order_invariant(keys: list[int]) -> bool:
+    ref = _fit_knn_in_order(list(range(_KNN_N)))
+    out = _fit_knn_in_order(_perm_knn(keys))
+    iv_ref = ref.predict(_KNN_XQ, epsilon=_KNN_EPS, bounds="both")
+    iv_out = out.predict(_KNN_XQ, epsilon=_KNN_EPS, bounds="both")
+    return bool(np.isclose(iv_ref.lower, iv_out.lower) and np.isclose(iv_ref.upper, iv_out.upper))
+
+
+def test_knn_prediction_order_invariant():
+    assert _check(prop_knn_prediction_order_invariant)
+
+
+# =========================================================================== #
+# Shared helpers for P10-P18
+# =========================================================================== #
+
+
+def _tau_val(k: int) -> float:
+    """Map an enumerated int to tau in [0, 1]."""
+    return (abs(int(k)) % 101) / 100.0
+
+
+def _alpha_array(ks: list[int]) -> np.ndarray:
+    """Map enumerated ints to a nonconformity score array.
+
+    The last element is the test-object score; at least one training-object
+    score is prepended so the p-value formula is always well-defined.
+    """
+    vals = [float(abs(int(k)) % 20) for k in ks] if ks else [5.0]
+    if len(vals) < 2:
+        vals = [0.0] + vals
+    return np.array(vals, dtype=np.float64)
+
+
+# --------------------------------------------------------------------------- #
+# Property 10: _compute_p_value output is always in [0, 1].
+#
+# The static p-value method is the core of every conformal guarantee. It is a
+# pure function: leancheck enumerates the nonconformity score array (via
+# list[int]) and tau. Both the regressor and classifier variants are tested
+# (they share the same formula but differ in default signature).
+# --------------------------------------------------------------------------- #
+
+
+def prop_regressor_p_value_in_unit_interval(ks: list[int], t: int) -> bool:
+    Alpha = _alpha_array(ks)
+    tau = _tau_val(t)
+    p = ConformalRegressor._compute_p_value(Alpha, tau=tau)
+    return bool(-1e-9 <= p <= 1.0 + 1e-9)
+
+
+def prop_classifier_p_value_in_unit_interval(ks: list[int], t: int) -> bool:
+    Alpha = _alpha_array(ks)
+    tau = _tau_val(t)
+    p = ConformalClassifier._compute_p_value(Alpha, tau=tau)
+    return bool(-1e-9 <= p <= 1.0 + 1e-9)
+
+
+def test_regressor_p_value_in_unit_interval():
+    assert leancheck.check(prop_regressor_p_value_in_unit_interval, max_tests=500, silent=True)
+
+
+def test_classifier_p_value_in_unit_interval():
+    assert leancheck.check(prop_classifier_p_value_in_unit_interval, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 11: minimum_training_set is exactly ceil(2/eps) or ceil(1/eps).
+#
+# Pure closed-form formula; no data needed. Enumerated over a fine eps grid.
+# --------------------------------------------------------------------------- #
+
+
+def prop_minimum_training_set_both_bounds(k: int) -> bool:
+    eps = 0.01 + (abs(int(k)) % 99) * 0.01  # eps in [0.01, 0.99]
+    result = ConformalRegressor.minimum_training_set(eps, bounds="both")
+    return result == int(np.ceil(2.0 / eps))
+
+
+def prop_minimum_training_set_one_sided(k: int) -> bool:
+    eps = 0.01 + (abs(int(k)) % 99) * 0.01
+    result = ConformalRegressor.minimum_training_set(eps, bounds="lower")
+    return result == int(np.ceil(1.0 / eps))
+
+
+def test_minimum_training_set_both_bounds():
+    assert leancheck.check(prop_minimum_training_set_both_bounds, max_tests=500, silent=True)
+
+
+def test_minimum_training_set_one_sided():
+    assert leancheck.check(prop_minimum_training_set_one_sided, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 12: ConformalPredictionInterval semantics.
+#
+# width() == upper - lower (exact arithmetic); __contains__ iff lower<=y<=upper
+# (including boundary). Both are pure data-class operations.
+# --------------------------------------------------------------------------- #
+
+
+def prop_interval_width_equals_upper_minus_lower(a: int, b: int) -> bool:
+    lo = float(a % 50)
+    hi = lo + float(abs(b) % 30)
+    iv = ConformalPredictionInterval(lo, hi, 0.1)
+    return bool(abs(iv.width() - (hi - lo)) < 1e-12)
+
+
+def prop_interval_containment_iff_in_bounds(a: int, b: int, c: int) -> bool:
+    lo = float(a % 50)
+    hi = lo + float(abs(b) % 30)
+    y = float(c % 100 - 30)
+    iv = ConformalPredictionInterval(lo, hi, 0.1)
+    return bool((y in iv) == (lo <= y <= hi))
+
+
+def test_interval_width_equals_upper_minus_lower():
+    assert leancheck.check(prop_interval_width_equals_upper_minus_lower, max_tests=500, silent=True)
+
+
+def test_interval_containment_iff_in_bounds():
+    assert leancheck.check(prop_interval_containment_iff_in_bounds, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 13: Metric.cumulative_mean() matches the manual cumsum formula.
+#
+# Pure arithmetic over the accumulated _values list. ErrorRate is used as the
+# concrete Metric; the 0/1 scores are driven by whether the interval covers
+# y=0.0 (always-cover vs. never-cover sentinel intervals).
+# --------------------------------------------------------------------------- #
+
+_CM_IV_IN = ConformalPredictionInterval(-1e9, 1e9, 0.1)    # always covers y=0
+_CM_IV_OUT = ConformalPredictionInterval(100.0, 200.0, 0.1)  # never covers y=0
+
+
+def prop_cumulative_mean_matches_formula(ks: list[int]) -> bool:
+    metric = ErrorRate()
+    for k in ks:
+        iv = _CM_IV_IN if abs(k) % 2 == 0 else _CM_IV_OUT
+        metric.update(y=0.0, Gamma=iv)
+    if metric._n == 0:
+        return True
+    cm = metric.cumulative_mean()
+    expected = np.cumsum(metric._values) / np.arange(1, metric._n + 1)
+    return bool(np.allclose(cm, expected))
+
+
+def test_cumulative_mean_matches_formula():
+    assert leancheck.check(prop_cumulative_mean_matches_formula, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 14: PluginMartingale wealth-accounting invariants.
+#
+# After each update(p): logM == log_martingale_values[-1] (sync), the history
+# list has grown by exactly one entry (started at [0.0]), and M == exp(logM).
+# --------------------------------------------------------------------------- #
+
+
+def prop_plugin_martingale_logM_synced(ks: list[int]) -> bool:
+    m = PluginMartingale()
+    for i, p in enumerate(_pvals(ks)):
+        m.update(p)
+        if not np.isclose(m.logM, m.log_martingale_values[-1]):
+            return False
+        if len(m.log_martingale_values) != i + 2:  # [0.0] + one per update
+            return False
+        if not np.isclose(m.M, np.exp(m.logM)):
+            return False
+    return True
+
+
+def test_plugin_martingale_logM_synced():
+    assert _check(prop_plugin_martingale_logM_synced)
+
+
+# --------------------------------------------------------------------------- #
+# Property 15: Metrics composition broadcasts updates synchronously.
+#
+# After every update to a composite Metrics object, all sub-metrics must have
+# identical _n (they are updated in lockstep inside Metrics.update).
+# --------------------------------------------------------------------------- #
+
+_COMP_IV = ConformalPredictionInterval(0.0, 10.0, 0.1)
+
+
+def prop_metrics_composition_n_sync(ks: list[int]) -> bool:
+    m = ErrorRate() + IntervalWidth()
+    for k in ks:
+        m.update(y=0.0, Gamma=_COMP_IV)
+        if m["ErrorRate"]._n != m["IntervalWidth"]._n:
+            return False
+    return True
+
+
+def test_metrics_composition_n_sync():
+    assert leancheck.check(prop_metrics_composition_n_sync, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 16: algebraic identities between metric scores.
+#
+# (a) ErrorRate(y, Gamma) + (y in Gamma) == 1 always: the error indicator and
+#     the coverage indicator are complementary by construction.
+# (b) ObservedExcess(y, Gamma) + (y in Gamma) == len(Gamma) always: OE counts
+#     incorrect labels; adding back the one correct label (when covered)
+#     recovers the full set size.
+# --------------------------------------------------------------------------- #
+
+
+def prop_error_rate_plus_coverage_equals_one(a: int, b: int, c: int) -> bool:
+    lo = float(a % 50)
+    hi = lo + float(abs(b) % 30)
+    y = float(c % 100 - 30)
+    iv = ConformalPredictionInterval(lo, hi, 0.1)
+    error = ErrorRate()._score(y=y, Gamma=iv)
+    coverage = float(y in iv)
+    return bool(abs(error + coverage - 1.0) < 1e-12)
+
+
+def prop_observed_excess_plus_coverage_equals_set_size(a: int, b: int) -> bool:
+    n = 1 + abs(a) % 5  # set size: 1 to 5 labels
+    include_y = b % 2 == 0
+    y = 0
+    elems = np.arange(n) if include_y else np.arange(1, n + 1)
+    gs = ConformalPredictionSet(elems, epsilon=0.1)
+    oe = ObservedExcess()._score(y=y, Gamma=gs)
+    coverage = float(y in gs)
+    return bool(abs(oe + coverage - float(len(gs))) < 1e-12)
+
+
+def test_error_rate_plus_coverage_equals_one():
+    assert leancheck.check(prop_error_rate_plus_coverage_equals_one, max_tests=500, silent=True)
+
+
+def test_observed_excess_plus_coverage_equals_set_size():
+    assert leancheck.check(prop_observed_excess_plus_coverage_equals_set_size, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 17: predict(return_update=True) + learn_one(precomputed) state
+# equivalence.
+#
+# Two execution paths from the same initial model state must produce identical
+# X, y, XTXinv after the update:
+#   Path A — predict(x) [no cache], then learn_one(x, y).
+#   Path B — predict(x, return_update=True) -> (interval, cache),
+#             then learn_one(x, y, precomputed=cache).
+# This tests the streaming-efficiency caching protocol that all online
+# pipelines rely on.
+# --------------------------------------------------------------------------- #
+
+_PC_RNG = np.random.default_rng(10)
+_PC_N, _PC_D = 15, 2
+_PC_X = _PC_RNG.normal(size=(_PC_N, _PC_D))
+_PC_Y = _PC_X @ np.array([1.0, -0.5]) + 0.1 * _PC_RNG.normal(size=_PC_N)
+
+
+def _new_point(ks: list[int]) -> tuple:
+    """Derive a new (x, y) point from an enumerated key list."""
+    seed = [ks[i] if i < len(ks) else 0 for i in range(_PC_D + 1)]
+    x = np.array([float(seed[i] % 20 - 10) / 5.0 for i in range(_PC_D)])
+    y = float(seed[_PC_D] % 20 - 10) / 5.0
+    return x, y
+
+
+def prop_predict_return_update_state_equivalence(ks: list[int]) -> bool:
+    x_new, y_new = _new_point(ks)
+
+    # Path A: uncached predict + normal learn_one.
+    cp_a = ConformalRidgeRegressor(a=1.0, warnings=False)
+    cp_a.learn_initial_training_set(_PC_X.copy(), _PC_Y.copy())
+    cp_a.predict(x_new, epsilon=0.3)
+    cp_a.learn_one(x_new, y_new)
+
+    # Path B: cached predict + learn_one with precomputed state.
+    cp_b = ConformalRidgeRegressor(a=1.0, warnings=False)
+    cp_b.learn_initial_training_set(_PC_X.copy(), _PC_Y.copy())
+    _, cache = cp_b.predict(x_new, epsilon=0.3, return_update=True)
+    cp_b.learn_one(x_new, y_new, precomputed=cache)
+
+    return bool(
+        np.allclose(cp_a.XTXinv, cp_b.XTXinv, atol=1e-8)
+        and np.allclose(cp_a.y, cp_b.y)
+        and np.allclose(cp_a.X, cp_b.X)
+    )
+
+
+def test_predict_return_update_state_equivalence():
+    assert _check(prop_predict_return_update_state_equivalence)
+
+
+# --------------------------------------------------------------------------- #
+# Property 18: Conformal Predictive Distribution (CPD) satisfies CDF axioms.
+#
+# RidgePredictiveDistributionFunction (returned by RidgePredictionMachine.
+# predict_cpd) must satisfy the four standard CDF axioms for any tau in [0,1]:
+#   (a) Values in [0, 1].
+#   (b) Non-decreasing in y.
+#   (c) Boundary: F(-inf, tau) = 0 and F(+inf, tau) = 1.
+#   (d) Quantile lower-bound: F(quantile(p, tau), tau) >= p  (smallest y
+#       such that F(y) >= p, so evaluating F at that point must recover p).
+# --------------------------------------------------------------------------- #
+
+_CPD_RNG = np.random.default_rng(12)
+_CPD_N, _CPD_D = 20, 2
+_CPD_X = _CPD_RNG.normal(size=(_CPD_N, _CPD_D))
+_CPD_Y = _CPD_X @ np.array([1.0, -0.5]) + 0.1 * _CPD_RNG.normal(size=_CPD_N)
+_CPD_XQ = np.array([0.1, 0.2])
+_CPD_MODEL = RidgePredictionMachine(a=1.0)
+_CPD_MODEL.learn_initial_training_set(_CPD_X, _CPD_Y)
+_CPD = _CPD_MODEL.predict_cpd(_CPD_XQ)
+
+
+def prop_cpd_values_in_unit_interval(a: int, t: int) -> bool:
+    tau = _tau_val(t)
+    y = float(a % 40 - 10)
+    p = _CPD(y, tau)
+    return bool(-1e-9 <= p <= 1.0 + 1e-9)
+
+
+def prop_cpd_monotone_in_y(a: int, b: int, t: int) -> bool:
+    tau = _tau_val(t)
+    y1 = float(a % 40 - 10)
+    gap = float(abs(b) % 20)
+    if gap < 1e-9:
+        return True
+    y2 = y1 + gap
+    return bool(_CPD(y1, tau) <= _CPD(y2, tau) + 1e-9)
+
+
+def prop_cpd_boundary_conditions(t: int) -> bool:
+    tau = _tau_val(t)
+    return bool(abs(_CPD(-np.inf, tau)) < 1e-9 and abs(_CPD(np.inf, tau) - 1.0) < 1e-9)
+
+
+def prop_cpd_quantile_lower_bound(a: int, t: int) -> bool:
+    tau = _tau_val(t)
+    p = ((abs(int(a)) % 99) + 1) / 100.0  # p in [0.01, 0.99]
+    q = _CPD.quantile(p, tau)
+    if not np.isfinite(q):
+        return True  # skip degenerate tails
+    return bool(_CPD(q, tau) >= p - 1e-9)
+
+
+def test_cpd_values_in_unit_interval():
+    assert leancheck.check(prop_cpd_values_in_unit_interval, max_tests=500, silent=True)
+
+
+def test_cpd_monotone_in_y():
+    assert leancheck.check(prop_cpd_monotone_in_y, max_tests=500, silent=True)
+
+
+def test_cpd_boundary_conditions():
+    assert leancheck.check(prop_cpd_boundary_conditions, max_tests=500, silent=True)
+
+
+def test_cpd_quantile_lower_bound():
+    assert leancheck.check(prop_cpd_quantile_lower_bound, max_tests=500, silent=True)

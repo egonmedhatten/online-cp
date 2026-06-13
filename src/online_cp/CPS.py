@@ -930,16 +930,25 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
         # Check "between" levels: (j+tau)/n for j=0..n-1
         # The smallest j where (j+tau)/n >= p is j = ceil(p*n - tau)
         j_between = max(0, int(np.ceil(p * n - tau)))
-        # Check "at breakpoint" levels for j = 1..n-1 (no ties for Ridge)
-        # At C[j]: Pi = (1-tau)*(j-1)/n + tau*(j+1)/n = (j - 1 + 2*tau)/n
+        # Check "at breakpoint" levels for j = 1..n-1.
+        # For distinct C: Pi at C[j] = (j-1+2*tau)/n.
+        # For tied C (duplicate training rows), the true Pi at C[j] is
+        # determined by _cdf_bounds (searchsorted-based) and may differ from
+        # the index-based formula.  We therefore verify the candidate with
+        # _cdf_bounds before accepting it.
         # Smallest j where (j-1+2*tau)/n >= p: j = ceil(p*n - 2*tau + 1)
         j_at = max(0, int(np.ceil(p * n - 2 * tau + 1)))
 
         # The quantile is the smallest y: either C[j_at] or C[j_between]+eps
         # C[j_between]+eps corresponds to y just above C[j_between]
         if 1 <= j_at < len(self.C) - 1 and j_at <= j_between:
-            return self.C[j_at]
-        elif 0 <= j_between < len(self.C) - 1:
+            # Validate using the tie-aware _cdf_bounds (handles duplicate C values)
+            Pi_lo, Pi_hi = self._cdf_bounds(self.C[j_at])
+            Pi_at = (1 - tau) * Pi_lo + tau * Pi_hi
+            if Pi_at >= p - 1e-12:
+                return self.C[j_at]
+            # Pi at C[j_at] is insufficient due to ties; fall through
+        if 0 <= j_between < len(self.C) - 1:
             # Return a value just above C[j_between]
             if j_between == 0:
                 return -np.inf

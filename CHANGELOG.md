@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ConformalSupportVectorMachine` nonconformity measure** — default NCM
+  changed from Lagrange multiplier (`alpha_i`) to signed margin
+  (`-(y_i · f(x_i))`, where `f` is the SVM decision function). The margin
+  NCM is continuous (no ties), improving efficiency (smaller prediction sets)
+  on noisy and overlapping data while preserving the coverage guarantee.
+  The original `alpha` NCM is retained via `nonconformity='alpha'`; the new
+  default is `nonconformity='margin'`. The multiclass same-class restriction
+  required for validity in OVR decomposition applies to both NCMs.
+
 - **`online_cp.martingale` is now a package** (`martingale/`) split into
   submodules `base`, `jumpers`, `sleepers`, `wrappers`, `legendre`. All
   existing public names remain importable at the same paths — no breakage.

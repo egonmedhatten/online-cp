@@ -1,8 +1,30 @@
-"""Online conformal classifiers.
+r"""Online conformal classifiers.
 
-This module implements conformal classifiers that produce prediction sets
-with guaranteed coverage. Includes nearest neighbours and support vector
-machine-based conformal classifiers.
+Conformal classifiers output, for each test object, a *prediction set* of labels
+rather than a single point prediction. Given a *nonconformity measure* $A$ that
+scores how unusual a candidate labelled example looks, the predictor includes
+every label whose conformal p-value exceeds the significance level $\epsilon$.
+Under exchangeability the set is *valid*,
+
+$$
+\mathbb{P}\bigl(y_n \in \Gamma^\epsilon(x_n)\bigr) \geq 1 - \epsilon ,
+$$
+
+and in the online setting the long-run error rate converges to $\epsilon$
+([ALRW2 Ch.2–3]).
+
+The classifiers differ in the underlying model and nonconformity measure:
+
+- :class:`ConformalNearestNeighboursClassifier` — NCM is the ratio of the
+  ($k$ nearest) same-class distance to the nearest different-class distance.
+- :class:`ConformalSupportVectorMachine` — NCM is the SVM signed margin
+  (default) or the Lagrange multiplier $\alpha_i$ ([ALRW2 Ch.3]); multiclass
+  via one-vs-rest.
+
+References
+----------
+[ALRW2] Vovk, Gammerman & Shafer, *Algorithmic Learning in a Random World*,
+2nd ed., Springer, 2022.
 """
 
 from __future__ import annotations
@@ -177,23 +199,35 @@ class ConformalClassifier(SerializableMixin):
 
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
-    """
-    Classifier using nearest neighbours as the nonconformity measure.
+    r"""Conformal $k$-nearest-neighbours classifier ([ALRW2 §2.3]).
+
+    The nonconformity measure of a labelled example is the ratio
+
+    $$
+    A\bigl(x, y\bigr) =
+        \frac{\text{distance to the } k \text{ nearest same-class objects}}
+             {\text{distance to the } k \text{ nearest different-class objects}},
+    $$
+
+    aggregated by mean or median. An example is *nonconforming* (large score)
+    when it sits far from its own class but close to another — exactly the
+    1-NN measure of [ALRW2 §2.3] generalised to $k$ neighbours. Under
+    exchangeability the prediction sets are valid at every $\epsilon$.
 
     >>> cp = ConformalNearestNeighboursClassifier(k=1, label_space=[-1, 1], rnd_state=1337, epsilon=0.1)
     >>> Gamma, p_values = cp.predict(3, return_p_values=True)
     >>> Gamma  # predict both labels, as this is the first
     array([-1,  1])
-    >>> [round(p_values[i], 4) for i in [-1, 1]]
-    [0.8781, 0.8781]
+    >>> tuple(round(p_values[i], 4) for i in (-1, 1))
+    (0.8781, 0.8781)
 
     >>> cp.learn_one(np.int64(3), 1)
 
     >>> Gamma, p_values = cp.predict(-2, return_p_values=True)
     >>> Gamma  # predict both labels, as this is the first
     array([-1,  1])
-    >>> [round(p_values[i], 4) for i in [-1, 1]]
-    [0.1855, 0.1855]
+    >>> tuple(round(p_values[i], 4) for i in (-1, 1))
+    (0.1855, 0.1855)
     """
 
     _SAVE_PARAMS: tuple = (
@@ -218,6 +252,32 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         n_jobs=None,
         epsilon=default_epsilon,
     ):
+        """Create a conformal nearest-neighbours classifier.
+
+        Parameters
+        ----------
+        k : int, default 1
+            Number of nearest neighbours used in the nonconformity ratio.
+        label_space : array-like or None, default None
+            The set of possible labels. If None, it is inferred (and grows)
+            from the data seen so far.
+        distance : str, default "euclidean"
+            Distance metric passed to ``scipy.spatial.distance``.
+        distance_func : callable, optional
+            Custom distance ``(X, y=None) -> ndarray``. If given, ``distance``
+            is ignored.
+        aggregation : {"mean", "median"}, default "mean"
+            How to aggregate the k nearest same/different-class distances.
+        verbose : int, default 0
+            Verbosity level.
+        rnd_state : int or None, default None
+            Seed for the smoothing-variable generator.
+        n_jobs : int or None, default None
+            Number of parallel jobs for per-label p-value computation in
+            :meth:`predict`.
+        epsilon : float, default 0.1
+            Default significance level.
+        """
         super().__init__(epsilon=epsilon)
         self._label_space_fixed = label_space is not None
         self.label_space = np.asarray(label_space) if label_space is not None else None
@@ -262,6 +322,19 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         return dists
 
     def learn_initial_training_set(self, X, y):
+        """Batch-learn an initial training set.
+
+        Stores the objects/labels, precomputes the pairwise distance matrix,
+        and indexes examples by label. Updates the inferred label space unless
+        a fixed ``label_space`` was supplied.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n, d)
+            Training objects.
+        y : ndarray of shape (n,)
+            Training labels.
+        """
         if X.shape[0] > 0:
             self.X = X
             self.y = y
@@ -350,6 +423,21 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         return same_label_distances, different_label_distances
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None) -> None:
+        """Update the classifier with a single new example.
+
+        Appends ``(x, y)`` to the stored data, extends the distance matrix and
+        label index, and grows the label space if needed.
+
+        Parameters
+        ----------
+        x : ndarray of shape (d,)
+            New object.
+        y : hashable
+            Observed label.
+        precomputed : ndarray or None
+            A pre-extended distance matrix (e.g. from a previous
+            :meth:`predict` call) to avoid recomputing distances.
+        """
         new_index = 0 if self.X is None else self.X.shape[0]
 
         # Enforce label-space policy
@@ -422,6 +510,32 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         return p_value
 
     def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
+        """Compute the conformal prediction set for object ``x``.
+
+        For every candidate label the nonconformity ratio is evaluated as if
+        ``x`` carried that label, and the label is kept when its conformal
+        p-value exceeds ``epsilon``.
+
+        Parameters
+        ----------
+        x : ndarray of shape (d,)
+            Test object.
+        epsilon : float, array-like, or None
+            Significance level(s). If None, uses ``self.epsilon``. An iterable
+            yields a :class:`MultiLevelPredictionSet`.
+        return_p_values : bool, default False
+            If True, also return the ``{label: p_value}`` dict.
+        return_update : bool, default False
+            If True, also return the extended distance matrix to reuse in a
+            subsequent :meth:`learn_one`.
+        verbose : int, default 0
+            Verbosity level.
+
+        Returns
+        -------
+        ConformalPredictionSet or MultiLevelPredictionSet, optionally followed
+        by the p-value dict and/or the updated distance matrix.
+        """
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -1026,11 +1140,27 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             self.y = np.append(self.y, float(y))
 
     def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> ConformalPredictionSet | MultiLevelPredictionSet:
-        """
-        Predict the conformal prediction set for object x.
+        r"""Compute the conformal prediction set for object ``x``.
 
-        For each candidate label, augment the training set with (x, label),
-        solve the SVM dual, and use alpha_i as nonconformity scores.
+        For each candidate label the training set is augmented with
+        ``(x, label)``, one-vs-rest binarised, and the SVM dual is solved on the
+        shared (label-independent) Gram matrix. The configured nonconformity
+        measure (signed margin or $\alpha_i$) then yields a conformal p-value
+        per label; labels with p-value above ``epsilon`` form the set.
+
+        Parameters
+        ----------
+        x : ndarray of shape (d,)
+            Test object.
+        epsilon : float, array-like, or None
+            Significance level(s). If None, uses ``self.epsilon``.
+        return_p_values : bool, default False
+            If True, also return the ``{label: p_value}`` dict.
+
+        Returns
+        -------
+        ConformalPredictionSet or MultiLevelPredictionSet, optionally with the
+        p-value dict.
         """
         if epsilon is None:
             epsilon = self.epsilon

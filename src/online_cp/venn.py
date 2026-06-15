@@ -322,16 +322,21 @@ def brier_point(p0, p1):
 
 
 class VennAbersPredictor(SerializableMixin):
-    """
-    Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4).
+    r"""Full online Venn-Abers predictor (Algorithm 6.1, [ALRW2 §6.4]).
 
-    Produces calibrated probability predictions for binary classification.
-    This is the full/transductive variant — no data splitting. The scorer
-    is retrained on the augmented dataset (training + hypothesized test label)
-    for each prediction.
+    Produces *calibrated* probability predictions for binary classification.
+    Rather than a single probability, a Venn predictor outputs a small set of
+    probabilities — here the pair ``(p0, p1)`` obtained by isotonic-calibrating
+    the score under each hypothesised test label — one of which is guaranteed to
+    be (multiprobability-)calibrated. This *automatic calibration under
+    exchangeability* is the defining validity property of Venn predictors
+    ([ALRW2 Thm 6.4]); the resulting interval ``[p0, p1]`` quantifies the
+    residual calibration uncertainty.
 
-    Supports ridge regression, kernel ridge regression, k-NN, and SVM
-    scoring functions.
+    This is the full/transductive variant — no data splitting. The scorer is
+    retrained on the augmented dataset (training + hypothesised test label) for
+    each prediction. Supports ridge regression, kernel ridge regression, k-NN,
+    and SVM scoring functions.
 
     >>> import numpy as np
     >>> np.random.seed(42)

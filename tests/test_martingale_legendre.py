@@ -1,4 +1,4 @@
-"""Tests for martingale_legendre_dev.py (Algorithms 2 & 3 from the paper)."""
+"""Tests for the Legendre jumpers in online_cp.martingale.legendre (Algorithms 2 & 3 from the paper ([LegendreJumper, preprint]))."""
 
 import numpy as np
 import pytest

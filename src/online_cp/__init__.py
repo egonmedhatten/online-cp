@@ -1,8 +1,48 @@
 #!/usr/bin/env python
 """online-cp: Online Conformal Prediction.
 
-Provides conformal regressors, classifiers, conformal predictive systems,
-conformal test martingales, and evaluation metrics.
+``online_cp`` is a library for *online conformal prediction*: turning the
+point predictions of an underlying model into set/interval/probability
+predictions that come with finite-sample, distribution-free validity
+guarantees, and updating them example-by-example as a data stream arrives.
+
+The core promise is **validity under exchangeability**: a conformal predictor
+at significance level :math:`\\epsilon` errs with probability at most
+:math:`\\epsilon`, and in the online setting the long-run error rate converges
+to :math:`\\epsilon` regardless of the data distribution or the underlying model.
+
+Submodules
+----------
+regressors
+    Conformal *prediction intervals* (ridge, kernel ridge, k-NN, Lasso).
+classifiers
+    Conformal *prediction sets* (nearest neighbours, SVM).
+CPS
+    Conformal predictive *systems* / distributions (full predictive CDFs).
+venn
+    Venn(-Abers) *calibrated probability* predictors.
+mondrian
+    Mondrian (group-/label-conditional) conformal wrappers.
+martingale, betting
+    Conformal test martingales for online change-point / exchangeability
+    testing, and the betting strategies that drive them.
+decision
+    Conformal predictive decision making (utility maximisation).
+metrics, evaluate, plotting, pipeline
+    Evaluation criteria, progressive validation, visualisation and pipelines.
+
+Examples
+--------
+>>> import numpy as np
+>>> from online_cp import ConformalRidgeRegressor
+>>> rng = np.random.default_rng(0)
+>>> X = rng.uniform(0, 1, (30, 2))
+>>> y = X.sum(axis=1) + rng.normal(0, 0.1, 30)
+>>> cp = ConformalRidgeRegressor()
+>>> cp.learn_initial_training_set(X, y)
+>>> interval = cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds="both")
+>>> bool(interval.lower < interval.upper)
+True
 """
 
 __version__ = "0.3.0"

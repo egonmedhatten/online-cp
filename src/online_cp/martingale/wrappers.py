@@ -1,4 +1,23 @@
-"""Change-point detection wrappers for conformal test martingales."""
+"""Change-point detection wrappers for conformal test martingales.
+
+A conformal test martingale gives evidence against exchangeability, but turning
+that evidence into a change-point *alarm* requires a stopping rule. These
+wrappers each accumulate the martingale's increments differently:
+
+- :class:`VilleWrapper` — raises an alarm the first time the (running maximum of
+  the) martingale crosses a fixed threshold. Anytime-valid via Ville's
+  inequality; best when the change, if any, is assumed to persist from a single
+  unknown time and you want a simple global false-alarm guarantee.
+- :class:`CUSUMWrapper` — a CUSUM statistic ($\\max$ over restart points) that
+  resets after dips, making it more sensitive to a *late* change in a long
+  stream.
+- :class:`ShiryaevRobertsWrapper` — the Shiryaev–Roberts statistic (a *sum* over
+  restart points), which is always at least the CUSUM statistic and gives a
+  different power / false-alarm trade-off, often preferred for minimising
+  detection delay.
+
+See [ALRW2 §8.3] (Vovk, Gammerman & Shafer, 2022).
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -221,6 +240,14 @@ class ShiryaevRobertsWrapper:
     """
 
     def __init__(self, martingale):
+        """Wrap a martingale with the Shiryaev–Roberts statistic.
+
+        Parameters
+        ----------
+        martingale : ConformalTestMartingale
+            The underlying conformal test martingale whose increments drive the
+            Shiryaev–Roberts statistic.
+        """
         self.martingale = martingale
         self._n = 0
         self._sr_values = [0.0]  # R_0 = 0 (no terms in the sum)

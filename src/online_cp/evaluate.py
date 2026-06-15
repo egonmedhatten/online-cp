@@ -9,15 +9,19 @@ the model learns from each observation.
 
 Example
 -------
+>>> import numpy as np
 >>> from online_cp import ConformalRidgeRegressor
 >>> from online_cp.metrics import ErrorRate, IntervalWidth
 >>> from online_cp.evaluate import progressive_val
 >>>
+>>> rng = np.random.default_rng(0)
+>>> X_train, y_train = rng.normal(size=(20, 3)), rng.normal(size=20)
+>>> X_test, y_test = rng.normal(size=(10, 3)), rng.normal(size=10)
 >>> model = ConformalRidgeRegressor(a=1.0)
 >>> model.learn_initial_training_set(X_train, y_train)
 >>> metric = ErrorRate() + IntervalWidth()
->>> progressive_val(model, X_test, y_test, epsilon=0.1, metric=metric)
->>> print(metric)
+>>> _ = progressive_val(model, X_test, y_test, epsilon=0.1, metric=metric)
+>>> print(metric)  # doctest: +SKIP
 """
 
 from __future__ import annotations

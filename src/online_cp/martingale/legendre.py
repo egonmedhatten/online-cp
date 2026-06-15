@@ -150,6 +150,17 @@ class SimpleLegendreJumper(ConformalTestMartingale):
         return eval_legendre(self.order, 2.0 * u - 1.0)
 
     def update(self, p: float) -> None:
+        r"""Advance the simple Legendre jumper by one p-value.
+
+        Performs the jump (mixing over the $\epsilon$ grid) then bets with the
+        shifted-Legendre density of the configured order, all in log-space
+        ([LegendreJumper, preprint]).
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -310,6 +321,17 @@ class ProductLegendreJumper(ConformalTestMartingale):
         return np.log1p(self._states_array * Pk_vals).sum(axis=1) - self._log_Z
 
     def update(self, p: float) -> None:
+        r"""Advance the product Legendre jumper by one p-value.
+
+        Bets with a *product* of shifted-Legendre densities over several orders,
+        after the jump-mixing step over the $\epsilon$ grid
+        ([LegendreJumper, preprint]).
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -479,6 +501,16 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         return Z
 
     def update(self, p: float) -> None:
+        r"""Advance the variational Legendre jumper by one p-value.
+
+        Maintains per-sub-jumper consensus parameters $\bar\epsilon_k$ via a
+        variational update before betting ([LegendreJumper, preprint]).
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -618,6 +650,16 @@ class CompositeLegendreJumper(ConformalTestMartingale):
         self._log_n = np.log(self._n_jumpers)
 
     def update(self, p: float) -> None:
+        """Advance every component Legendre jumper and pool them.
+
+        Updates each sub-jumper on ``p`` and sets the composite log-martingale to
+        the equal-weight log-mean of the components ([LegendreJumper, preprint]).
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
         if self.store_p_values:
             self.p_values.append(p)
 

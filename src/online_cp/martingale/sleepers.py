@@ -66,6 +66,17 @@ class SleeperStayer(ConformalTestMartingale):
         self._n = 0
 
     def update(self, p: float) -> None:
+        """Advance the Sleeper/Stayer martingale by one p-value.
+
+        Each active threshold expert bets on ``p`` (left vs right of its
+        threshold) while a sleeping reserve preserves capital; the martingale is
+        the total capital across the sleeping and active experts.
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
         if self.store_p_values:
             self.p_values.append(p)
 
@@ -179,6 +190,17 @@ class SleeperDrifter(ConformalTestMartingale):
         return ratio * a + (1 - ratio) * b
 
     def update(self, p: float) -> None:
+        """Advance the Sleeper/Drifter martingale by one p-value.
+
+        Like :class:`SleeperStayer`, but each expert's threshold *drifts* over
+        time, so the bet uses the current drifted threshold of every active
+        expert before pooling their capital.
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
         if self.store_p_values:
             self.p_values.append(p)
 

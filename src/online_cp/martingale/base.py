@@ -6,10 +6,29 @@ from scipy.optimize import brentq
 
 
 class ConformalTestMartingale:
-    """Base class for conformal test martingales.
+    r"""Base class for conformal test martingales.
 
-    A conformal test martingale is a non-negative process starting at 1
-    that grows when the exchangeability assumption is violated. It exposes:
+    A conformal test martingale is a non-negative process $M_0 = 1, M_1, M_2,
+    \dots$ that is a martingale under the hypothesis that the input p-values are
+    i.i.d. uniform on $[0, 1]$ — equivalently, under exchangeability of the data
+    stream. It *grows* when that hypothesis is violated, so a large value is
+    evidence against exchangeability and can be used for online change-point
+    detection.
+
+    Validity follows from **Ville's inequality**: for a non-negative martingale
+    started at $1$,
+
+    $$
+    \mathbb{P}\bigl(\sup_n M_n \geq c\bigr) \leq 1 / c ,
+    $$
+
+    so rejecting exchangeability when $M_n \geq 1/\alpha$ controls the false-alarm
+    probability at level $\alpha$ uniformly over time (an *anytime-valid* test).
+    Each step multiplies the martingale by a betting function $b_n(p)$ (a density
+    on $[0, 1]$ with mean 1); see :mod:`online_cp.betting`.
+
+    It exposes:
+
     - ``b_n(p)``: the current betting function (density) for the next step
     - ``B_n(p)``: the current protection function (CDF) for the next step
     - ``update(p)``: incorporate a new p-value and advance the martingale
@@ -100,6 +119,7 @@ class ConformalTestMartingale:
 
     @property
     def M(self):
+        """Current martingale value $M_n = \\exp(\\log M_n)$."""
         return np.exp(self.logM)
 
     @property

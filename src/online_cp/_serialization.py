@@ -5,7 +5,7 @@ registry (:func:`register_callable`) so that model classes can be saved to
 disk and restored with exact numerical state — including the precise position
 of their random-number generators.
 
-.. warning::
+!!! warning
     Model files use Python :mod:`pickle` internally via :mod:`joblib`.
     **Only load files from trusted sources** — loading a malicious file can
     execute arbitrary code.
@@ -168,6 +168,21 @@ class SerializableMixin:
     :class:`numpy.random.Generator`) its exact bit-generator state is saved
     and restored so that post-load predictions are numerically identical to
     what the original model would have produced.
+
+    On-disk format
+    --------------
+    :meth:`save` writes a single :mod:`joblib` *envelope* dict with the keys:
+
+    - ``format_version`` (int): on-disk schema version; :meth:`load` refuses
+      files newer than it understands.
+    - ``library_version`` (str): the ``online_cp`` version that wrote the file
+      (used only to warn on mismatch).
+    - ``class`` (str): fully-qualified class name, checked against ``cls`` on
+      load to catch loading into the wrong type.
+    - ``params`` (dict): the ``_SAVE_PARAMS`` constructor kwargs (callables
+      tokenised via the registry) used to rebuild the instance.
+    - ``state`` (dict): the ``_SAVE_STATE`` learned attributes (plus RNG state)
+      restored after construction.
     """
 
     _SAVE_PARAMS: tuple[str, ...] = ()
@@ -180,7 +195,7 @@ class SerializableMixin:
     def save(self, filepath: str | os.PathLike, *, compress: int = 3) -> None:
         """Save the model to *filepath* using :mod:`joblib`.
 
-        .. warning::
+        !!! warning
             Model files use Python :mod:`pickle` internally.  Only load files
             from **trusted sources**.
 
@@ -239,7 +254,7 @@ class SerializableMixin:
     def load(cls, filepath: str | os.PathLike) -> SerializableMixin:
         """Load a model from *filepath*.
 
-        .. warning::
+        !!! warning
             Only load files from **trusted sources**.
 
         Parameters

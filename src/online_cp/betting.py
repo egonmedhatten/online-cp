@@ -1,7 +1,23 @@
-"""Betting strategies for conformal test martingales.
+r"""Betting strategies for conformal test martingales.
 
-This module implements various betting strategies (density estimators on [0,1])
-for constructing martingale-based tests of exchangeability.
+A *betting strategy* is a probability density $g$ on $[0, 1]$ used to gamble
+against the null hypothesis that conformal p-values are i.i.d. uniform. At each
+step the martingale's wealth is multiplied by $g(p_n)$. Because any density
+integrates to one,
+
+$$
+\mathbb{E}_{p \sim \mathrm{U}[0,1]}\bigl[g(p)\bigr] = \int_0^1 g(u)\,du = 1 ,
+$$
+
+the wealth process is a non-negative martingale under the null \u2014 fair betting
+that can only grow in expectation when the p-values are *not* uniform. The art
+is to choose $g$ to concentrate mass where the empirical p-value density departs
+from uniform (a Kelly-style bet); the strategies here are online density
+estimators on $[0, 1]$ that learn $g$ from the past p-values.
+
+Each strategy exposes ``bet(p)`` (the density $g(p)$), ``integrate(p)`` (its CDF,
+used as a protection function) and ``update(p)`` (incorporate a new p-value),
+following the *predict-then-learn* order that preserves the martingale property.
 """
 
 from __future__ import annotations

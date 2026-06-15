@@ -154,6 +154,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Documentation pass** — all public docstrings enriched for v0.3.0:
+  ALRW2 section/theorem citations, MathJax LaTeX formulas, property
+  classifications (proper scoring rules vs. efficiency criteria), and full
+  parameter docs across all modules. RST directives (`.. math::`,
+  `.. warning::`) converted to MkDocs/admonition syntax. Pre-existing
+  broken module-level doctests fixed (`evaluate`, `Metrics`, `PluginMartingale`,
+  `UtilityFunction`). `martingale_legendre_dev.py` removed (superseded by
+  `legendre.py`).
+
 - **BREAKING**: `VennPrediction` is now a unified class for binary *and*
   multiclass predictions. Binary: `VennPrediction.binary(p0, p1)`.
   Multiclass: `VennPrediction(probs, label_space)`.

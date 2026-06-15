@@ -1,11 +1,17 @@
-"""Frozen-mode conformal-safe preprocessing transformers.
+"""Conformal-safe preprocessing transformers.
 
-Transformers here operate in ``mode="frozen"``: their parameters are computed
-once from the initial training set (via :meth:`~Transformer.fit`) and held
-constant for the lifetime of the pipeline.  This preserves
-*training-conditional conformal validity* (ALRW2 §4.7): the preprocessing is a
-fixed function of the training data, which acts as a symmetric one-time fit —
-equivalent to including the scaler in the fixed inductive rule.
+Two operation modes are supported:
+
+- **frozen** (``mode="frozen"``, default) — parameters are computed once from
+  the initial training set (via :meth:`~Transformer.fit`) and held constant
+  thereafter.  Preserves *training-conditional conformal validity* (ALRW2 §4.7):
+  the preprocessing is a fixed function of the training data.
+- **bag** (``mode="bag"``) — parameters are recomputed at each prediction from
+  the *augmented object bag* ``[X_train, x_test]`` (label-free).  Because the
+  fit is symmetric over the full augmented bag, the resulting feature map is
+  permutation-equivariant and preserves *exact finite-sample conformal validity*.
+  No initial training set is required; the bag grows via :meth:`learn_one`.
+  Cost: loses the Sherman-Morrison incremental speedup (O(n·d²+d³) per predict).
 
 The transformers integrate with :class:`~online_cp.pipeline.Pipeline` through
 the :class:`~online_cp.pipeline.Transformer` protocol; they should not be used
@@ -71,9 +77,14 @@ class StandardScaler(Transformer):
     >>> interval = pipe.predict(X[0], epsilon=0.1)
     """
 
-    mode: str = "frozen"
+    mode: str = "frozen"  # class-level default; overridden by instance in __init__
 
-    def __init__(self, with_mean: bool = True, with_std: bool = True) -> None:
+    def __init__(self, with_mean: bool = True, with_std: bool = True, mode: str = "frozen") -> None:
+        if mode not in ("frozen", "bag"):
+            raise ValueError(
+                f"StandardScaler mode must be 'frozen' or 'bag', got {mode!r}."
+            )
+        self.mode = mode  # instance attribute
         self.with_mean = with_mean
         self.with_std = with_std
         self.mean_: NDArray | None = None
@@ -111,7 +122,7 @@ class StandardScaler(Transformer):
         return (x - self.mean_) / self.scale_
 
     def __repr__(self) -> str:
-        return f"StandardScaler(with_mean={self.with_mean}, with_std={self.with_std})"
+        return f"StandardScaler(with_mean={self.with_mean}, with_std={self.with_std}, mode={self.mode!r})"
 
 
 class MinMaxScaler(Transformer):
@@ -147,14 +158,19 @@ class MinMaxScaler(Transformer):
     >>> interval = pipe.predict(X[0], epsilon=0.1)
     """
 
-    mode: str = "frozen"
+    mode: str = "frozen"  # class-level default; overridden by instance in __init__
 
-    def __init__(self, feature_range: tuple[float, float] = (0.0, 1.0)) -> None:
+    def __init__(self, feature_range: tuple[float, float] = (0.0, 1.0), mode: str = "frozen") -> None:
         lo, hi = feature_range
         if lo >= hi:
             raise ValueError(
                 f"feature_range must satisfy lo < hi, got ({lo}, {hi})."
             )
+        if mode not in ("frozen", "bag"):
+            raise ValueError(
+                f"MinMaxScaler mode must be 'frozen' or 'bag', got {mode!r}."
+            )
+        self.mode = mode  # instance attribute
         self.feature_range = feature_range
         self.data_min_: NDArray | None = None
         self.data_range_: NDArray | None = None
@@ -192,4 +208,4 @@ class MinMaxScaler(Transformer):
         return self._scale(x)
 
     def __repr__(self) -> str:
-        return f"MinMaxScaler(feature_range={self.feature_range!r})"
+        return f"MinMaxScaler(feature_range={self.feature_range!r}, mode={self.mode!r})"

@@ -264,3 +264,68 @@ def test_pipeline_predict_equals_manual_scale_then_fit(rng):
 
     np.testing.assert_allclose(iv_pipe.lower, iv_ref.lower)
     np.testing.assert_allclose(iv_pipe.upper, iv_ref.upper)
+
+
+# ===========================================================================
+# Bag-mode scalers
+# ===========================================================================
+
+
+class TestStandardScalerBagMode:
+    def test_mode_bag_construction(self):
+        sc = StandardScaler(mode="bag")
+        assert sc.mode == "bag"
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="mode must be"):
+            StandardScaler(mode="incremental")
+
+    def test_mode_is_instance_attr(self):
+        # Class-level default is "frozen"; instance with mode="bag" must not
+        # bleed back to the class.
+        sc_bag = StandardScaler(mode="bag")
+        sc_frozen = StandardScaler()
+        assert sc_bag.mode == "bag"
+        assert sc_frozen.mode == "frozen"
+        assert StandardScaler.mode == "frozen"  # class attr unchanged
+
+    def test_repr_shows_mode(self):
+        assert "mode='bag'" in repr(StandardScaler(mode="bag"))
+        assert "mode='frozen'" in repr(StandardScaler(mode="frozen"))
+
+    def test_frozen_default_unchanged(self):
+        assert StandardScaler().mode == "frozen"
+
+    def test_fit_and_transform_same_math(self, small_batch):
+        """Bag-mode scaler has identical fit/transform math to frozen-mode."""
+        sc_bag = StandardScaler(mode="bag")
+        sc_bag.fit(small_batch)
+        Xt_bag = sc_bag.transform(small_batch)
+        sc_frz = StandardScaler(mode="frozen")
+        sc_frz.fit(small_batch)
+        Xt_frz = sc_frz.transform(small_batch)
+        np.testing.assert_allclose(Xt_bag, Xt_frz)
+
+
+class TestMinMaxScalerBagMode:
+    def test_mode_bag_construction(self):
+        sc = MinMaxScaler(mode="bag")
+        assert sc.mode == "bag"
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="mode must be"):
+            MinMaxScaler(mode="incremental")
+
+    def test_mode_is_instance_attr(self):
+        sc_bag = MinMaxScaler(mode="bag")
+        sc_frozen = MinMaxScaler()
+        assert sc_bag.mode == "bag"
+        assert sc_frozen.mode == "frozen"
+        assert MinMaxScaler.mode == "frozen"
+
+    def test_repr_shows_mode(self):
+        assert "mode='bag'" in repr(MinMaxScaler(mode="bag"))
+        assert "mode='frozen'" in repr(MinMaxScaler(mode="frozen"))
+
+    def test_frozen_default_unchanged(self):
+        assert MinMaxScaler().mode == "frozen"

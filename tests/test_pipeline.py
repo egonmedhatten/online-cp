@@ -499,7 +499,7 @@ class TestPipelineSummary:
     def test_structure(self):
         pipe = Pipeline(FuncTransformer(np.abs), ConformalRidgeRegressor(a=1.0))
         s = pipe.summary()
-        assert set(s.keys()) == {"n_steps", "transformers", "estimator", "unsafe_incremental"}
+        assert set(s.keys()) == {"n_steps", "transformers", "estimator", "unsafe_incremental", "bag_mode"}
 
     def test_n_steps(self):
         from online_cp import StandardScaler
@@ -537,3 +537,229 @@ class TestPipelineSummary:
         pipe.learn_initial_training_set(X, y)
         # FuncTransformer's fit() sets _fitted via base Transformer.fit()
         assert pipe.summary()["transformers"][0]["fitted"] is True
+
+
+# ---------------------------------------------------------------------------
+# P2b — Bag-mode pipeline (mode="bag")
+# ---------------------------------------------------------------------------
+
+
+from online_cp import MinMaxScaler, StandardScaler  # noqa: E402
+
+
+class TestBagMode:
+    """Functional (L1) tests for bag-mode transformers in Pipeline."""
+
+    @pytest.fixture
+    def poorly_scaled_dataset(self, rng):
+        N, d = 60, 3
+        scale = np.array([1000.0, 0.001, 1.0])
+        X = rng.normal(size=(N, d)) * scale
+        beta = np.array([0.001, 1000.0, 1.0])
+        y = X @ beta + rng.normal(scale=0.5, size=N)
+        return X, y
+
+    # --- Construction / validation ---
+
+    def test_bag_pipeline_constructs(self):
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        assert pipe._bag_mode is True
+
+    def test_non_bag_pipeline_bag_mode_false(self):
+        pipe = StandardScaler() | ConformalRidgeRegressor(a=1.0)
+        assert pipe._bag_mode is False
+
+    def test_frozen_bag_mixing_raises(self):
+        from online_cp import MinMaxScaler as MMS
+        with pytest.raises(ValueError, match="not supported"):
+            Pipeline(
+                StandardScaler(),           # frozen
+                MMS(mode="bag"),            # bag
+                ConformalRidgeRegressor(a=1.0),
+            )
+
+    def test_summary_reports_bag_mode(self):
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        s = pipe.summary()
+        assert s["bag_mode"] is True
+        assert s["transformers"][0]["mode"] == "bag"
+
+    def test_summary_bag_mode_false_for_frozen(self):
+        pipe = StandardScaler() | ConformalRidgeRegressor(a=1.0)
+        assert pipe.summary()["bag_mode"] is False
+
+    # --- Finite intervals after data ---
+
+    def test_finite_intervals_after_training(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        n = 30
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        pipe.learn_initial_training_set(X[:n], y[:n])
+        iv = pipe.predict(X[n], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+        assert iv.lower < iv.upper
+
+    # --- Equivalence to manual augmented-bag scaling ---
+
+    def test_equivalence_to_manual_augmented_bag(self, poorly_scaled_dataset):
+        """Bag pipeline interval == manually scaling [X_train, x] then fitting ridge."""
+        X, y = poorly_scaled_dataset
+        n = 40
+        X_tr, y_tr, x_test = X[:n], y[:n], X[n]
+        epsilon = 0.1
+
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        pipe.learn_initial_training_set(X_tr, y_tr)
+        iv_pipe = pipe.predict(x_test, epsilon=epsilon)
+
+        # Manual reference: fit scaler on augmented bag (label-free)
+        X_aug = np.vstack([X_tr, x_test.reshape(1, -1)])
+        sc = StandardScaler()
+        sc.fit(X_aug)
+        X_aug_scaled = sc.transform(X_aug)
+        ref = ConformalRidgeRegressor(a=1.0)
+        ref.learn_initial_training_set(X_aug_scaled[:-1], y_tr)
+        iv_ref = ref.predict(X_aug_scaled[-1], epsilon=epsilon)
+
+        np.testing.assert_allclose(iv_pipe.lower, iv_ref.lower, rtol=1e-10)
+        np.testing.assert_allclose(iv_pipe.upper, iv_ref.upper, rtol=1e-10)
+
+    # --- Permutation invariance (key exchangeability proof) ---
+
+    def test_compute_p_value_permutation_invariant(self, poorly_scaled_dataset, rng):
+        """p-value must not change under permutation of the training bag."""
+        X, y = poorly_scaled_dataset
+        n = 30
+        X_tr, y_tr = X[:n], y[:n]
+        x_test, y_test = X[n], float(y[n])
+
+        pipe_ref = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, warnings=False)
+        pipe_ref.learn_initial_training_set(X_tr, y_tr)
+        p_ref = pipe_ref.compute_p_value(x_test, y_test, tau=0.5)
+
+        perm = rng.permutation(n)
+        pipe_perm = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, warnings=False)
+        pipe_perm.learn_initial_training_set(X_tr[perm], y_tr[perm])
+        p_perm = pipe_perm.compute_p_value(x_test, y_test, tau=0.5)
+
+        assert np.isclose(p_ref, p_perm), (
+            f"p-value changed under permutation: {p_ref} vs {p_perm}"
+        )
+
+    # --- Optional learn_initial_training_set ---
+
+    def test_learn_one_only_then_predict(self, poorly_scaled_dataset):
+        """learn_initial_training_set is optional; learn_one accumulates the bag."""
+        X, y = poorly_scaled_dataset
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        n = 30
+        for i in range(n):
+            pipe.learn_one(X[i], float(y[i]))
+        iv = pipe.predict(X[n], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+
+    def test_learn_initial_then_learn_one(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        pipe.learn_initial_training_set(X[:20], y[:20])
+        for i in range(20, 30):
+            pipe.learn_one(X[i], float(y[i]))
+        iv = pipe.predict(X[30], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+
+    # --- Empty-bag validity ---
+
+    def test_empty_bag_returns_trivial_interval(self):
+        """No training data → default CP full-label-space prediction; must not raise."""
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        iv = pipe.predict(np.array([1.0, 2.0, 3.0]), epsilon=0.1)
+        assert iv.lower == -np.inf
+        assert iv.upper == np.inf
+
+    # --- Read-only predict ---
+
+    def test_predict_twice_identical(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        pipe.learn_initial_training_set(X[:30], y[:30])
+        x_test = X[30]
+        iv1 = pipe.predict(x_test, epsilon=0.1)
+        iv2 = pipe.predict(x_test, epsilon=0.1)
+        np.testing.assert_allclose(iv1.lower, iv2.lower)
+        np.testing.assert_allclose(iv1.upper, iv2.upper)
+
+    def test_predict_does_not_mutate_raw_bag(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        pipe.learn_initial_training_set(X[:30], y[:30])
+        n_before = len(pipe._X_raw)
+        pipe.predict(X[30], epsilon=0.1)
+        assert len(pipe._X_raw) == n_before
+
+    def test_bag_pipeline_in_progressive_val(self, poorly_scaled_dataset):
+        from online_cp import ErrorRate
+        X, y = poorly_scaled_dataset
+        pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, warnings=False)
+        pipe.learn_initial_training_set(X[:30], y[:30])
+        metric = ErrorRate()
+        progressive_val(pipe, X[30:50], y[30:50], epsilon=0.1, metric=metric)
+        assert 0.0 <= metric.get() <= 1.0
+
+    # --- Chains with fixed transformers ---
+
+    def test_select_then_bag_scaler(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        pipe = Pipeline(
+            Select([0, 2]),
+            StandardScaler(mode="bag"),
+            ConformalRidgeRegressor(a=1.0),
+        )
+        pipe.learn_initial_training_set(X[:30], y[:30])
+        # Pass the full original x; Pipeline applies Select internally.
+        iv = pipe.predict(X[30], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+
+    def test_func_transformer_then_bag_scaler(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        pipe = Pipeline(
+            FuncTransformer(np.abs),
+            MinMaxScaler(mode="bag"),
+            ConformalRidgeRegressor(a=1.0),
+        )
+        pipe.learn_initial_training_set(X[:30], y[:30])
+        iv = pipe.predict(X[30], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+
+    # --- MinMaxScaler bag mode ---
+
+    def test_minmax_bag_equivalence(self, poorly_scaled_dataset):
+        X, y = poorly_scaled_dataset
+        n = 40
+        X_tr, y_tr, x_test = X[:n], y[:n], X[n]
+        epsilon = 0.1
+
+        pipe = MinMaxScaler(mode="bag") | ConformalRidgeRegressor(a=1.0)
+        pipe.learn_initial_training_set(X_tr, y_tr)
+        iv_pipe = pipe.predict(x_test, epsilon=epsilon)
+
+        X_aug = np.vstack([X_tr, x_test.reshape(1, -1)])
+        sc = MinMaxScaler()
+        sc.fit(X_aug)
+        X_aug_scaled = sc.transform(X_aug)
+        ref = ConformalRidgeRegressor(a=1.0)
+        ref.learn_initial_training_set(X_aug_scaled[:-1], y_tr)
+        iv_ref = ref.predict(X_aug_scaled[-1], epsilon=epsilon)
+
+        np.testing.assert_allclose(iv_pipe.lower, iv_ref.lower, rtol=1e-10)
+        np.testing.assert_allclose(iv_pipe.upper, iv_ref.upper, rtol=1e-10)
+
+    # --- Smoke test: estimator-agnostic bag path ---
+
+    def test_bag_with_knn_regressor(self, poorly_scaled_dataset):
+        from online_cp import ConformalNearestNeighboursRegressor
+        X, y = poorly_scaled_dataset
+        pipe = StandardScaler(mode="bag") | ConformalNearestNeighboursRegressor()
+        for i in range(30):
+            pipe.learn_one(X[i], float(y[i]))
+        iv = pipe.predict(X[30], epsilon=0.1)
+        assert iv.lower <= iv.upper

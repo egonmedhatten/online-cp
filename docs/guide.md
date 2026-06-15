@@ -333,14 +333,32 @@ interval = pipe.predict(x_new, epsilon=0.1)   # same API as a bare predictor
 
 ### Transformer modes and validity
 
-| Mode | Example | Conformal guarantee |
-|------|---------|-------------------|
-| `"fixed"` | `FuncTransformer`, `Select`, `Discard` | Full exchangeability — always valid |
-| `"frozen"` | `StandardScaler`, `MinMaxScaler` | Training-conditional validity (ALRW2 §4.7) |
-| Other (e.g. `"incremental"`) | *Not yet supported* | **Breaks exchangeability** — rejected by default |
+| Mode | Example | Conformal guarantee | Cost |
+|------|---------|-------------------|------|
+| `"fixed"` | `FuncTransformer`, `Select`, `Discard` | Full exchangeability — always valid | O(1) |
+| `"frozen"` | `StandardScaler()`, `MinMaxScaler()` | Training-conditional validity (ALRW2 §4.7) | O(1) |
+| `"bag"` | `StandardScaler(mode="bag")`, `MinMaxScaler(mode="bag")` | **Exact finite-sample validity** — no warm-up required | O(n·d²+d³) per predict |
 
-The pipeline raises a `ValueError` at construction if any transformer's mode is not `"fixed"` or `"frozen"`.
+The pipeline raises a `ValueError` at construction if any transformer's mode is not in `{"fixed", "frozen", "bag"}`.
 Pass `unsafe_incremental=True` to opt out (this voids the finite-sample guarantee).
+
+**Bag mode** (`mode="bag"`) refits the scaler at each prediction on the full augmented
+*object* bag `[X_train, x_test]` (label-free, symmetric → permutation-equivariant).
+This gives exact finite-sample validity with no required initial training set, and adapts
+naturally to distributional drift. The trade-off is losing the Sherman-Morrison incremental
+update, making the cost O(n·d²+d³) per `predict` call (O(n²) over a stream of n points).
+
+```python
+# Bag-fit: exact validity, no warm-up required, drift-adaptive
+pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Start with just learn_one — no learn_initial_training_set needed
+for x, y in stream:
+    interval = pipe.predict(x, epsilon=0.1)   # full-label-space until bag grows
+    pipe.learn_one(x, y)
+```
+
+Mixing `"frozen"` and `"bag"` transformers in the same pipeline is rejected (v1).
 
 ### Inspecting a pipeline
 

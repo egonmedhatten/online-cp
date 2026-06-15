@@ -33,12 +33,15 @@ from online_cp import (
     CUSUMWrapper,
     ErrorRate,
     IntervalWidth,
+    MinMaxScaler,
     ObservedExcess,
+    Pipeline,
     PluginMartingale,
     RidgePredictionMachine,
     SetSize,  # noqa: F401 — imported for completeness; used in P16 comment
     ShiryaevRobertsWrapper,
     SimpleJumper,
+    StandardScaler,
     VennPrediction,
     VilleWrapper,
     progressive_val,
@@ -825,3 +828,48 @@ def test_cpd_boundary_conditions():
 
 def test_cpd_quantile_lower_bound():
     assert leancheck.check(prop_cpd_quantile_lower_bound, max_tests=500, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 21: bag-pipeline p-value is order-invariant over the training bag. #
+#                                                                              #
+# The bag-mode StandardScaler fits on [X_train, x_test] symmetrically        #
+# (objects-only, label-free) → permutation-equivariant feature map.          #
+# Combined with ConformalRidgeRegressor (already permutation-invariant),      #
+# the pipeline p-value must be identical regardless of training-bag order.    #
+# This is the empirical exchangeability proof for the bag-fit regime.         #
+# --------------------------------------------------------------------------- #
+
+_BAG_RNG = np.random.default_rng(7)
+_BAG_N, _BAG_D = 14, 2
+# Poorly-scaled features so the bag scaler actually changes the geometry.
+_BAG_X = _BAG_RNG.normal(size=(_BAG_N, _BAG_D)) * np.array([100.0, 0.001])
+_BAG_Y = _BAG_X @ np.array([0.01, 1000.0]) + 0.1 * _BAG_RNG.normal(size=_BAG_N)
+_BAG_XQ = _BAG_RNG.normal(size=_BAG_D) * np.array([100.0, 0.001])
+_BAG_YQ = float(_BAG_Y[0])
+_BAG_TAU = 0.5
+
+
+def _perm_from_keys_bag(keys: list[int]) -> list[int]:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_BAG_N)]
+    return [int(j) for j in np.argsort(np.array(pad), kind="stable")]
+
+
+def _fit_bag_pipeline_in_order(order: list[int]):
+    pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, warnings=False)
+    for i in order:
+        pipe.learn_one(_BAG_X[i], float(_BAG_Y[i]))
+    return pipe
+
+
+def prop_bag_pipeline_p_value_order_invariant(keys: list[int]) -> bool:
+    """P-value must not change under permutation of the training-bag insertion order."""
+    ref = _fit_bag_pipeline_in_order(list(range(_BAG_N)))
+    out = _fit_bag_pipeline_in_order(_perm_from_keys_bag(keys))
+    p_ref = ref.compute_p_value(_BAG_XQ, _BAG_YQ, tau=_BAG_TAU)
+    p_out = out.compute_p_value(_BAG_XQ, _BAG_YQ, tau=_BAG_TAU)
+    return bool(np.isclose(p_ref, p_out, atol=1e-10))
+
+
+def test_bag_pipeline_p_value_order_invariant():
+    assert _check(prop_bag_pipeline_p_value_order_invariant)

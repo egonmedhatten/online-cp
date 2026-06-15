@@ -14,10 +14,12 @@ Two sound transformer regimes are supported:
   training set and held constant thereafter (e.g. :class:`StandardScaler`,
   :class:`MinMaxScaler` from :mod:`online_cp.preprocessing`).  Preserves
   training-conditional validity (ALRW2 §4.7).
-
-Bag-fit (transductive) mode — in which parameters are recomputed from the
-augmented bag on every prediction for exact finite-sample validity — is
-planned for a future release.
+- **bag** (``mode="bag"``) — parameters recomputed at each prediction from the
+  augmented object bag ``[X_train, x_test]`` (label-free).  Permutation-equivariant
+  → exact finite-sample conformal validity.  No warm-up required; the bag grows
+  via :meth:`~Pipeline.learn_one`.  Cost: O(n·d²+d³) per predict.  Use
+  :class:`~online_cp.preprocessing.StandardScaler` or
+  :class:`~online_cp.preprocessing.MinMaxScaler` with ``mode="bag"``.
 
 Example
 -------
@@ -33,6 +35,7 @@ Example
 
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -172,7 +175,7 @@ class FuncTransformer(Transformer):
 
 
 # Sound transformer modes — any other value triggers the validity guard.
-_SOUND_MODES = frozenset({"fixed", "frozen"})
+_SOUND_MODES = frozenset({"fixed", "frozen", "bag"})
 
 
 class Pipeline:
@@ -254,6 +257,27 @@ class Pipeline:
         self.steps: tuple[Any, ...] = (tuple(transformer_steps) + (steps[-1],))
         self._unsafe_incremental = unsafe_incremental
 
+        # Bag-mode support.
+        self._bag_mode: bool = any(t.mode == "bag" for t in transformer_steps)
+        if self._bag_mode:
+            frozen_names = [
+                repr(t) for t in transformer_steps if t.mode == "frozen"
+            ]
+            if frozen_names:
+                raise ValueError(
+                    "Mixing mode='frozen' and mode='bag' transformers in a Pipeline "
+                    "is not supported (v1).  Frozen transformers are fitted once on the "
+                    "training set while bag transformers refit on the augmented object "
+                    "bag at each prediction.  Use only fixed + bag transformers, or "
+                    "only fixed + frozen transformers.  Offending frozen transformers: "
+                    + ", ".join(frozen_names)
+                )
+            # Pristine template — never trained; deep-copied on each predict so
+            # predict() is read-only and does not mutate persistent estimator state.
+            self._template: Any = copy.deepcopy(steps[-1])
+            self._X_raw: NDArray | None = None
+            self._y_raw: NDArray | None = None
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -272,6 +296,72 @@ class Pipeline:
             xt = t.transform_one(xt)
         return xt
 
+    def _transform_bag(self, X_aug: NDArray) -> NDArray:
+        """Apply the transformer chain to the augmented bag *X_aug*.
+
+        For ``mode="bag"`` transformers, :meth:`~Transformer.fit` is called on
+        the current (possibly partially-transformed) augmented matrix before
+        :meth:`~Transformer.transform` is applied.  Stateless ``mode="fixed"``
+        transformers simply call :meth:`~Transformer.transform` directly.
+
+        Parameters
+        ----------
+        X_aug : ndarray of shape (n+1, d)
+            Augmented matrix — training rows followed by the test object.
+
+        Returns
+        -------
+        ndarray of shape (n+1, d')
+            Fully-transformed augmented matrix.
+        """
+        Xt = X_aug
+        for t in self.transformers:
+            if t.mode == "bag":
+                t.fit(Xt)
+            Xt = t.transform(Xt)
+        return Xt
+
+    def _predict_bag(self, x: NDArray, method: str, *args: Any, **kwargs: Any) -> Any:
+        """Bag-fit predict path.
+
+        Builds the augmented object bag ``[X_raw, x]``, refits all bag-mode
+        transformers symmetrically, then predicts with a fresh deep-copy of the
+        pristine estimator template.  The persistent estimator (``self.estimator``)
+        and raw bag (``self._X_raw``) are never mutated, so ``predict`` is
+        read-only and safe inside :func:`~online_cp.evaluate.progressive_val`.
+
+        When no training data has been accumulated yet, the estimator is left
+        untrained, which causes it to return the default CP full-label-space
+        prediction (``(-inf, +inf)`` for regressors; full ``label_space`` for
+        classifiers) — preserving validity with no data.
+
+        Parameters
+        ----------
+        x : ndarray of shape (d,)
+            Test object.
+        method : str
+            Name of the estimator method to call (``"predict"``,
+            ``"predict_cpd"``, or ``"compute_p_value"``).
+        *args
+            Positional arguments forwarded to ``estimator.<method>``.
+        **kwargs
+            Keyword arguments forwarded to ``estimator.<method>``.
+        """
+        x2d = np.atleast_2d(x)
+        has_data = self._X_raw is not None and len(self._X_raw) > 0
+        if has_data:
+            X_aug = np.vstack([self._X_raw, x2d])
+        else:
+            X_aug = x2d
+        Xt = self._transform_bag(X_aug)
+        est = copy.deepcopy(self._template)
+        if has_data:
+            X_scaled, x_scaled = Xt[:-1], Xt[-1]
+            est.learn_initial_training_set(X_scaled, self._y_raw)
+        else:
+            x_scaled = Xt[0]
+        return getattr(est, method)(x_scaled, *args, **kwargs)
+
     # ------------------------------------------------------------------
     # Training API
     # ------------------------------------------------------------------
@@ -289,11 +379,24 @@ class Pipeline:
         X : ndarray of shape (n, d)
         y : ndarray of shape (n,)
         """
-        Xt = X
-        for t in self.transformers:
-            t.fit(Xt)
-            Xt = t.transform(Xt)
-        self.estimator.learn_initial_training_set(Xt, y)
+        if self._bag_mode:
+            # Store the raw training bag; transformers will refit at predict time.
+            # Still call fit() on non-bag (fixed) transformers so that _fitted=True
+            # is set for summary() and shape validation happens early.
+            self._X_raw = np.atleast_2d(X).copy()
+            self._y_raw = np.asarray(y).copy()
+            Xt = X
+            for t in self.transformers:
+                if t.mode != "bag":
+                    t.fit(Xt)
+                    Xt = t.transform(Xt)
+            # Do NOT fit the estimator here — it is refitted fresh on every predict.
+        else:
+            Xt = X
+            for t in self.transformers:
+                t.fit(Xt)
+                Xt = t.transform(Xt)
+            self.estimator.learn_initial_training_set(Xt, y)
 
     def learn_one(self, x: NDArray, y: Any, precomputed: Any = None) -> None:
         """Transform *x* and delegate to the estimator's online update.
@@ -308,8 +411,19 @@ class Pipeline:
         precomputed : ignored
             Accepted for API compatibility; always discarded.
         """
-        xt = self._transform_one(x)
-        self.estimator.learn_one(xt, y)
+        if self._bag_mode:
+            # Append raw (x, y) to the stored bag; estimator is NOT updated here —
+            # it will be refitted from scratch on the next predict call.
+            x2d = np.atleast_2d(x)
+            if self._X_raw is None or len(self._X_raw) == 0:
+                self._X_raw = x2d.copy()
+                self._y_raw = np.array([y])
+            else:
+                self._X_raw = np.vstack([self._X_raw, x2d])
+                self._y_raw = np.append(self._y_raw, y)
+        else:
+            xt = self._transform_one(x)
+            self.estimator.learn_one(xt, y)
 
     # ------------------------------------------------------------------
     # Prediction API
@@ -327,6 +441,8 @@ class Pipeline:
         **kwargs
             Forwarded to ``estimator.predict``.
         """
+        if self._bag_mode:
+            return self._predict_bag(x, "predict", **kwargs)
         xt = self._transform_one(x)
         return self.estimator.predict(xt, **kwargs)
 
@@ -339,6 +455,8 @@ class Pipeline:
         **kwargs
             Forwarded to ``estimator.predict_cpd``.
         """
+        if self._bag_mode:
+            return self._predict_bag(x, "predict_cpd", **kwargs)
         xt = self._transform_one(x)
         return self.estimator.predict_cpd(xt, **kwargs)
 
@@ -352,6 +470,8 @@ class Pipeline:
         **kwargs
             Forwarded to ``estimator.compute_p_value``.
         """
+        if self._bag_mode:
+            return self._predict_bag(x, "compute_p_value", y, **kwargs)
         xt = self._transform_one(x)
         return self.estimator.compute_p_value(xt, y, **kwargs)
 
@@ -383,12 +503,16 @@ class Pipeline:
                 Total number of steps (transformers + estimator).
             ``transformers`` : list of dict
                 One entry per transformer with keys ``type`` (class name),
-                ``mode`` (e.g. ``"fixed"`` or ``"frozen"``), and ``fitted``
-                (``True`` after :meth:`learn_initial_training_set` has run).
+                ``mode`` (e.g. ``"fixed"``, ``"frozen"``, or ``"bag"``), and
+                ``fitted`` (``True`` after :meth:`learn_initial_training_set`
+                has run).
             ``estimator`` : dict
                 ``{"type": <class name>}``.
             ``unsafe_incremental`` : bool
                 Whether the validity guard was disabled at construction.
+            ``bag_mode`` : bool
+                ``True`` when at least one transformer uses ``mode="bag"``;
+                in that case the pipeline operates in bag-fit mode.
 
         Examples
         --------
@@ -419,6 +543,7 @@ class Pipeline:
             ],
             "estimator": {"type": type(self.estimator).__name__},
             "unsafe_incremental": self._unsafe_incremental,
+            "bag_mode": self._bag_mode,
         }
 
     def __or__(self, other: Any) -> "Pipeline":
@@ -467,6 +592,12 @@ class TransformerUnion(Transformer):
     def __init__(self, *transformers: Transformer) -> None:
         if len(transformers) < 2:
             raise ValueError("TransformerUnion requires at least two transformers.")
+        if any(t.mode == "bag" for t in transformers):
+            raise ValueError(
+                "TransformerUnion does not support mode='bag' transformers.  "
+                "Bag-mode scalers refit on the augmented bag at each prediction "
+                "and cannot be parallelised inside a union."
+            )
         self._transformers = list(transformers)
         modes = {t.mode for t in self._transformers}
         self.mode = "frozen" if "frozen" in modes else "fixed"

@@ -253,3 +253,27 @@ from online_cp.metrics import (
 from online_cp.metrics import (
     ConformalCRPS as ConformalCRPS,
 )
+from online_cp.pipeline import (
+    FuncTransformer as FuncTransformer,
+)
+from online_cp.pipeline import (
+    Pipeline as Pipeline,
+)
+from online_cp.pipeline import (
+    Transformer as Transformer,
+)
+from online_cp.pipeline import (
+    TransformerUnion as TransformerUnion,
+)
+from online_cp.pipeline import (
+    Select as Select,
+)
+from online_cp.pipeline import (
+    Discard as Discard,
+)
+from online_cp.preprocessing import (
+    StandardScaler as StandardScaler,
+)
+from online_cp.preprocessing import (
+    MinMaxScaler as MinMaxScaler,
+)

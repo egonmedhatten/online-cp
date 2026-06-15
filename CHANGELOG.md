@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Legendre Jumper Martingales** (`online_cp.martingale`) — four new conformal
   test martingales based on Legendre polynomial betting, following:
 
-  > "Legendre Jumper Martingale" by Johan Hallberg Szabadváry (2026).
+  > "([LegendreJumper, preprint]).
 
   - `SimpleLegendreJumper(order, J, epsilon_grid)` — Algorithm 2; single-order
     Legendre polynomial basis with Markov expert chain.

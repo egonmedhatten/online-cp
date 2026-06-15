@@ -16,6 +16,8 @@ dependencies = [
 	'scipy',
 	'joblib >= 1.4.2',
 	'matplotlib',
+	'tqdm',
+	'pandas',
 ]
 classifiers = [
 	"Development Status :: 3 - Alpha",
@@ -41,27 +43,20 @@ docs = [
 ci = [
 	"online-cp[all]",
 	"coverage",
-	"leancheck",
 	"nbconvert",
 	"ipykernel",
 	"scikit-learn",
-	"tqdm",
 	"ipywidgets",
 	"ucimlrepo",
 	"validate-pyproject",
 	"trove-classifiers",
 ]
-progress = [
-	"tqdm",
-]
 all = [
-	"online-cp[fast,dev,progress]",
+	"online-cp[fast,dev]",
 ]
 benchmark = [
 	"scikit-learn",
 	"ucimlrepo",
-	"pandas",
-	"tqdm",
 	"crepes",
 ]
 

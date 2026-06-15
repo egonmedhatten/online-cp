@@ -288,10 +288,95 @@ MondrianConformalClassifier(
 
 ---
 
+## Pipelines
+
+A `Pipeline` chains one or more feature transformers before a conformal predictor, exposing exactly the same `learn_initial_training_set` / `learn_one` / `predict` API so the composed object drops straight into `progressive_val` unchanged.
+
+```python
+from online_cp import (
+    Pipeline, StandardScaler, FuncTransformer,
+    Select, Discard, TransformerUnion,
+    ConformalRidgeRegressor,
+)
+import numpy as np
+
+# Freeze-scale then predict — training-conditional validity (ALRW2 §4.7)
+pipe = StandardScaler() | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Fixed map (always safe, exchangeability trivially preserved)
+pipe = FuncTransformer(np.log1p) | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Bare callables are auto-wrapped in FuncTransformer
+pipe = Pipeline(np.abs, ConformalRidgeRegressor(a=1.0, epsilon=0.1))
+
+# Keep only columns 0 and 2
+pipe = Select([0, 2]) | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Drop noisy column 3
+pipe = Discard([3]) | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Concatenate two feature views (original + absolute value)
+union = FuncTransformer(lambda x: x) + FuncTransformer(np.abs)
+pipe = union | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Chain multiple transformers
+pipe = Pipeline(
+    Select([0, 1, 2]),
+    StandardScaler(),
+    FuncTransformer(np.tanh),
+    ConformalRidgeRegressor(a=1.0, epsilon=0.1),
+)
+
+pipe.learn_initial_training_set(X_train, y_train)
+interval = pipe.predict(x_new, epsilon=0.1)   # same API as a bare predictor
+```
+
+### Transformer modes and validity
+
+| Mode | Example | Conformal guarantee | Cost |
+|------|---------|-------------------|------|
+| `"fixed"` | `FuncTransformer`, `Select`, `Discard` | Full exchangeability — always valid | O(1) |
+| `"frozen"` | `StandardScaler()`, `MinMaxScaler()` | Training-conditional validity (ALRW2 §4.7) | O(1) |
+| `"bag"` | `StandardScaler(mode="bag")`, `MinMaxScaler(mode="bag")` | **Exact finite-sample validity** — no warm-up required | O(n·d²+d³) per predict |
+
+The pipeline raises a `ValueError` at construction if any transformer's mode is not in `{"fixed", "frozen", "bag"}`.
+Pass `unsafe_incremental=True` to opt out (this voids the finite-sample guarantee).
+
+**Bag mode** (`mode="bag"`) refits the scaler at each prediction on the full augmented
+*object* bag `[X_train, x_test]` (label-free, symmetric → permutation-equivariant).
+This gives exact finite-sample validity with no required initial training set, and adapts
+naturally to distributional drift. The trade-off is losing the Sherman-Morrison incremental
+update, making the cost O(n·d²+d³) per `predict` call (O(n²) over a stream of n points).
+
+```python
+# Bag-fit: exact validity, no warm-up required, drift-adaptive
+pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# Start with just learn_one — no learn_initial_training_set needed
+for x, y in stream:
+    interval = pipe.predict(x, epsilon=0.1)   # full-label-space until bag grows
+    pipe.learn_one(x, y)
+```
+
+Mixing `"frozen"` and `"bag"` transformers in the same pipeline is rejected (v1).
+
+### Inspecting a pipeline
+
+```python
+pipe.summary()
+# {'n_steps': 2,
+#  'transformers': [{'type': 'StandardScaler', 'mode': 'frozen', 'fitted': True}],
+#  'estimator': {'type': 'ConformalRidgeRegressor'},
+#  'unsafe_incremental': False}
+```
+
+---
+
 ## Summary Decision Table
 
 | I want... | Use | Class |
 |-----------|-----|-------|
+| Preprocessing before conformal prediction | Pipeline | `Pipeline` / `StandardScaler` / `FuncTransformer` |
 | Prediction interval (linear) | Regressor | `ConformalRidgeRegressor` |
 | Prediction interval (nonlinear) | Regressor | `KernelConformalRidgeRegressor` or `ConformalNearestNeighboursRegressor` |
 | Prediction interval (sparse) | Regressor | `ConformalLassoRegressor` |

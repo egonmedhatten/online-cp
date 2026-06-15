@@ -17,6 +17,11 @@ from numpy.typing import NDArray
 from joblib import Parallel, delayed
 from scipy.spatial.distance import cdist, pdist, squareform
 
+try:
+    from ._serialization import SerializableMixin
+except ImportError:
+    from _serialization import SerializableMixin
+
 # Numba is optional — provides ~10x speedup for the SMO solver
 try:
     from numba import njit
@@ -114,11 +119,14 @@ class MultiLevelPredictionSet:
         return "MultiLevelPredictionSet(\n" + "\n".join(parts) + "\n)"
 
 
-class ConformalClassifier:
+class ConformalClassifier(SerializableMixin):
     """Base class for online conformal classifiers.
 
     Provides shared methods for computing p-values and constructing prediction sets.
     """
+
+    _SAVE_PARAMS: tuple = ("epsilon",)
+    _SAVE_STATE: tuple = ()
 
     def __init__(self, epsilon: float | NDArray[np.floating[Any]] = default_epsilon) -> None:
         self.epsilon = epsilon
@@ -188,6 +196,16 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
     [0.1855, 0.1855]
     """
 
+    _SAVE_PARAMS: tuple = (
+        "k", "label_space", "distance", "distance_func", "aggregation",
+        "verbose", "rnd_state", "n_jobs", "epsilon",
+    )
+    _SAVE_STATE: tuple = (
+        "X", "y", "D", "_label_indices", "_label_space_fixed", "label_space",
+    )
+    _SAVE_CALLABLES: tuple = ("distance_func",)
+    _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
+
     def __init__(
         self,
         k=1,
@@ -225,6 +243,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self._label_indices = {}
 
         self.verbose = verbose
+        self.rnd_state = rnd_state
+        self._distance_func_arg = distance_func
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
@@ -856,6 +876,13 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     True
     """
 
+    _SAVE_PARAMS: tuple = (
+        "kernel", "C", "label_space", "sigma", "degree", "coef0",
+        "smo_tol", "smo_max_iter", "epsilon", "rnd_state",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "K", "label_space", "_label_space_fixed")
+    _SAVE_CALLABLES: tuple = ("kernel",)
+
     def __init__(
         self,
         kernel="rbf",
@@ -870,6 +897,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         rnd_state=None,
     ):
         super().__init__(epsilon=epsilon)
+        self.kernel = kernel
         self.C = C
         self._label_space_fixed = label_space is not None
         self.label_space = np.asarray(label_space) if label_space is not None else None
@@ -878,6 +906,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         self.coef0 = coef0
         self.smo_tol = smo_tol
         self.smo_max_iter = smo_max_iter
+        self.rnd_state = rnd_state
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.X = None

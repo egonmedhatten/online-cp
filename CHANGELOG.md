@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Save / load serialization** — all model classes now support `save(filepath)` /
+  `cls.load(filepath)` round-trips:
+  - `SerializableMixin` in `online_cp._serialization` — declarative mixin; subclasses
+    list `_SAVE_PARAMS`, `_SAVE_STATE`, `_SAVE_CALLABLES`, `_PARAM_MAP` tuples; the
+    mixin provides generic `save`/`load` without boilerplate.
+  - **Exact RNG reproducibility**: the full `bit_generator.state` dict is saved, not
+    just the seed, so predictions are identical after any number of online updates.
+  - **Named-callable registry**: `@register_callable("name")` decorator + exported
+    helpers `to_token` / `from_token`.  Module-level functions and `Kernel` objects
+    round-trip automatically; lambdas raise `SerializationError` with a clear message.
+  - **Versioned envelope**: each file records `format_version`, `library_version`, and
+    `class`; a `UserWarning` is emitted on library-version mismatch; an error is raised
+    on class mismatch or unsupported format version.
+  - Coverage: `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`,
+    `ConformalNearestNeighboursRegressor`, `ConformalLassoRegressor`,
+    `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine`,
+    `RidgePredictionMachine`, `KernelRidgePredictionMachine`,
+    `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem`,
+    `VennAbersPredictor`, `NearestNeighboursVennPredictor`,
+    `ConformalMondrianTreeClassifier`, `ConformalMondrianForestClassifier`,
+    `ConformalMondrianTreeRegressor`, `ConformalMondrianForestRegressor`,
+    `MondrianConformalRegressor`, `MondrianConformalClassifier`,
+    `ConformalPredictiveDecisionMaker` (custom), `Pipeline` (custom, preserves
+    bag-mode raw training data).
+  - New public exports: `SerializationError`, `register_callable`.
+  - 59 round-trip tests in `tests/test_save_load.py`.
+
 - **Decision-making module** (`online_cp.decision`):
   - `ConformalPredictiveDecisionMaker`: Vovk & Bendtsen (2018) Algorithm 1 —
     maintains one CPS per decision, trained on utility-transformed labels.

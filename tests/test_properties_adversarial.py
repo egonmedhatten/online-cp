@@ -36,7 +36,14 @@ NOTE: do *not* add ``from __future__ import annotations`` — leancheck reads
 import leancheck
 import numpy as np
 
-from online_cp import ConformalNearestNeighboursRegressor, RidgePredictionMachine, VennPrediction
+from online_cp import (
+    ConformalNearestNeighboursRegressor,
+    ConformalRidgeRegressor,
+    Pipeline,
+    RidgePredictionMachine,
+    StandardScaler,
+    VennPrediction,
+)
 from online_cp.venn import log_loss_point
 
 MAX_TESTS = 300
@@ -223,3 +230,51 @@ def prop_log_loss_point_in_unit_interval(k0: int, k1: int) -> bool:
 
 def test_log_loss_point_in_unit_interval():
     assert _check(prop_log_loss_point_in_unit_interval)
+
+
+# ======================================================================= #
+# A8 – Bag pipeline order-invariance on degenerate / zero-variance data    #
+#                                                                          #
+# Scenario: one constant column (std=0 → clamped to 1 by scaler guard)    #
+# and one tie-rich column (very small spread → nearly degenerate).         #
+# The pipeline's p-value must be order-invariant even in this pathological  #
+# case, confirming the exchangeability guarantee holds under the zero-var   #
+# guard and tie-breaking paths.                                             #
+# ======================================================================= #
+
+_BAG_ADV_N = 10
+_BAG_ADV_RNG = np.random.default_rng(99)
+# Column 0: constant (zero variance) → bag scaler std=0 guard fires
+# Column 1: tie-rich (very small spread, rounded to 2 dp)
+_BAG_ADV_X = np.column_stack([
+    np.ones(_BAG_ADV_N),
+    np.round(_BAG_ADV_RNG.normal(size=_BAG_ADV_N) * 0.01, 2),
+])
+_BAG_ADV_Y = _BAG_ADV_RNG.normal(size=_BAG_ADV_N)
+_BAG_ADV_XQ = np.array([1.0, 0.0])
+_BAG_ADV_YQ = float(_BAG_ADV_Y[0])
+
+
+def _fit_bag_adv_in_order(order: list[int]):
+    pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, warnings=False)
+    for i in order:
+        pipe.learn_one(_BAG_ADV_X[i], float(_BAG_ADV_Y[i]))
+    return pipe
+
+
+def prop_bag_pipeline_degenerate_order_invariant(keys: list[int]) -> bool:
+    """P-value must be order-invariant even on degenerate (zero-variance) data.
+
+    Column 0 is constant → bag scaler's zero-variance guard (std→1) fires.
+    Column 1 is tie-rich → many identical scaled values.  In both cases the
+    p-value must not depend on the training insertion order.
+    """
+    ref = _fit_bag_adv_in_order(list(range(_BAG_ADV_N)))
+    out = _fit_bag_adv_in_order(_perm_from_keys(keys, _BAG_ADV_N))
+    p_ref = ref.compute_p_value(_BAG_ADV_XQ, _BAG_ADV_YQ, tau=0.5)
+    p_out = out.compute_p_value(_BAG_ADV_XQ, _BAG_ADV_YQ, tau=0.5)
+    return bool(np.isclose(p_ref, p_out, atol=1e-10))
+
+
+def test_bag_pipeline_degenerate_order_invariant():
+    assert _check(prop_bag_pipeline_degenerate_order_invariant)

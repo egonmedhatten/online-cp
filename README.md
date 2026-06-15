@@ -315,14 +315,14 @@ loaded = ConformalNearestNeighboursRegressor.load("model.joblib")  # works
 
 ## Tutorial
 
-Start with [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) for a 5-minute introduction ([run on Binder](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)), then see [`notebooks/tutorial.ipynb`](notebooks/tutorial.ipynb) for a comprehensive walkthrough covering regression, classification, Mondrian CP, conformal predictive systems, martingales, and evaluation.
+Start with [`notebooks/quickstart.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/quickstart.ipynb) for a 5-minute introduction ([run on Binder](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)), then see [`notebooks/tutorial.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb) for a comprehensive walkthrough covering regression, classification, Mondrian CP, conformal predictive systems, martingales, and evaluation.
 
 ## Links
 
 * [Documentation](https://egonmedhatten.github.io/online-cp/)
 * [online-cp on GitHub][online-cp-on-github]
 * [online-cp on PyPI][online-cp-on-pypi]
-* [Changelog](CHANGELOG.md)
+* [Changelog](https://github.com/egonmedhatten/online-cp/blob/main/CHANGELOG.md)
 
 ## Looking for Inductive (Split) Conformal Prediction?
 

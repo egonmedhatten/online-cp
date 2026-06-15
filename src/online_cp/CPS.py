@@ -1011,7 +1011,7 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
         # Between Y[k] and Y[k+1]: Pi = (1-tau)*L[k] + tau*U[k]
         # L and U have K'+1 entries (indices 0..K')
         # Find smallest y where Pi(y, tau) >= p
-        Kprime = len(self.L) - 1
+        # (K' = len(self.L) - 1 entries)
 
         # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=0..K'
         between_levels = (1 - tau) * self.L + tau * self.U

@@ -39,12 +39,11 @@ import numpy as np
 from online_cp import (
     ConformalNearestNeighboursRegressor,
     ConformalRidgeRegressor,
-    Pipeline,
     RidgePredictionMachine,
-    StandardScaler,
-    VennPrediction,
     SimpleLegendreJumper,
+    StandardScaler,
     VariationalLegendreJumper,
+    VennPrediction,
 )
 from online_cp.venn import log_loss_point
 

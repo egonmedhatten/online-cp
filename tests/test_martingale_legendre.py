@@ -5,15 +5,13 @@ import pytest
 from scipy.integrate import quad
 
 from online_cp.martingale import (
-    STANDARD_GRID,
     CompositeLegendreJumper,
-    SimpleLegendreJumper,
     ProductLegendreJumper,
+    SimpleLegendreJumper,
     VariationalLegendreJumper,
     compute_normalization_Z,
     shifted_legendre_poly,
 )
-
 
 # ---------------------------------------------------------------------------
 # Utility tests
@@ -369,7 +367,6 @@ class TestVLJBehaviour:
 
     def test_three_orders_valid_martingale(self):
         """For |K|=3, VLJ should still be a valid test martingale (bounded under H0)."""
-        rng = np.random.default_rng(42)
         # Run multiple short sequences, check none blow up
         for seed in range(10):
             rng2 = np.random.default_rng(seed + 1000)

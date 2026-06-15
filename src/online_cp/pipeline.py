@@ -110,7 +110,7 @@ class Transformer(ABC):
             Transformed vector.
         """
 
-    def __or__(self, other: Any) -> "Pipeline":
+    def __or__(self, other: Any) -> Pipeline:
         """Build a :class:`Pipeline` via the ``|`` operator.
 
         Parameters
@@ -128,7 +128,7 @@ class Transformer(ABC):
             return Pipeline(self, *other.steps)
         return Pipeline(self, other)
 
-    def __add__(self, other: "Transformer") -> "TransformerUnion":
+    def __add__(self, other: Transformer) -> TransformerUnion:
         """Build a :class:`TransformerUnion` via the ``+`` operator.
 
         Parameters
@@ -552,7 +552,7 @@ class Pipeline:
             "bag_mode": self._bag_mode,
         }
 
-    def __or__(self, other: Any) -> "Pipeline":
+    def __or__(self, other: Any) -> Pipeline:
         """Append a step to this pipeline via the ``|`` operator."""
         return Pipeline(*self.steps, other,
                         unsafe_incremental=self._unsafe_incremental)
@@ -596,13 +596,14 @@ class Pipeline:
             ) from exc
 
     @classmethod
-    def load(cls, filepath: str | os.PathLike) -> "Pipeline":
+    def load(cls, filepath: str | os.PathLike) -> Pipeline:
         """Load a pipeline from *filepath*.
 
         .. warning::
             Only load files from **trusted sources**.
         """
         import warnings as _warnings
+
         import joblib
 
         try:

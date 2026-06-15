@@ -13,8 +13,8 @@ import warnings
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 from joblib import Parallel, delayed
+from numpy.typing import NDArray
 from scipy.spatial.distance import cdist, pdist, squareform
 
 try:
@@ -712,7 +712,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
         try:
             learner.fit(X, Y_aug)
             S = learner.predict_proba(X)
-        except Exception as exc:
+        except Exception:
             return None  # Signal failure
 
         classes = getattr(learner, "classes_", None)
@@ -1128,7 +1128,7 @@ class _SklearnKernelAdapter:
 def _smo_loop(K, y, C, tol, max_iter, alpha, G, Q_diag):
     """Numba-jitted SMO inner loop with WSS3 working set selection."""
     n = len(y)
-    for iteration in range(max_iter):
+    for _iteration in range(max_iter):
         # Working set selection (WSS3: second-order)
         # Find i from I_up with max -y_i*G_i
         m_val = -np.inf

@@ -17,6 +17,8 @@ jobs:
         run: uv sync --extra ci
       - name: Parse libraries and run doctests (./scripts/run-modules)
         run: uv run ./scripts/run-modules
+      - name: Lint (ruff)
+        run: uv run ruff check src tests
       - run: uv run ./scripts/run-notebooks
       - run: uv run validate-pyproject pyproject.toml
       # Fast lane (structural leancheck + unit tests). The 'slow' statistical

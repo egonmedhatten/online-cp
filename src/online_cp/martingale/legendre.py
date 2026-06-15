@@ -13,17 +13,15 @@ Default grid: E = {-1/2, -1/4, 0, 1/4, 1/2}.
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 from numpy.polynomial import Polynomial
 from numpy.polynomial.legendre import Legendre
 from scipy.special import eval_legendre, logsumexp
-import itertools
 
 from .base import ConformalTestMartingale
-
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -533,7 +531,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         orders = self.orders
         gaunt_terms = self._gaunt_terms
 
-        def _b_n(u, _eps_bar=eps_bar.copy(), _orders=orders, _gaunt=gaunt_terms):
+        def _b_n(u, _eps_bar=eps_bar.copy(), _orders=orders, _gaunt=gaunt_terms):  # noqa: B008
             Pk_vals = [eval_legendre(k, 2.0 * u - 1.0) for k in _orders]
             # Fast Z from precomputed Gaunt coefficients
             Z = 1.0

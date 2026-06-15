@@ -11,9 +11,6 @@ Tests cover:
 
 from __future__ import annotations
 
-import os
-import warnings
-
 import numpy as np
 import pytest
 
@@ -30,7 +27,6 @@ from online_cp import (
 )
 from online_cp._serialization import (
     SerializationError,
-    SerializableMixin,
     register_callable,
 )
 
@@ -672,8 +668,8 @@ class TestMondrianConformalRegressorRoundTrip:
 
 class TestMondrianConformalClassifierRoundTrip:
     def test_label_category_fn(self, tmp_path):
-        from online_cp.mondrian import MondrianConformalClassifier
         from online_cp.classifiers import ConformalNearestNeighboursClassifier
+        from online_cp.mondrian import MondrianConformalClassifier
         base = ConformalNearestNeighboursClassifier(k=5, label_space=[-1, 1])
         m = MondrianConformalClassifier(base, category_fn="label")
         m.learn_initial_training_set(X_CLF, Y_CLF)
@@ -685,8 +681,8 @@ class TestMondrianConformalClassifierRoundTrip:
         np.testing.assert_array_equal(orig.elements, new.elements)
 
     def test_callable_category_fn(self, tmp_path):
-        from online_cp.mondrian import MondrianConformalClassifier
         from online_cp.classifiers import ConformalNearestNeighboursClassifier
+        from online_cp.mondrian import MondrianConformalClassifier
         base = ConformalNearestNeighboursClassifier(k=5, label_space=[-1, 1])
         m = MondrianConformalClassifier(base, category_fn=_mondrian_cat_clf)
         m.learn_initial_training_set(X_CLF, Y_CLF)
@@ -710,8 +706,8 @@ def _test_utility_fn(x, y, d):
 
 class TestDecisionMakerRoundTrip:
     def test_round_trip(self, tmp_path):
-        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         from online_cp.CPS import RidgePredictionMachine
+        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         utility = UtilityFunction(fn=_test_utility_fn, decisions=[-1.0, 1.0])
         dm = ConformalPredictiveDecisionMaker(utility, RidgePredictionMachine)
         dm.learn_initial_training_set(X_REG, Y_REG)
@@ -723,8 +719,8 @@ class TestDecisionMakerRoundTrip:
         assert orig == new
 
     def test_utility_fn_preserved(self, tmp_path):
-        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         from online_cp.CPS import RidgePredictionMachine
+        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         utility = UtilityFunction(fn=_test_utility_fn, decisions=[-1.0, 1.0])
         dm = ConformalPredictiveDecisionMaker(utility, RidgePredictionMachine)
         path = tmp_path / "decision_fn.joblib"
@@ -812,7 +808,7 @@ def _shift_features(x):
 
 class TestFuncTransformerRoundTrip:
     def test_numpy_ufunc_round_trip(self, tmp_path):
-        from online_cp import Pipeline, FuncTransformer
+        from online_cp import FuncTransformer, Pipeline
         # log1p requires non-negative inputs.
         X = np.abs(X_REG) + 0.1
         ft = FuncTransformer(np.log1p)
@@ -829,7 +825,7 @@ class TestFuncTransformerRoundTrip:
         assert abs(orig.upper - new.upper) < 1e-10
 
     def test_named_function_round_trip(self, tmp_path):
-        from online_cp import Pipeline, FuncTransformer
+        from online_cp import FuncTransformer, Pipeline
         ft = FuncTransformer(_shift_features)
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(ft, regressor)
@@ -845,7 +841,7 @@ class TestFuncTransformerRoundTrip:
         assert abs(orig.upper - new.upper) < 1e-10
 
     def test_lambda_raises_serialization_error(self, tmp_path):
-        from online_cp import Pipeline, FuncTransformer
+        from online_cp import FuncTransformer, Pipeline
         ft = FuncTransformer(lambda x: x + 1.0)
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(ft, regressor)

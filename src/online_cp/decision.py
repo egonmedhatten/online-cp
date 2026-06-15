@@ -18,12 +18,13 @@ References
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Sequence
+from collections.abc import Sequence
+from typing import Any, Callable
 
 try:
-    from ._serialization import SerializableMixin, SerializationError, to_token, from_token
+    from ._serialization import SerializableMixin, SerializationError, from_token, to_token
 except ImportError:
-    from _serialization import SerializableMixin, SerializationError, to_token, from_token
+    from _serialization import SerializableMixin, SerializationError, from_token, to_token
 
 import numpy as np
 from numpy.typing import NDArray
@@ -530,13 +531,14 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
             ) from exc
 
     @classmethod
-    def load(cls, filepath: str | os.PathLike) -> "ConformalPredictiveDecisionMaker":
+    def load(cls, filepath: str | os.PathLike) -> ConformalPredictiveDecisionMaker:
         """Load a decision maker from *filepath*.
 
         .. warning::
             Only load files from **trusted sources**.
         """
         import warnings as _warnings
+
         import joblib
 
         try:

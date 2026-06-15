@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from online_cp import ConformalRidgeRegressor
-from online_cp.evaluate import progressive_val, iter_progressive_val, progressive_val_venn, iter_progressive_val_venn
-from online_cp.metrics import ErrorRate, IntervalWidth, BrierScore
+from online_cp.evaluate import iter_progressive_val, iter_progressive_val_venn, progressive_val, progressive_val_venn
+from online_cp.metrics import BrierScore, ErrorRate, IntervalWidth
 
 
 @pytest.fixture
@@ -305,8 +305,8 @@ class TestPlotting:
     def test_plot_martingale(self, uniform_p_values):
         import matplotlib
         matplotlib.use("Agg")
+        from online_cp import FixedStrategy, PluginMartingale
         from online_cp.plotting import plot_martingale
-        from online_cp import PluginMartingale, FixedStrategy
 
         fs = FixedStrategy(pdf=lambda x: 2 * (1 - x), check_integration=False)
         mart = PluginMartingale(betting_strategy=fs)
@@ -320,8 +320,8 @@ class TestPlotting:
     def test_plot_detector_ville(self, uniform_p_values):
         import matplotlib
         matplotlib.use("Agg")
-        from online_cp.plotting import plot_detector
         from online_cp import SimpleJumper, VilleWrapper
+        from online_cp.plotting import plot_detector
 
         sj = SimpleJumper(J=0.1)
         ville = VilleWrapper(sj, threshold=20)
@@ -335,8 +335,8 @@ class TestPlotting:
     def test_plot_detector_ville_with_alarm(self):
         import matplotlib
         matplotlib.use("Agg")
-        from online_cp.plotting import plot_detector
         from online_cp import SimpleJumper, VilleWrapper
+        from online_cp.plotting import plot_detector
 
         sj = SimpleJumper(J=0.1)
         ville = VilleWrapper(sj, threshold=5)
@@ -352,8 +352,8 @@ class TestPlotting:
     def test_plot_detector_cusum(self, uniform_p_values):
         import matplotlib
         matplotlib.use("Agg")
+        from online_cp import CUSUMWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
-        from online_cp import SimpleJumper, CUSUMWrapper
 
         sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj)
@@ -367,8 +367,8 @@ class TestPlotting:
     def test_plot_detector_cusum_with_barrier(self):
         import matplotlib
         matplotlib.use("Agg")
+        from online_cp import CUSUMWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
-        from online_cp import SimpleJumper, CUSUMWrapper
 
         sj = SimpleJumper(J=0.1)
         cusum = CUSUMWrapper(sj, barrier_slope=0.01)
@@ -381,8 +381,8 @@ class TestPlotting:
     def test_plot_detector_sr(self, uniform_p_values):
         import matplotlib
         matplotlib.use("Agg")
+        from online_cp import ShiryaevRobertsWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
-        from online_cp import SimpleJumper, ShiryaevRobertsWrapper
 
         sj = SimpleJumper(J=0.1)
         sr = ShiryaevRobertsWrapper(sj)
@@ -396,8 +396,8 @@ class TestPlotting:
     def test_plot_detector_sr_with_alarm(self):
         import matplotlib
         matplotlib.use("Agg")
+        from online_cp import ShiryaevRobertsWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
-        from online_cp import SimpleJumper, ShiryaevRobertsWrapper
 
         sj = SimpleJumper(J=0.1)
         sr = ShiryaevRobertsWrapper(sj)

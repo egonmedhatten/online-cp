@@ -11,7 +11,6 @@ from scipy.special import gammainc, gammaln, logsumexp
 
 from ..betting import (
     BettingStrategy,
-    FixedStrategy,
     GaussianKDE,
 )
 from .base import ConformalTestMartingale

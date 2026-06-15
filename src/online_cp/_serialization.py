@@ -236,7 +236,7 @@ class SerializableMixin:
     # ------------------------------------------------------------------ load
 
     @classmethod
-    def load(cls, filepath: str | os.PathLike) -> "SerializableMixin":
+    def load(cls, filepath: str | os.PathLike) -> SerializableMixin:
         """Load a model from *filepath*.
 
         .. warning::

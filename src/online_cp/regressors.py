@@ -996,7 +996,6 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # Strategy: compute all training nonconformity scores under the
         # augmented distance matrix, then find the threshold.
 
-        k = min(self.k, n_aug - 1)
         agg_func = np.mean if self.aggregation == "mean" else np.median
 
         # For each training point i (0..n-1), compute its leave-one-out

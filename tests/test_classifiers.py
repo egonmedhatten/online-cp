@@ -3,7 +3,11 @@ import warnings
 import numpy as np
 import pytest
 
-from online_cp.classifiers import ConformalClassifierWrapper, ConformalNearestNeighboursClassifier, MultiLevelPredictionSet
+from online_cp.classifiers import (
+    ConformalClassifierWrapper,
+    ConformalNearestNeighboursClassifier,
+    MultiLevelPredictionSet,
+)
 
 
 class TestConformalNearestNeighboursClassifier:
@@ -483,8 +487,8 @@ class TestWrapperWarmStart:
 
     def test_warm_start_auto_detection(self):
         """LogisticRegression gets warm_start=True, RandomForest does not."""
-        from sklearn.linear_model import LogisticRegression
         from sklearn.ensemble import RandomForestClassifier
+        from sklearn.linear_model import LogisticRegression
 
         with pytest.warns(UserWarning):
             cp_lr = ConformalClassifierWrapper(

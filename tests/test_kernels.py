@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from scipy.spatial.distance import cdist, squareform, pdist
+from scipy.spatial.distance import cdist, pdist, squareform
 
 from online_cp.kernels import (
     CustomKernel,

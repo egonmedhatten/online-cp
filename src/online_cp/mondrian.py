@@ -28,7 +28,8 @@ Example
 
 from __future__ import annotations
 
-from typing import Any, Callable, Hashable
+from collections.abc import Hashable
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -241,7 +242,6 @@ class MondrianConformalRegressor(SerializableMixin):
         return rank <= threshold
 
     def _run_homotopy_mondrian(self, x_new, direction, t_bound, cat_mask_train, threshold):
-        from online_cp.regressors import _compute_crossings
 
         model = self.base_model
         sign = 1 if direction > 0 else -1

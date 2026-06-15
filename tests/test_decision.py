@@ -15,7 +15,6 @@ from online_cp.decision import (
 )
 from online_cp.venn import VennPrediction
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -89,7 +88,7 @@ class TestCPSExpectedUtilities:
     def test_returns_dict_of_floats(self, ridge_cpd, squared_error_utility):
         exps = cps_expected_utilities(ridge_cpd, squared_error_utility, x=None, tau=0.5)
         assert isinstance(exps, dict)
-        for d, val in exps.items():
+        for _d, val in exps.items():
             assert isinstance(val, float)
             assert np.isfinite(val)
 

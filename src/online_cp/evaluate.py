@@ -23,13 +23,14 @@ Example
 from __future__ import annotations
 
 import heapq
-from typing import Any, Callable, Generator, Iterable
+from collections.abc import Generator, Iterable
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
 
 if __name__ != "__main__":
-    from online_cp.metrics import Metric, Metrics, ObservedFuzziness, CRPS, TruncatedCRPS, ConformalCRPS, BrierScore
+    from online_cp.metrics import CRPS, BrierScore, ConformalCRPS, Metric, Metrics, ObservedFuzziness, TruncatedCRPS
 
 __all__ = [
     "progressive_val",
@@ -86,7 +87,7 @@ def _should_learn(learn, i, x_i, y_i):
 
 def _wrap_progress(iterable, total=None, enabled=False, desc=None):
     """Optionally wrap an iterable with a tqdm progress bar.
-    
+
     Returns a tuple (wrapped_iterable, pbar_instance) where pbar_instance
     is the tqdm instance (useful for set_postfix) or None if disabled.
     """
@@ -276,7 +277,7 @@ def progressive_val(
     heap: list = []
     total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
     data_iter, pbar = _wrap_progress(_iter_data(X, y), total=total, enabled=progress)
-    for i, (x_i, y_i, t_i) in enumerate(data_iter):
+    for i, (x_i, y_i, _t_i) in enumerate(data_iter):
         if y_i is None:
             # Lazy Teacher: emit prediction but exclude from metric and learning.
             _predict(model, x_i, needs_p, needs_cpd, predict_kw, epsilon, rng)
@@ -473,7 +474,7 @@ def progressive_val_venn(
     heap: list = []
     total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
     data_iter, pbar = _wrap_progress(_iter_data(X, y), total=total, enabled=progress)
-    for i, (x_i, y_i, t_i) in enumerate(data_iter):
+    for i, (x_i, y_i, _t_i) in enumerate(data_iter):
         if y_i is None:
             # Lazy Teacher: emit prediction but exclude from metric and learning.
             model.predict(x_i)

@@ -33,9 +33,7 @@ from online_cp import (
     CUSUMWrapper,
     ErrorRate,
     IntervalWidth,
-    MinMaxScaler,
     ObservedExcess,
-    Pipeline,
     PluginMartingale,
     RidgePredictionMachine,
     SetSize,  # noqa: F401 — imported for completeness; used in P16 comment
@@ -394,11 +392,11 @@ def test_classifier_sets_nested_in_epsilon():
 # --------------------------------------------------------------------------- #
 # Property 8: VennPrediction.binary structural bounds.
 #
-# For any (p0, p1) in [0, 1]:                                               
-#   - All four matrix entries are in [0, 1].                                  
-#   - Each row of the probability matrix sums to 1.                           
-#   - .p0 and .p1 round-trip through the matrix.                              
-#   - .point sums to 1 and point[1] == (p0 + p1) / 2.                        
+# For any (p0, p1) in [0, 1]:
+#   - All four matrix entries are in [0, 1].
+#   - Each row of the probability matrix sums to 1.
+#   - .p0 and .p1 round-trip through the matrix.
+#   - .point sums to 1 and point[1] == (p0 + p1) / 2.
 # --------------------------------------------------------------------------- #
 
 
@@ -657,7 +655,7 @@ _COMP_IV = ConformalPredictionInterval(0.0, 10.0, 0.1)
 
 def prop_metrics_composition_n_sync(ks: list[int]) -> bool:
     m = ErrorRate() + IntervalWidth()
-    for k in ks:
+    for _k in ks:
         m.update(y=0.0, Gamma=_COMP_IV)
         if m["ErrorRate"]._n != m["IntervalWidth"]._n:
             return False

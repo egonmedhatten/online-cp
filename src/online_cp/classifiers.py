@@ -17,7 +17,10 @@ from numpy.typing import NDArray
 from joblib import Parallel, delayed
 from scipy.spatial.distance import cdist, pdist, squareform
 
-from ._serialization import SerializableMixin
+try:
+    from ._serialization import SerializableMixin
+except ImportError:
+    from _serialization import SerializableMixin
 
 # Numba is optional — provides ~10x speedup for the SMO solver
 try:

@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Sequence
 
-from online_cp._serialization import SerializableMixin, SerializationError, to_token, from_token
+try:
+    from ._serialization import SerializableMixin, SerializationError, to_token, from_token
+except ImportError:
+    from _serialization import SerializableMixin, SerializationError, to_token, from_token
 
 import numpy as np
 from numpy.typing import NDArray

@@ -15,7 +15,10 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.distance import cdist, pdist, squareform
 
-from ._serialization import SerializableMixin
+try:
+    from ._serialization import SerializableMixin
+except ImportError:
+    from _serialization import SerializableMixin
 
 try:
     from numba import njit

@@ -10,7 +10,10 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
-from ._serialization import SerializableMixin
+try:
+    from ._serialization import SerializableMixin
+except ImportError:
+    from _serialization import SerializableMixin
 
 import numpy as np
 from numpy.typing import NDArray

@@ -17,7 +17,10 @@ from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
-from ._serialization import SerializableMixin
+try:
+    from ._serialization import SerializableMixin
+except ImportError:
+    from _serialization import SerializableMixin
 
 __all__ = [
     "RidgePredictionMachine",

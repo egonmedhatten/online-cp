@@ -42,7 +42,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from online_cp._serialization import SerializationError
+try:
+    from online_cp._serialization import SerializationError
+except ImportError:
+    from _serialization import SerializationError
 
 
 class Transformer(ABC):

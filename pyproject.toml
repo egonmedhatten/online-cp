@@ -30,6 +30,11 @@ classifiers = [
 fast = [
 	"numba",
 ]
+# Note: the 'graphviz' pip package also requires the system 'dot' binary
+# (e.g. 'apt install graphviz' or 'brew install graphviz').
+viz = [
+	"graphviz",
+]
 dev = [
 	"pytest",
 	"ruff",
@@ -48,11 +53,12 @@ ci = [
 	"scikit-learn",
 	"ipywidgets",
 	"ucimlrepo",
+	"graphviz",
 	"validate-pyproject",
 	"trove-classifiers",
 ]
 all = [
-	"online-cp[fast,dev]",
+	"online-cp[fast,dev,viz]",
 ]
 benchmark = [
 	"scikit-learn",

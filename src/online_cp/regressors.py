@@ -10,6 +10,8 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
+from ._serialization import SerializableMixin
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
@@ -110,12 +112,15 @@ class MultiLevelPredictionInterval:
         return "MultiLevelPredictionInterval(\n" + "\n".join(parts) + "\n)"
 
 
-class ConformalRegressor:
+class ConformalRegressor(SerializableMixin):
     """Base class for online conformal regressors.
 
     Provides shared methods for computing p-values, constructing prediction
     intervals, and processing datasets in the online setting.
     """
+
+    _SAVE_PARAMS: tuple = ("epsilon",)
+    _SAVE_STATE: tuple = ()
 
     def __init__(self, epsilon: float | NDArray[np.floating[Any]] = default_epsilon) -> None:
         self.epsilon = epsilon
@@ -274,6 +279,12 @@ class ConformalRidgeRegressor(ConformalRegressor):
     (5.39, 6.33)
     """
 
+    _SAVE_PARAMS: tuple = (
+        "a", "warnings", "autotune", "verbose", "studentised",
+        "epsilon", "recompute_every", "rnd_state",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "p", "Id", "XTXinv", "_n_sm_updates")
+
     def __init__(
         self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon, recompute_every: int | None = None
     ) -> None:
@@ -303,6 +314,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
         self.autotune = autotune
 
         self.verbose = verbose
+        self.rnd_state = rnd_state
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         # Do we use the studentised residuals
@@ -748,6 +760,14 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
     True
     """
 
+    _SAVE_PARAMS: tuple = (
+        "k", "distance", "distance_func", "aggregation",
+        "verbose", "rnd_state", "epsilon",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "D")
+    _SAVE_CALLABLES: tuple = ("distance_func",)
+    _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
+
     def __init__(
         self,
         k=1,
@@ -789,6 +809,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.y = None
         self.D = None
         self.verbose = verbose
+        self.rnd_state = rnd_state
+        self._distance_func_arg = distance_func
         self.rnd_gen = np.random.default_rng(rnd_state)
 
     def _standard_distance_func(self, X, y=None):
@@ -1132,6 +1154,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
 class KernelConformalRidgeRegressor(ConformalRegressor):
 
+    _SAVE_PARAMS: tuple = (
+        "kernel", "a", "warnings", "verbose", "rnd_state",
+        "epsilon", "recompute_every", "studentised",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "_n_sm_updates")
+    _SAVE_CALLABLES: tuple = ("kernel",)
+
     def __init__(self, kernel: Any, a: float = 0, warnings: bool = True, verbose: int = 0, rnd_state: int | None = None, epsilon: float = default_epsilon, recompute_every: int | None = None, studentised: bool = False) -> None:
         """
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is
@@ -1165,7 +1194,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         self.warnings = warnings
 
         self.verbose = verbose
-
+        self.rnd_state = rnd_state
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         # Do we use the studentised residuals
@@ -1668,6 +1697,13 @@ class ConformalLassoRegressor(ConformalRegressor):
     True
     """
 
+    _SAVE_PARAMS: tuple = (
+        "lam", "rho", "epsilon", "autotune", "n_folds",
+        "search_range_factor", "max_homotopy_steps", "verbose",
+        "warnings", "rnd_state",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "beta")
+
     def __init__(
         self,
         lam=1.0,
@@ -1690,6 +1726,7 @@ class ConformalLassoRegressor(ConformalRegressor):
         self.max_homotopy_steps = max_homotopy_steps
         self.verbose = verbose
         self.warnings = warnings
+        self.rnd_state = rnd_state
         self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.X = None

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Sequence
 
+from online_cp._serialization import SerializableMixin, SerializationError, to_token, from_token
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -346,7 +348,7 @@ def venn_decision(
 # ---------------------------------------------------------------------------
 
 
-class ConformalPredictiveDecisionMaker:
+class ConformalPredictiveDecisionMaker(SerializableMixin):
     """Conformal Predictive Decision Making (Vovk & Bendtsen 2018, Algorithm 1).
 
     Maintains one conformal predictive system per decision.
@@ -487,6 +489,91 @@ class ConformalPredictiveDecisionMaker:
         cps_name = self._cps_class.__name__
         n_decisions = len(self.utility.decisions)
         return f"ConformalPredictiveDecisionMaker(|D|={n_decisions}, cps={cps_name})"
+
+    def save(self, filepath: str, *, compress: int = 3) -> None:
+        """Save this decision maker to *filepath*.
+
+        The utility function callable (``utility.fn``) must be registered via
+        :func:`~online_cp.register_callable` or be a module-level named
+        function; lambdas will raise :class:`~online_cp.SerializationError`.
+
+        .. warning::
+            Only load files from **trusted sources**.
+        """
+        import joblib
+
+        try:
+            from online_cp import __version__ as _lib_version
+        except Exception:
+            _lib_version = "unknown"
+
+        try:
+            envelope = {
+                "format_version": 1,
+                "library_version": _lib_version,
+                "class": f"{type(self).__module__}.{type(self).__qualname__}",
+                "utility_fn_token": to_token(self.utility.fn),
+                "utility_decisions": self.utility.decisions,
+                "cps_class": self._cps_class,
+                "models": self._models,
+            }
+            joblib.dump(envelope, filepath, compress=compress)
+        except SerializationError:
+            raise
+        except Exception as exc:
+            raise SerializationError(
+                f"Failed to save model to {filepath!r}: {exc}"
+            ) from exc
+
+    @classmethod
+    def load(cls, filepath: str) -> "ConformalPredictiveDecisionMaker":
+        """Load a decision maker from *filepath*.
+
+        .. warning::
+            Only load files from **trusted sources**.
+        """
+        import warnings as _warnings
+        import joblib
+
+        try:
+            from online_cp import __version__ as _lib_version
+        except Exception:
+            _lib_version = "unknown"
+
+        try:
+            envelope = joblib.load(filepath)
+        except Exception as exc:
+            raise SerializationError(
+                f"Failed to read model file {filepath!r}: {exc}"
+            ) from exc
+
+        fmt_ver = envelope.get("format_version", 0)
+        if fmt_ver > 1:
+            raise SerializationError(
+                f"Unsupported format_version {fmt_ver}. Update online-cp to load this file."
+            )
+        lib_ver = envelope.get("library_version", "unknown")
+        if lib_ver != _lib_version:
+            _warnings.warn(
+                f"Model was saved with online-cp {lib_ver!r}, "
+                f"but you are using {_lib_version!r}. Predictions may differ.",
+                UserWarning,
+                stacklevel=2,
+            )
+        expected = f"{cls.__module__}.{cls.__qualname__}"
+        if envelope.get("class", "") != expected:
+            raise SerializationError(
+                f"Class mismatch: file contains '{envelope.get('class')}', "
+                f"expected '{expected}'."
+            )
+
+        utility_fn = from_token(envelope["utility_fn_token"])
+        utility = UtilityFunction(fn=utility_fn, decisions=envelope["utility_decisions"])
+        obj = cls.__new__(cls)
+        obj.utility = utility
+        obj._cps_class = envelope["cps_class"]
+        obj._models = envelope["models"]
+        return obj
 
 
 # ---------------------------------------------------------------------------

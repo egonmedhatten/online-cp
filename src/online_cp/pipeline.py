@@ -42,6 +42,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from online_cp._serialization import SerializationError
+
 
 class Transformer(ABC):
     """Base class for conformal-safe feature transformers.
@@ -550,6 +552,96 @@ class Pipeline:
         """Append a step to this pipeline via the ``|`` operator."""
         return Pipeline(*self.steps, other,
                         unsafe_incremental=self._unsafe_incremental)
+
+    def save(self, filepath: str, *, compress: int = 3) -> None:
+        """Save this pipeline to *filepath*.
+
+        All transformers and the estimator are serialised with joblib/pickle.
+        :class:`FuncTransformer` functions **must** be module-level named
+        functions (not lambdas); lambdas will raise
+        :class:`~online_cp.SerializationError` at pickle time.
+
+        .. warning::
+            Only load files from **trusted sources**.
+        """
+        import joblib
+
+        try:
+            from online_cp import __version__ as _lib_version
+        except Exception:
+            _lib_version = "unknown"
+
+        envelope = {
+            "format_version": 1,
+            "library_version": _lib_version,
+            "class": f"{type(self).__module__}.{type(self).__qualname__}",
+            "transformers": self.transformers,
+            "estimator": self.estimator,
+            "unsafe_incremental": self._unsafe_incremental,
+            "_X_raw": getattr(self, "_X_raw", None),
+            "_y_raw": getattr(self, "_y_raw", None),
+            "_template": getattr(self, "_template", None),
+        }
+        try:
+            joblib.dump(envelope, filepath, compress=compress)
+        except Exception as exc:
+            raise SerializationError(
+                f"Failed to save pipeline to {filepath!r}: {exc}. "
+                "Ensure all FuncTransformer functions are module-level named functions, "
+                "not lambdas."
+            ) from exc
+
+    @classmethod
+    def load(cls, filepath: str) -> "Pipeline":
+        """Load a pipeline from *filepath*.
+
+        .. warning::
+            Only load files from **trusted sources**.
+        """
+        import warnings as _warnings
+        import joblib
+
+        try:
+            from online_cp import __version__ as _lib_version
+        except Exception:
+            _lib_version = "unknown"
+
+        try:
+            envelope = joblib.load(filepath)
+        except Exception as exc:
+            raise SerializationError(
+                f"Failed to read pipeline file {filepath!r}: {exc}"
+            ) from exc
+
+        fmt_ver = envelope.get("format_version", 0)
+        if fmt_ver > 1:
+            raise SerializationError(
+                f"Unsupported format_version {fmt_ver}. Update online-cp to load this file."
+            )
+        lib_ver = envelope.get("library_version", "unknown")
+        if lib_ver != _lib_version:
+            _warnings.warn(
+                f"Pipeline was saved with online-cp {lib_ver!r}, "
+                f"but you are using {_lib_version!r}. Predictions may differ.",
+                UserWarning,
+                stacklevel=2,
+            )
+        expected = f"{cls.__module__}.{cls.__qualname__}"
+        if envelope.get("class", "") != expected:
+            raise SerializationError(
+                f"Class mismatch: file contains '{envelope.get('class')}', "
+                f"expected '{expected}'."
+            )
+
+        steps = list(envelope["transformers"]) + [envelope["estimator"]]
+        pipe = cls(*steps, unsafe_incremental=envelope["unsafe_incremental"])
+        # Restore training bag for bag-mode pipelines
+        if envelope.get("_X_raw") is not None:
+            pipe._X_raw = envelope["_X_raw"]
+            pipe._y_raw = envelope["_y_raw"]
+        if envelope.get("_template") is not None:
+            pipe._template = envelope["_template"]
+        return pipe
 
     def __repr__(self) -> str:
         step_reprs = " | ".join(repr(s) for s in self.steps)

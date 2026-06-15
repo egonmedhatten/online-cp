@@ -7,6 +7,13 @@ conformal test martingales, and evaluation metrics.
 
 __version__ = "0.2.0"
 
+from online_cp._serialization import (
+    SerializationError as SerializationError,
+)
+from online_cp._serialization import (
+    register_callable as register_callable,
+)
+
 from online_cp.classifiers import (
     ConformalNearestNeighboursClassifier as ConformalNearestNeighboursClassifier,
 )

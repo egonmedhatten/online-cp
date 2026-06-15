@@ -33,6 +33,7 @@ from typing import Any, Callable, Hashable
 import numpy as np
 from numpy.typing import NDArray
 
+from online_cp._serialization import SerializableMixin
 from online_cp.regressors import (
     ConformalLassoRegressor,
     ConformalPredictionInterval,
@@ -51,7 +52,7 @@ __all__ = ["MondrianConformalRegressor", "MondrianConformalClassifier"]
 # ---------------------------------------------------------------------------
 
 
-class MondrianConformalRegressor:
+class MondrianConformalRegressor(SerializableMixin):
     """Mondrian conformal regressor: group-conditional coverage.
 
     Wraps a conformal regressor (ridge, kernel ridge, or lasso). A single
@@ -69,6 +70,10 @@ class MondrianConformalRegressor:
     category_fn : callable
         A function ``(x) -> hashable`` that assigns a category to each input.
     """
+
+    _SAVE_PARAMS: tuple = ("base_model", "category_fn")
+    _SAVE_STATE: tuple = ("categories_",)
+    _SAVE_CALLABLES: tuple = ("category_fn",)
 
     def __init__(self, base_model: ConformalRegressor, category_fn: Callable[[NDArray[np.floating[Any]]], Hashable]) -> None:
         if not isinstance(
@@ -511,7 +516,7 @@ class MondrianConformalRegressor:
 # ---------------------------------------------------------------------------
 
 
-class MondrianConformalClassifier:
+class MondrianConformalClassifier(SerializableMixin):
     """Mondrian conformal classifier: group-conditional coverage.
 
     Wraps a conformal classifier (KNN or SVM). A single pooled model is trained
@@ -539,6 +544,10 @@ class MondrianConformalClassifier:
         - A callable ``(x) -> hashable`` — object-conditional taxonomy
           depending only on features (legacy interface).
     """
+
+    _SAVE_PARAMS: tuple = ("base_model", "category_fn")
+    _SAVE_STATE: tuple = ("categories_",)
+    _SAVE_CALLABLES: tuple = ("category_fn",)
 
     def __init__(self, base_model: Any, category_fn: str | Callable[..., Hashable]) -> None:
         self.base_model = base_model

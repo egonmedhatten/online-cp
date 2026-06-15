@@ -17,6 +17,8 @@ from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
+from ._serialization import SerializableMixin
+
 __all__ = [
     "RidgePredictionMachine",
     "KernelRidgePredictionMachine",
@@ -34,8 +36,11 @@ def get_ConformalPredictionInterval():
     return ConformalPredictionInterval
 
 
-class ConformalPredictiveSystem:
+class ConformalPredictiveSystem(SerializableMixin):
     """Base class for conformal predictive systems."""
+
+    _SAVE_PARAMS: tuple = ("epsilon",)
+    _SAVE_STATE: tuple = ()
 
     def __init__(self, epsilon: float = default_epsilon) -> None:
         self.epsilon = epsilon
@@ -83,6 +88,9 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
     epsilon : float, optional
         Default significance level (default 0.1).
     """
+
+    _SAVE_PARAMS: tuple = ("a", "warnings", "autotune", "verbose", "epsilon")
+    _SAVE_STATE: tuple = ("X", "y", "p", "Id", "XTXinv")
 
     def __init__(self, a=0, warnings=True, autotune=False, verbose=0, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
@@ -279,6 +287,10 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
     This conformal predictive system uses the "studentised residuals" as conformity measure.
     Algorithm 7.3 in Algorithmic Learning in a Random World (2nd edition).
     """
+
+    _SAVE_PARAMS: tuple = ("kernel", "a", "autotune", "verbose", "epsilon")
+    _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "h_diag", "Hy")
+    _SAVE_CALLABLES: tuple = ("kernel",)
 
     def __init__(self, kernel, a=0, autotune=False, verbose=0, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
@@ -480,6 +492,12 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
 
 
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
+
+    _SAVE_PARAMS: tuple = ("k", "distance", "distance_func", "epsilon")
+    _SAVE_STATE: tuple = ("X", "y", "D")
+    _SAVE_CALLABLES: tuple = ("distance_func",)
+    _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
+
     def __init__(
         self,
         k,
@@ -497,6 +515,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         else:
             self.distance_func = distance_func
             self.distance = "custom"
+        self._distance_func_arg = distance_func
 
         self.X = None
         self.y = None
@@ -684,6 +703,10 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
 
 class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
+
+    _SAVE_PARAMS: tuple = ("epsilon",)
+    _SAVE_STATE: tuple = ("y",)
+
     def __init__(self, epsilon=default_epsilon):
         """
         The Dempster-Hill conformal predictive system uses only the labels of the examples, so the latter can be ignored.

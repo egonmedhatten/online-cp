@@ -279,6 +279,40 @@ result = model.predict(x, epsilon=[...])   # multi-level
 p = model.compute_p_value(x, y)
 ```
 
+## Saving and Loading Models
+
+All model classes support `save` / `load` round-trips — regressors, classifiers, CPS, Venn predictors, Mondrian tree/forest models, Mondrian wrappers, `ConformalPredictiveDecisionMaker`, and `Pipeline`:
+
+```python
+from online_cp import ConformalRidgeRegressor
+
+cp = ConformalRidgeRegressor(a=1.0, rnd_state=42)
+cp.learn_initial_training_set(X_train, y_train)
+
+# Save to disk
+cp.save("my_model.joblib")
+
+# Load from disk — predictions are identical to the original
+loaded = ConformalRidgeRegressor.load("my_model.joblib")
+```
+
+**Exact reproducibility**: The RNG position is saved via `bit_generator.state`, so `loaded.compute_p_value(x, y)` returns the same value the original model would have, even after many online updates.
+
+**Callable arguments** (`kernel`, `distance_func`, `category_fn`, …): module-level named functions and `Kernel` objects round-trip automatically. Lambdas and closures cannot be serialized — wrap them in a named function or use `@register_callable`:
+
+```python
+from online_cp import register_callable, ConformalNearestNeighboursRegressor
+
+@register_callable("my_dist")
+def my_dist(X, y=None): ...
+
+cp = ConformalNearestNeighboursRegressor(distance_func=my_dist)
+cp.save("model.joblib")
+loaded = ConformalNearestNeighboursRegressor.load("model.joblib")  # works
+```
+
+> **Security**: Model files use Python pickle internally. **Only load files from trusted sources.**
+
 ## Tutorial
 
 Start with [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) for a 5-minute introduction ([run on Binder](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)), then see [`notebooks/tutorial.ipynb`](notebooks/tutorial.ipynb) for a comprehensive walkthrough covering regression, classification, Mondrian CP, conformal predictive systems, martingales, and evaluation.

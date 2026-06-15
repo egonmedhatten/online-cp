@@ -15,6 +15,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.distance import cdist, pdist, squareform
 
+from ._serialization import SerializableMixin
+
 try:
     from numba import njit
 except ImportError:
@@ -316,7 +318,7 @@ def brier_point(p0, p1):
 # ---------------------------------------------------------------------------
 
 
-class VennAbersPredictor:
+class VennAbersPredictor(SerializableMixin):
     """
     Full online Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4).
 
@@ -339,6 +341,21 @@ class VennAbersPredictor:
     >>> bool(0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1)
     True
     """
+
+    _SAVE_PARAMS: tuple = (
+        "scorer", "a", "k", "distance", "distance_func", "aggregation",
+        "kernel", "C", "sigma", "degree", "coef0",
+        "smo_tol", "smo_max_iter", "label_space",
+    )
+    _SAVE_STATE: tuple = (
+        "X", "y", "label_space", "_label_space_fixed",
+        "XTXinv", "D", "K", "Ka_inv", "_kernel",
+    )
+    _SAVE_CALLABLES: tuple = ("distance_func", "kernel")
+    _PARAM_MAP: dict = {
+        "distance_func": "_distance_func_arg",
+        "kernel": "kernel",
+    }
 
     def __init__(
         self,
@@ -418,6 +435,10 @@ class VennAbersPredictor:
         self.coef0 = coef0
         self.smo_tol = smo_tol
         self.smo_max_iter = smo_max_iter
+
+        # Store raw constructor args for serialization
+        self.kernel = kernel
+        self._distance_func_arg = distance_func
 
         # Label-space policy
         self._label_space_fixed = label_space is not None
@@ -1169,7 +1190,7 @@ class VennAbersPredictor:
 # ---------------------------------------------------------------------------
 
 
-class NearestNeighboursVennPredictor:
+class NearestNeighboursVennPredictor(SerializableMixin):
     """Online Venn predictor with k-NN voting taxonomy.
 
     Uses the k-nearest-neighbour voting taxonomy from ALRW (§6.2): for each
@@ -1208,6 +1229,9 @@ class NearestNeighboursVennPredictor:
     >>> bool(0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1)
     True
     """
+
+    _SAVE_PARAMS: tuple = ("k", "metric", "label_space")
+    _SAVE_STATE: tuple = ("X", "y", "D", "label_space", "_label_space_fixed")
 
     def __init__(self, k=1, metric="euclidean", label_space=None):
         if k < 1:

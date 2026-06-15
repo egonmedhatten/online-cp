@@ -41,6 +41,7 @@ nav:
     - Plotting: api/plotting.md
     - Kernels: api/kernels.md
     - Pipelines & Preprocessing: api/pipeline.md
+    - Serialization: api/serialization.md
 
 plugins:
   - search

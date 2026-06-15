@@ -800,3 +800,57 @@ class TestPipelineRoundTrip:
         with pytest.raises(SerializationError, match="Class mismatch"):
             ConformalRidgeRegressor.load(str(path))
 
+
+# ---------------------------------------------------------------------------
+# Phase B — FuncTransformer inside a Pipeline
+# ---------------------------------------------------------------------------
+
+def _shift_features(x):
+    """Module-level (picklable) transform: x -> x + 1.0."""
+    return x + 1.0
+
+
+class TestFuncTransformerRoundTrip:
+    def test_numpy_ufunc_round_trip(self, tmp_path):
+        from online_cp import Pipeline, FuncTransformer
+        # log1p requires non-negative inputs.
+        X = np.abs(X_REG) + 0.1
+        ft = FuncTransformer(np.log1p)
+        regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
+        pipe = Pipeline(ft, regressor)
+        pipe.learn_initial_training_set(X, Y_REG)
+        path = tmp_path / "pipeline_func.joblib"
+        pipe.save(str(path))
+        loaded = Pipeline.load(str(path))
+        x_test = np.abs(X_TEST_REG) + 0.1
+        orig = pipe.predict(x_test, epsilon=0.1)
+        new = loaded.predict(x_test, epsilon=0.1)
+        assert abs(orig.lower - new.lower) < 1e-10
+        assert abs(orig.upper - new.upper) < 1e-10
+
+    def test_named_function_round_trip(self, tmp_path):
+        from online_cp import Pipeline, FuncTransformer
+        ft = FuncTransformer(_shift_features)
+        regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
+        pipe = Pipeline(ft, regressor)
+        pipe.learn_initial_training_set(X_REG, Y_REG)
+        path = tmp_path / "pipeline_named_func.joblib"
+        pipe.save(str(path))
+        loaded = Pipeline.load(str(path))
+        assert isinstance(loaded.transformers[0], FuncTransformer)
+        assert loaded.transformers[0].fn is _shift_features
+        orig = pipe.predict(X_TEST_REG, epsilon=0.1)
+        new = loaded.predict(X_TEST_REG, epsilon=0.1)
+        assert abs(orig.lower - new.lower) < 1e-10
+        assert abs(orig.upper - new.upper) < 1e-10
+
+    def test_lambda_raises_serialization_error(self, tmp_path):
+        from online_cp import Pipeline, FuncTransformer
+        ft = FuncTransformer(lambda x: x + 1.0)
+        regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
+        pipe = Pipeline(ft, regressor)
+        pipe.learn_initial_training_set(X_REG, Y_REG)
+        path = tmp_path / "pipeline_lambda.joblib"
+        with pytest.raises(SerializationError):
+            pipe.save(str(path))
+

@@ -13,6 +13,7 @@ of their random-number generators.
 
 from __future__ import annotations
 
+import os
 import pickle
 import warnings
 from typing import Any, Callable
@@ -122,7 +123,7 @@ def from_token(token: Any) -> Any:
         if name not in _CALLABLE_REGISTRY:
             raise SerializationError(
                 f"Callable '{name}' not found in the registry.\n"
-                "Ensure the module that calls @register_callable('{name}') "
+                f"Ensure the module that calls @register_callable('{name}') "
                 "has been imported before loading."
             )
         return _CALLABLE_REGISTRY[name]
@@ -176,7 +177,7 @@ class SerializableMixin:
 
     # ------------------------------------------------------------------ save
 
-    def save(self, filepath: str, *, compress: int = 3) -> None:
+    def save(self, filepath: str | os.PathLike, *, compress: int = 3) -> None:
         """Save the model to *filepath* using :mod:`joblib`.
 
         .. warning::
@@ -235,7 +236,7 @@ class SerializableMixin:
     # ------------------------------------------------------------------ load
 
     @classmethod
-    def load(cls, filepath: str) -> "SerializableMixin":
+    def load(cls, filepath: str | os.PathLike) -> "SerializableMixin":
         """Load a model from *filepath*.
 
         .. warning::

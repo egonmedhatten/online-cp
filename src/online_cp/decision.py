@@ -17,6 +17,7 @@ References
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Sequence
 
 try:
@@ -493,7 +494,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
         n_decisions = len(self.utility.decisions)
         return f"ConformalPredictiveDecisionMaker(|D|={n_decisions}, cps={cps_name})"
 
-    def save(self, filepath: str, *, compress: int = 3) -> None:
+    def save(self, filepath: str | os.PathLike, *, compress: int = 3) -> None:
         """Save this decision maker to *filepath*.
 
         The utility function callable (``utility.fn``) must be registered via
@@ -529,7 +530,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
             ) from exc
 
     @classmethod
-    def load(cls, filepath: str) -> "ConformalPredictiveDecisionMaker":
+    def load(cls, filepath: str | os.PathLike) -> "ConformalPredictiveDecisionMaker":
         """Load a decision maker from *filepath*.
 
         .. warning::

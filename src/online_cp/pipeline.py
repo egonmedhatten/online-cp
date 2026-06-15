@@ -36,6 +36,7 @@ Example
 from __future__ import annotations
 
 import copy
+import os
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -556,7 +557,7 @@ class Pipeline:
         return Pipeline(*self.steps, other,
                         unsafe_incremental=self._unsafe_incremental)
 
-    def save(self, filepath: str, *, compress: int = 3) -> None:
+    def save(self, filepath: str | os.PathLike, *, compress: int = 3) -> None:
         """Save this pipeline to *filepath*.
 
         All transformers and the estimator are serialised with joblib/pickle.
@@ -595,7 +596,7 @@ class Pipeline:
             ) from exc
 
     @classmethod
-    def load(cls, filepath: str) -> "Pipeline":
+    def load(cls, filepath: str | os.PathLike) -> "Pipeline":
         """Load a pipeline from *filepath*.
 
         .. warning::

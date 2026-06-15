@@ -825,17 +825,32 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
 class ConformalSupportVectorMachine(ConformalClassifier):
     """
-    Conformal classifier using the Support Vector Machine with Lagrange
-    multiplier nonconformity measure (ALRW Ch. 3).
+    Conformal classifier using the Support Vector Machine.
 
     For each candidate label, one-vs-rest binarization is applied and the
-    SVM dual is solved on the augmented training set. The Lagrange multiplier
-    alpha_i is the nonconformity score for example i: alpha_i = 0 means well
-    inside the margin (conforming), alpha_i = C means on the margin boundary
-    or misclassified (maximally nonconforming).
+    SVM dual is solved on the augmented training set.  Two nonconformity
+    measures (NCMs) are available via the ``nonconformity`` parameter:
+
+    ``'margin'`` *(default)* — signed-margin NCM:
+        ``ncm_i = -(y_i · f(x_i))``  where  ``f(x) = K·(α·y) + b``.
+        Negative for well-classified examples (conforming), positive for
+        misclassified ones (nonconforming).  Produces a continuous score
+        with no ties, giving tighter prediction sets on noisy data.
+
+    ``'alpha'`` — Lagrange-multiplier NCM (ALRW Ch. 3):
+        ``ncm_i = α_i``.  ``α_i = 0`` means well inside the margin
+        (conforming); ``α_i = C`` means misclassified (maximally
+        nonconforming).  Discrete score with many ties at 0 on
+        well-separated data.
+
+    Both measures are valid (coverage-guaranteed).  ``'margin'`` is
+    generally more efficient (smaller prediction sets) when classes
+    overlap; ``'alpha'`` can be preferable on small, cleanly separable
+    problems.
 
     Supports multi-class classification via one-vs-rest decomposition.
-    The Gram matrix is label-independent and reused across all candidate labels.
+    The Gram matrix is label-independent and reused across all candidate
+    labels.
 
     Parameters
     ----------
@@ -845,6 +860,8 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         - A string: 'linear', 'rbf', 'poly'.
     C : float
         Regularization parameter (upper bound on alpha_i). Default 1.0.
+    nonconformity : str
+        Nonconformity measure: ``'margin'`` (default) or ``'alpha'``.
     label_space : array-like or None
         The set of possible labels. Supports any number of classes.
         If None, inferred from the first training data.
@@ -855,7 +872,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     coef0 : float
         Constant for polynomial kernel. Default 1.0.
     smo_tol : float
-        Tolerance for SMO convergence. Default 1e-4.
+        Tolerance for SMO convergence. Default 1e-3.
     smo_max_iter : int
         Maximum SMO iterations. Default 5000.
     epsilon : float
@@ -877,7 +894,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     """
 
     _SAVE_PARAMS: tuple = (
-        "kernel", "C", "label_space", "sigma", "degree", "coef0",
+        "kernel", "C", "nonconformity", "label_space", "sigma", "degree", "coef0",
         "smo_tol", "smo_max_iter", "epsilon", "rnd_state",
     )
     _SAVE_STATE: tuple = ("X", "y", "K", "label_space", "_label_space_fixed")
@@ -887,6 +904,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         self,
         kernel="rbf",
         C=1.0,
+        nonconformity="margin",
         label_space=None,
         sigma=1.0,
         degree=3,
@@ -896,9 +914,12 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         epsilon=default_epsilon,
         rnd_state=None,
     ):
+        if nonconformity not in ("margin", "alpha"):
+            raise ValueError(f"nonconformity must be 'margin' or 'alpha', got '{nonconformity}'")
         super().__init__(epsilon=epsilon)
         self.kernel = kernel
         self.C = C
+        self.nonconformity = nonconformity
         self._label_space_fixed = label_space is not None
         self.label_space = np.asarray(label_space) if label_space is not None else None
         self.sigma = sigma
@@ -1055,18 +1076,21 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             # Binarize: one-vs-rest (label -> +1, everything else -> -1)
             y_binary = np.where(y_aug == label, 1.0, -1.0)
 
-            alpha, _ = _smo_solve(K_aug, y_binary, self.C, tol=self.smo_tol, max_iter=self.smo_max_iter)
+            alpha, b = _smo_solve(K_aug, y_binary, self.C, tol=self.smo_tol, max_iter=self.smo_max_iter)
 
-            # NCM = alpha_i (nonconformity: larger alpha = more nonconforming)
-            # For multiclass (>2 labels), use only same-class alphas for the
-            # p-value. The one-vs-rest binarization makes the Gram matrix Q
-            # depend on the hypothesised label, so the NCM is only equivariant
-            # to permutations within the positive class.  For binary problems
-            # Q is invariant to the choice of reference label, so all alphas
-            # are exchangeable and we use the full vector.
-            if len(self.label_space) > 2:
-                alpha = alpha[y_binary == 1.0]
-            p_values[label] = self._compute_p_value(alpha, tau, "nonconformity")
+            # For multiclass (>2 labels) the one-vs-rest binarization makes the
+            # Gram matrix Q depend on the hypothesised label, so the NCM is
+            # equivariant only to within-class permutations.  Both NCMs restrict
+            # to same-class (positive) entries in the multiclass case; for binary
+            # problems all entries are exchangeable and the full vector is used.
+            multiclass = len(self.label_space) > 2
+            if self.nonconformity == "margin":
+                f = K_aug @ (alpha * y_binary) + b   # decision function
+                ncm = -(y_binary * f)                # large => nonconforming
+                scores = ncm[y_binary == 1.0] if multiclass else ncm
+            else:  # 'alpha'
+                scores = alpha[y_binary == 1.0] if multiclass else alpha
+            p_values[label] = self._compute_p_value(scores, tau, "nonconformity")
 
         Gamma = self._compute_Gamma(p_values, epsilon)
 
@@ -1100,12 +1124,16 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         # Binarize: one-vs-rest (label -> +1, everything else -> -1)
         y_binary = np.where(y_aug == y, 1.0, -1.0)
 
-        alpha, _ = _smo_solve(K_aug, y_binary, self.C, tol=self.smo_tol, max_iter=self.smo_max_iter)
+        alpha, b = _smo_solve(K_aug, y_binary, self.C, tol=self.smo_tol, max_iter=self.smo_max_iter)
 
-        # For multiclass, use only same-class alphas (see predict method comment)
-        if len(self.label_space) > 2:
-            alpha = alpha[y_binary == 1.0]
-        return self._compute_p_value(alpha, tau, "nonconformity")
+        multiclass = len(self.label_space) > 2
+        if self.nonconformity == "margin":
+            f = K_aug @ (alpha * y_binary) + b
+            ncm = -(y_binary * f)
+            scores = ncm[y_binary == 1.0] if multiclass else ncm
+        else:  # 'alpha'
+            scores = alpha[y_binary == 1.0] if multiclass else alpha
+        return self._compute_p_value(scores, tau, "nonconformity")
 
 
 class _SklearnKernelAdapter:

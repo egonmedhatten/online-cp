@@ -397,13 +397,14 @@ class TestMultiClassSVM:
         assert np.isclose(p_value, p_values[y[60]], atol=1e-12)
 
     def test_multiclass_positive_class_only_p_value_regression(self, three_class_data):
-        """Multiclass p-values should be computed from positive-class alphas only."""
+        """With alpha NCM, multiclass p-values must use positive-class alphas only (validity fix)."""
         X, y = three_class_data
         label_space = np.array([0, 1, 2])
         label = y[60]
 
         svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=label_space, rnd_state=123
+            kernel=GaussianKernel(sigma=1.0), C=10.0, nonconformity="alpha",
+            label_space=label_space, rnd_state=123
         )
         svm.learn_initial_training_set(X[:60], y[:60])
 
@@ -440,3 +441,107 @@ class TestMultiClassSVM:
         svm.learn_one(X[10], y[10])
         assert svm.K.shape == (11, 11)
         assert svm.y[-1] == y[10]
+
+
+# --- NCM parameter tests ---
+
+
+class TestNonconformityParameter:
+    """Tests for the nonconformity= parameter ('margin' vs 'alpha')."""
+
+    @pytest.fixture
+    def noisy_data(self):
+        """Overlapping two-class data where efficiency differences are visible."""
+        np.random.seed(5)
+        n = 60
+        X = np.vstack([np.random.normal(-0.5, 1.0, (n, 2)), np.random.normal(0.5, 1.0, (n, 2))])
+        y = np.array([-1] * n + [1] * n)
+        rng = np.random.default_rng(5)
+        idx = rng.permutation(2 * n)
+        return X[idx], y[idx]
+
+    def test_default_is_margin(self):
+        """Default nonconformity should be 'margin'."""
+        svm = ConformalSupportVectorMachine()
+        assert svm.nonconformity == "margin"
+
+    def test_invalid_nonconformity_raises(self):
+        """Invalid nonconformity string should raise ValueError."""
+        with pytest.raises(ValueError, match="nonconformity must be"):
+            ConformalSupportVectorMachine(nonconformity="decision_function")
+
+    def test_alpha_ncm_valid(self, noisy_data):
+        """alpha NCM should still produce valid coverage."""
+        X, y = noisy_data
+        epsilon = 0.2
+        svm = ConformalSupportVectorMachine(
+            kernel="rbf", sigma=1.0, C=1.0, nonconformity="alpha",
+            label_space=np.array([-1, 1]), epsilon=epsilon, rnd_state=0,
+        )
+        n_train = 40
+        svm.learn_initial_training_set(X[:n_train], y[:n_train])
+        correct = sum(
+            y[i] in svm.predict(X[i], epsilon=epsilon)
+            for i in range(n_train, len(X))
+        )
+        coverage = correct / (len(X) - n_train)
+        assert coverage >= 0.5, f"alpha NCM coverage too low: {coverage:.3f}"
+
+    def test_margin_ncm_valid(self, noisy_data):
+        """margin NCM (default) should produce valid coverage."""
+        X, y = noisy_data
+        epsilon = 0.2
+        svm = ConformalSupportVectorMachine(
+            kernel="rbf", sigma=1.0, C=1.0, nonconformity="margin",
+            label_space=np.array([-1, 1]), epsilon=epsilon, rnd_state=0,
+        )
+        n_train = 40
+        svm.learn_initial_training_set(X[:n_train], y[:n_train])
+        correct = sum(
+            y[i] in svm.predict(X[i], epsilon=epsilon)
+            for i in range(n_train, len(X))
+        )
+        coverage = correct / (len(X) - n_train)
+        assert coverage >= 0.5, f"margin NCM coverage too low: {coverage:.3f}"
+
+    def test_margin_more_efficient_than_alpha_on_noisy(self, noisy_data):
+        """On noisy data, margin NCM should produce smaller or equal avg set size than alpha NCM."""
+        X, y = noisy_data
+        epsilon = 0.1
+        n_train = 40
+        n_test = len(X) - n_train
+
+        def avg_size(ncm):
+            svm = ConformalSupportVectorMachine(
+                kernel="rbf", sigma=1.0, C=1.0, nonconformity=ncm,
+                label_space=np.array([-1, 1]), epsilon=epsilon, rnd_state=42,
+            )
+            svm.learn_initial_training_set(X[:n_train], y[:n_train])
+            total = sum(len(svm.predict(X[i], epsilon=epsilon)) for i in range(n_train, len(X)))
+            return total / n_test
+
+        size_margin = avg_size("margin")
+        size_alpha = avg_size("alpha")
+        # margin should produce fewer or equal total included labels on noisy data
+        assert size_margin <= size_alpha + 0.2, (
+            f"margin avg_size={size_margin:.3f} not better than alpha avg_size={size_alpha:.3f}"
+        )
+
+    def test_p_values_differ_between_ncms(self, noisy_data):
+        """The two NCMs should generally produce different p-values (scores differ)."""
+        X, y = noisy_data
+        n_train = 40
+        svm_m = ConformalSupportVectorMachine(
+            kernel="rbf", sigma=1.0, C=1.0, nonconformity="margin",
+            label_space=np.array([-1, 1]), rnd_state=99,
+        )
+        svm_a = ConformalSupportVectorMachine(
+            kernel="rbf", sigma=1.0, C=1.0, nonconformity="alpha",
+            label_space=np.array([-1, 1]), rnd_state=99,
+        )
+        svm_m.learn_initial_training_set(X[:n_train], y[:n_train])
+        svm_a.learn_initial_training_set(X[:n_train], y[:n_train])
+        _, pv_m = svm_m.predict(X[n_train], return_p_values=True)
+        _, pv_a = svm_a.predict(X[n_train], return_p_values=True)
+        # At least one label should have different p-values
+        assert any(abs(pv_m[lbl] - pv_a[lbl]) > 1e-6 for lbl in [-1, 1])

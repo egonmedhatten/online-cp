@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-15
+
+### Added
+
+- **Legendre Jumper Martingales** (`online_cp.martingale`) — four new conformal
+  test martingales based on Legendre polynomial betting, following:
+
+  > "Legendre Jumper Martingale" by Johan Hallberg Szabadváry (2026).
+
+  - `SimpleLegendreJumper(order, J, epsilon_grid)` — Algorithm 2; single-order
+    Legendre polynomial basis with Markov expert chain.
+  - `ProductLegendreJumper(orders, J, epsilon_grid)` — Algorithm 3; full
+    Cartesian product state space E_1 × ⋯ × E_K with Z-normalised product
+    betting function.
+  - `VariationalLegendreJumper(orders, J, epsilon_grid)` — Algorithm 4;
+    O(|K|·g) per-step linear alternative using independent sub-jumpers,
+    consensus parameters, and precomputed Gaunt coefficients.
+  - `CompositeLegendreJumper(base_class, J)` — arithmetic mean over multiple
+    jump rates; analogue of `CompositeJumper` for Legendre families.
+  - Utility functions: `shifted_legendre_poly`, `compute_normalization_Z`,
+    `product_betting_value`, `STANDARD_GRID`.
+  - All four classes exported from `online_cp` top-level.
+  - 45 tests in `tests/test_martingale_legendre.py`; 2 adversarial leancheck
+    properties in `tests/test_properties_adversarial.py` (A7, A8).
+
+### Changed
+
+- **`online_cp.martingale` is now a package** (`martingale/`) split into
+  submodules `base`, `jumpers`, `sleepers`, `wrappers`, `legendre`. All
+  existing public names remain importable at the same paths — no breakage.
+
 ### Added
 
 - **Save / load serialization** — all model classes now support `save(filepath)` /

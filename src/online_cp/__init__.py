@@ -5,7 +5,7 @@ Provides conformal regressors, classifiers, conformal predictive systems,
 conformal test martingales, and evaluation metrics.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from online_cp._serialization import (
     SerializationError as SerializationError,
@@ -178,6 +178,30 @@ from online_cp.martingale import (
 )
 from online_cp.martingale import (
     PiecewiseConstantBetting as PiecewiseConstantBetting,
+)
+from online_cp.martingale import (
+    SimpleLegendreJumper as SimpleLegendreJumper,
+)
+from online_cp.martingale import (
+    ProductLegendreJumper as ProductLegendreJumper,
+)
+from online_cp.martingale import (
+    VariationalLegendreJumper as VariationalLegendreJumper,
+)
+from online_cp.martingale import (
+    CompositeLegendreJumper as CompositeLegendreJumper,
+)
+from online_cp.martingale import (
+    STANDARD_GRID as STANDARD_GRID,
+)
+from online_cp.martingale import (
+    shifted_legendre_poly as shifted_legendre_poly,
+)
+from online_cp.martingale import (
+    compute_normalization_Z as compute_normalization_Z,
+)
+from online_cp.martingale import (
+    product_betting_value as product_betting_value,
 )
 from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,

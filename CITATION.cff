@@ -10,8 +10,8 @@ authors:
   - family-names: "Matela"
     given-names: "Rudy"
 repository-code: "https://github.com/egonmedhatten/online-cp"
-version: "0.2.0"
-date-released: 2025-09-15
+version: "0.3.0"
+date-released: 2026-06-15
 
 # This section points to the academic paper as the preferred citation
 preferred-citation:

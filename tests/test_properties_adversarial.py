@@ -43,6 +43,8 @@ from online_cp import (
     RidgePredictionMachine,
     StandardScaler,
     VennPrediction,
+    SimpleLegendreJumper,
+    VariationalLegendreJumper,
 )
 from online_cp.venn import log_loss_point
 
@@ -278,3 +280,58 @@ def prop_bag_pipeline_degenerate_order_invariant(keys: list[int]) -> bool:
 
 def test_bag_pipeline_degenerate_order_invariant():
     assert _check(prop_bag_pipeline_degenerate_order_invariant)
+
+
+# ======================================================================= #
+# A7 – SimpleLegendreJumper betting density validity after any sequence   #
+#                                                                          #
+# Attack: feed any sequence of p-values (including near-boundary values)  #
+# and assert that b_n integrates to 1 and M stays positive and finite.    #
+# ======================================================================= #
+
+_SLJ_GRID = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99]
+
+
+def prop_slj_betting_density_valid(keys: list[int]) -> bool:
+    """b_n must integrate to 1 and M must be positive and finite after any sequence."""
+    from scipy.integrate import quad
+
+    if not keys:
+        return True
+    p_values = [_SLJ_GRID[abs(k) % len(_SLJ_GRID)] for k in keys[:20]]
+    slj = SimpleLegendreJumper(order=1, J=0.01)
+    for p in p_values:
+        slj.update(p)
+    if not (np.isfinite(slj.logM) and slj.M > 0):
+        return False
+    integral, _ = quad(slj.b_n, 0.0, 1.0, limit=50)
+    return bool(abs(integral - 1.0) < 0.02)
+
+
+def test_slj_betting_density_valid():
+    assert _check(prop_slj_betting_density_valid)
+
+
+# ======================================================================= #
+# A8 – VariationalLegendreJumper logM sync and positivity                 #
+#                                                                          #
+# Attack: feed any mixed sequence and confirm logM == log_martingale_     #
+# values[-1] (internal sync) and M remains positive.                      #
+# ======================================================================= #
+
+
+def prop_vlj_logM_synced_and_positive(keys: list[int]) -> bool:
+    """logM must equal log_martingale_values[-1] and M > 0 after any sequence."""
+    if not keys:
+        return True
+    p_values = [_SLJ_GRID[abs(k) % len(_SLJ_GRID)] for k in keys[:20]]
+    vlj = VariationalLegendreJumper(orders=[1, 2], J=0.01)
+    for p in p_values:
+        vlj.update(p)
+    if not (np.isfinite(vlj.logM) and vlj.M > 0):
+        return False
+    return bool(np.isclose(vlj.logM, vlj.log_martingale_values[-1], atol=1e-12))
+
+
+def test_vlj_logM_synced_and_positive():
+    assert _check(prop_vlj_logM_synced_and_positive)

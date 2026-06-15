@@ -641,7 +641,8 @@ class TestDempsterHillRoundTrip:
 
 class TestMondrianTreeClassifierRoundTrip:
     def test_round_trip(self, tmp_path):
-        from online_cp.mondrian_tree_dev import ConformalMondrianTreeClassifier
+        mondrian_tree_dev = pytest.importorskip("online_cp.mondrian_tree_dev")
+        ConformalMondrianTreeClassifier = mondrian_tree_dev.ConformalMondrianTreeClassifier
         m = ConformalMondrianTreeClassifier(lifetime=1.0, rnd_state=42)
         m.learn_initial_training_set(X_CLF, Y_CLF)
         path = tmp_path / "mondrian_tree_clf.joblib"
@@ -654,7 +655,8 @@ class TestMondrianTreeClassifierRoundTrip:
 
 class TestMondrianForestClassifierRoundTrip:
     def test_round_trip(self, tmp_path):
-        from online_cp.mondrian_tree_dev import ConformalMondrianForestClassifier
+        mondrian_tree_dev = pytest.importorskip("online_cp.mondrian_tree_dev")
+        ConformalMondrianForestClassifier = mondrian_tree_dev.ConformalMondrianForestClassifier
         m = ConformalMondrianForestClassifier(n_trees=5, lifetime=1.0, rnd_state=42)
         m.learn_initial_training_set(X_CLF, Y_CLF)
         path = tmp_path / "mondrian_forest_clf.joblib"
@@ -671,7 +673,8 @@ class TestMondrianForestClassifierRoundTrip:
 
 class TestMondrianTreeRegressorRoundTrip:
     def test_round_trip(self, tmp_path):
-        from online_cp.mondrian_tree_dev import ConformalMondrianTreeRegressor
+        mondrian_tree_dev = pytest.importorskip("online_cp.mondrian_tree_dev")
+        ConformalMondrianTreeRegressor = mondrian_tree_dev.ConformalMondrianTreeRegressor
         m = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=42)
         m.learn_initial_training_set(X_REG, Y_REG)
         path = tmp_path / "mondrian_tree_reg.joblib"
@@ -685,7 +688,8 @@ class TestMondrianTreeRegressorRoundTrip:
 
 class TestMondrianForestRegressorRoundTrip:
     def test_round_trip(self, tmp_path):
-        from online_cp.mondrian_tree_dev import ConformalMondrianForestRegressor
+        mondrian_tree_dev = pytest.importorskip("online_cp.mondrian_tree_dev")
+        ConformalMondrianForestRegressor = mondrian_tree_dev.ConformalMondrianForestRegressor
         m = ConformalMondrianForestRegressor(n_trees=5, lifetime=1.0, rnd_state=42)
         m.learn_initial_training_set(X_REG, Y_REG)
         path = tmp_path / "mondrian_forest_reg.joblib"

@@ -7,6 +7,7 @@ from online_cp.venn import (
     MulticlassVennPrediction,
     VennAbersPredictor,
     VennPrediction,
+    VennPredictor,
     _isotonic_calibrate,
     _pava_inplace,
     brier_point,
@@ -509,6 +510,18 @@ class TestAggregationFunctions:
 # ---------------------------------------------------------------------------
 
 from online_cp.venn import NearestNeighboursVennPredictor  # noqa: E402
+
+
+class TestVennPredictorInheritance:
+    """Both concrete predictors must be instances of the VennPredictor base."""
+
+    def test_venn_abers_is_venn_predictor(self):
+        vap = VennAbersPredictor(scorer="ridge", a=1.0)
+        assert isinstance(vap, VennPredictor)
+
+    def test_nearest_neighbours_is_venn_predictor(self):
+        vp = NearestNeighboursVennPredictor(k=1)
+        assert isinstance(vp, VennPredictor)
 
 
 class TestNearestNeighboursVennPredictor:

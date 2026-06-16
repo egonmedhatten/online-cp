@@ -30,6 +30,7 @@ except ImportError:
         return lambda f: f
 
 __all__ = [
+    "VennPredictor",
     "VennAbersPredictor",
     "NearestNeighboursVennPredictor",
     "VennPrediction",
@@ -317,11 +318,188 @@ def brier_point(p0, p1):
 
 
 # ---------------------------------------------------------------------------
+# VennPredictor — abstract base class
+# ---------------------------------------------------------------------------
+
+
+class VennPredictor(SerializableMixin):
+    """Abstract base class for online Venn predictors (ALRW2 §6.2).
+
+    Provides shared label-space management, the empty-training-set fallback,
+    and the generic taxonomy → multiprobability prediction loop used by
+    taxonomy-based Venn predictors (:class:`NearestNeighboursVennPredictor`,
+    :class:`~online_cp.venn_dev.MondrianVennPredictor`).
+
+    Subclasses must implement :meth:`learn_initial_training_set`,
+    :meth:`learn_one`, and :meth:`predict`. Taxonomy-based subclasses should
+    also implement :meth:`_categories_for_hypothesis` and call
+    :meth:`_venn_predict_from_taxonomy` from their ``predict`` method.
+
+    This mirrors the role of
+    :class:`~online_cp.classifiers.ConformalClassifier` and
+    :class:`~online_cp.regressors.ConformalRegressor` in the conformal
+    prediction hierarchy.
+    """
+
+    _SAVE_PARAMS: tuple = ("label_space",)
+    _SAVE_STATE: tuple = ("label_space", "_label_space_fixed")
+
+    def __init__(self, label_space=None) -> None:
+        self._label_space_fixed: bool = label_space is not None
+        self.label_space = (
+            np.asarray(sorted(label_space), dtype=int)
+            if label_space is not None
+            else None
+        )
+
+    # ------------------------------------------------------------------
+    # Label-space policy helpers
+    # ------------------------------------------------------------------
+
+    def _update_label_space_batch(self, y: NDArray) -> None:
+        """Update label space from a batch of labels."""
+        if self._label_space_fixed:
+            unknown = set(np.unique(y)) - set(self.label_space)
+            if unknown:
+                raise ValueError(
+                    f"Labels {sorted(unknown)} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.unique(y)
+        else:
+            self.label_space = np.sort(
+                np.unique(np.concatenate([self.label_space, np.unique(y)]))
+            )
+
+    def _update_label_space_one(self, y: int) -> None:
+        """Update label space from a single label."""
+        if self._label_space_fixed:
+            if y not in self.label_space:
+                raise ValueError(
+                    f"Label {y} not in declared label_space "
+                    f"{self.label_space.tolist()}"
+                )
+        elif self.label_space is None:
+            self.label_space = np.array([y], dtype=int)
+        elif y not in self.label_space:
+            self.label_space = np.sort(np.append(self.label_space, y))
+
+    # ------------------------------------------------------------------
+    # Shared prediction helpers
+    # ------------------------------------------------------------------
+
+    def _empty_prediction(self) -> "VennPrediction":
+        """Uniform multiprobability prediction when no training data is available."""
+        if self.label_space is not None and len(self.label_space) > 2:
+            n_labels = len(self.label_space)
+            uniform = np.full((n_labels, n_labels), 1.0 / n_labels)
+            return VennPrediction(uniform, self.label_space)
+        return VennPrediction.binary(0.5, 0.5)
+
+    def _categories_for_hypothesis(
+        self, taxonomy_data: Any, v: int
+    ) -> tuple:
+        """Return (categories, labels_aug, test_idx) for hypothesis y_test = v.
+
+        Parameters
+        ----------
+        taxonomy_data : Any
+            Precomputed data from the calling ``predict`` method (e.g. an
+            augmented distance matrix for k-NN, or Mondrian leaf IDs).
+        v : int
+            Hypothesised test label.
+
+        Returns
+        -------
+        categories : ndarray, shape (n+1,)
+            Taxonomy category for each point in the augmented bag.
+        labels_aug : ndarray, shape (n+1,)
+            Labels for the augmented bag (last entry = v).
+        test_idx : int
+            Index of the test point in the augmented arrays (always n).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _categories_for_hypothesis"
+        )
+
+    def _venn_predict_from_taxonomy(self, taxonomy_data: Any) -> "VennPrediction":
+        """Generic taxonomy → multiprobability prediction loop.
+
+        Calls :meth:`_categories_for_hypothesis` once per hypothesis label,
+        groups examples by taxonomy category, and returns empirical label
+        frequencies within the test point's category.  Handles both binary
+        (|Y| ≤ 2 with labels {0, 1}) and multiclass (|Y| > 2) settings.
+
+        Parameters
+        ----------
+        taxonomy_data : Any
+            Passed through to :meth:`_categories_for_hypothesis`.
+
+        Returns
+        -------
+        VennPrediction
+        """
+        _is_binary = (
+            self.label_space is not None
+            and len(self.label_space) <= 2
+            and (
+                len(self.label_space) <= 1
+                or (
+                    int(self.label_space[0]) == 0
+                    and int(self.label_space[1]) == 1
+                )
+            )
+        )
+
+        if _is_binary:
+            results = []
+            for v in (0, 1):
+                categories, labels_aug, test_idx = self._categories_for_hypothesis(
+                    taxonomy_data, v
+                )
+                tau_new = categories[test_idx]
+                mask = categories == tau_new
+                matching = labels_aug[mask]
+                results.append(float(np.sum(matching) / len(matching)))
+            return VennPrediction.binary(results[0], results[1])
+
+        n_labels = len(self.label_space)
+        probs = np.empty((n_labels, n_labels), dtype=np.float64)
+        for i, v in enumerate(self.label_space):
+            categories, labels_aug, test_idx = self._categories_for_hypothesis(
+                taxonomy_data, v
+            )
+            tau_new = categories[test_idx]
+            mask = categories == tau_new
+            matching = labels_aug[mask]
+            for j, y_prime in enumerate(self.label_space):
+                probs[i, j] = float(np.sum(matching == y_prime) / len(matching))
+        return VennPrediction(probs, self.label_space)
+
+    # ------------------------------------------------------------------
+    # Abstract interface
+    # ------------------------------------------------------------------
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialise with a training set. Must be overridden by subclasses."""
+        raise NotImplementedError
+
+    def learn_one(self, x: NDArray, y: int) -> None:
+        """Incrementally add one labelled observation. Must be overridden by subclasses."""
+        raise NotImplementedError
+
+    def predict(self, x: NDArray) -> "VennPrediction":
+        """Produce a Venn multiprobability prediction. Must be overridden by subclasses."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
 # VennAbersPredictor
 # ---------------------------------------------------------------------------
 
 
-class VennAbersPredictor(SerializableMixin):
+class VennAbersPredictor(VennPredictor):
     r"""Full online Venn-Abers predictor (Algorithm 6.1, [ALRW2 §6.4]).
 
     Produces *calibrated* probability predictions for binary classification.
@@ -448,13 +626,7 @@ class VennAbersPredictor(SerializableMixin):
         self.kernel = kernel
         self._distance_func_arg = distance_func
 
-        # Label-space policy
-        self._label_space_fixed = label_space is not None
-        self.label_space = (
-            np.asarray(sorted(label_space), dtype=int)
-            if label_space is not None
-            else None
-        )
+        super().__init__(label_space=label_space)
 
         self.X = None
         self.y = None
@@ -553,20 +725,7 @@ class VennAbersPredictor(SerializableMixin):
         X = np.atleast_2d(X)
         y = np.asarray(y, dtype=int)
 
-        # Label-space policy
-        if self._label_space_fixed:
-            unknown = set(np.unique(y)) - set(self.label_space)
-            if unknown:
-                raise ValueError(
-                    f"Labels {sorted(unknown)} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
-        elif self.label_space is None:
-            self.label_space = np.unique(y)
-        else:
-            self.label_space = np.sort(
-                np.unique(np.concatenate([self.label_space, np.unique(y)]))
-            )
+        self._update_label_space_batch(y)
 
         self.X = X
         self.y = y
@@ -609,17 +768,7 @@ class VennAbersPredictor(SerializableMixin):
         x = np.asarray(x).ravel()
         y = int(y)
 
-        # Label-space policy
-        if self._label_space_fixed:
-            if y not in self.label_space:
-                raise ValueError(
-                    f"Label {y} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
-        elif self.label_space is None:
-            self.label_space = np.array([y], dtype=int)
-        elif y not in self.label_space:
-            self.label_space = np.sort(np.append(self.label_space, y))
+        self._update_label_space_one(y)
 
         if self.X is None:
             self.X = x.reshape(1, -1)
@@ -715,12 +864,7 @@ class VennAbersPredictor(SerializableMixin):
         x = np.asarray(x).ravel()
 
         if self.X is None or len(self.y) == 0:
-            if self.label_space is not None and len(self.label_space) > 2:
-                n_labels = len(self.label_space)
-                uniform = np.full((n_labels, n_labels), 1.0 / n_labels)
-                pred = VennPrediction(uniform, self.label_space)
-            else:
-                pred = VennPrediction.binary(0.5, 0.5)
+            pred = self._empty_prediction()
             if return_update:
                 return pred, {}
             return pred
@@ -1198,7 +1342,7 @@ class VennAbersPredictor(SerializableMixin):
 # ---------------------------------------------------------------------------
 
 
-class NearestNeighboursVennPredictor(SerializableMixin):
+class NearestNeighboursVennPredictor(VennPredictor):
     """Online Venn predictor with k-NN voting taxonomy.
 
     Uses the k-nearest-neighbour voting taxonomy from ALRW (§6.2): for each
@@ -1246,12 +1390,7 @@ class NearestNeighboursVennPredictor(SerializableMixin):
             raise ValueError(f"k must be >= 1, got {k}")
         self.k = k
         self.metric = metric
-        self._label_space_fixed = label_space is not None
-        self.label_space = (
-            np.asarray(sorted(label_space), dtype=int)
-            if label_space is not None
-            else None
-        )
+        super().__init__(label_space=label_space)
         self.X = None
         self.y = None
         self.D = None  # distance matrix (n×n)
@@ -1277,19 +1416,7 @@ class NearestNeighboursVennPredictor(SerializableMixin):
         """
         X = np.atleast_2d(np.asarray(X, dtype=np.float64))
         y = np.asarray(y, dtype=int)
-        if self._label_space_fixed:
-            unknown = set(np.unique(y)) - set(self.label_space)
-            if unknown:
-                raise ValueError(
-                    f"Labels {sorted(unknown)} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
-        elif self.label_space is None:
-            self.label_space = np.unique(y)
-        else:
-            self.label_space = np.sort(
-                np.unique(np.concatenate([self.label_space, np.unique(y)]))
-            )
+        self._update_label_space_batch(y)
         self.X = X
         self.y = y
         self.D = self._distance(X)
@@ -1312,16 +1439,7 @@ class NearestNeighboursVennPredictor(SerializableMixin):
         """
         x = np.asarray(x, dtype=np.float64).ravel()
         y = int(y)
-        if self._label_space_fixed:
-            if y not in self.label_space:
-                raise ValueError(
-                    f"Label {y} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
-        elif self.label_space is None:
-            self.label_space = np.array([y], dtype=int)
-        elif y not in self.label_space:
-            self.label_space = np.sort(np.append(self.label_space, y))
+        self._update_label_space_one(y)
         if self.X is None:
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=int)
@@ -1379,13 +1497,7 @@ class NearestNeighboursVennPredictor(SerializableMixin):
         x = np.asarray(x, dtype=np.float64).ravel()
 
         if self.X is None or len(self.y) == 0:
-            if self.label_space is not None and len(self.label_space) > 2:
-                n_labels = len(self.label_space)
-                uniform = np.full(
-                    (n_labels, n_labels), 1.0 / n_labels
-                )
-                return VennPrediction(uniform, self.label_space)
-            return VennPrediction.binary(0.5, 0.5)
+            return self._empty_prediction()
 
         n = len(self.y)
 
@@ -1401,53 +1513,50 @@ class NearestNeighboursVennPredictor(SerializableMixin):
         # means each point has n neighbours available)
         k_eff = min(self.k, n)
 
-        test_idx = n  # index of new example in augmented arrays
+        return self._venn_predict_from_taxonomy((D_aug, k_eff, n))
 
-        # Binary path requires labels {0, 1}; other 2-class problems use multiclass
+    def _categories_for_hypothesis(
+        self, taxonomy_data: Any, v: int
+    ) -> tuple:
+        """Return (taxonomies, labels_aug, test_idx) for hypothesis y_test = v.
+
+        Uses the binary voting taxonomy (count of 1s among k NN) for binary
+        labels {0, 1}, and the same-class-count taxonomy for multiclass labels.
+        This preserves the original per-class taxonomy semantics (ALRW2 §6.2).
+
+        Parameters
+        ----------
+        taxonomy_data : tuple
+            ``(D_aug, k_eff, test_idx)`` precomputed by :meth:`predict`.
+        v : int
+            Hypothesised test label.
+
+        Returns
+        -------
+        taxonomies : ndarray, shape (n+1,)
+        labels_aug : ndarray, shape (n+1,)
+        test_idx : int
+        """
+        D_aug, k_eff, test_idx = taxonomy_data
+        labels_aug = np.append(self.y, v)
+        # Binary {0,1}: voting taxonomy (count of 1s in k NN).
+        # Multiclass / non-{0,1} 2-class: same-class-count taxonomy.
         _is_binary = (
-            len(self.label_space) == 2
-            and self.label_space[0] == 0
-            and self.label_space[1] == 1
-        )
-        if _is_binary or len(self.label_space) <= 1:
-            return self._predict_binary(D_aug, k_eff, test_idx)
-        else:
-            return self._predict_multiclass(D_aug, k_eff, test_idx)
-
-    def _predict_binary(self, D_aug, k_eff, test_idx):
-        """Binary prediction path (backward-compatible)."""
-        results = []
-        for v in (0, 1):
-            labels_aug = np.append(self.y, v)
-            taxonomies = self._compute_taxonomies(D_aug, labels_aug, k_eff)
-            tau_new = taxonomies[test_idx]
-            mask = taxonomies == tau_new
-            matching_labels = labels_aug[mask]
-            s_v_1 = np.sum(matching_labels) / len(matching_labels)
-            results.append(s_v_1)
-        return VennPrediction.binary(results[0], results[1])
-
-    def _predict_multiclass(self, D_aug, k_eff, test_idx):
-        """Multiclass prediction path (|Y| > 2)."""
-        n_labels = len(self.label_space)
-        probs = np.empty((n_labels, n_labels), dtype=np.float64)
-
-        for i, v in enumerate(self.label_space):
-            labels_aug = np.append(self.y, v)
-            taxonomies = self._compute_taxonomies_multiclass(
-                D_aug, labels_aug, k_eff
-            )
-            tau_new = taxonomies[test_idx]
-            mask = taxonomies == tau_new
-            matching_labels = labels_aug[mask]
-
-            # Frequency of each label among matching examples
-            for j, y_prime in enumerate(self.label_space):
-                probs[i, j] = np.sum(matching_labels == y_prime) / len(
-                    matching_labels
+            self.label_space is not None
+            and len(self.label_space) <= 2
+            and (
+                len(self.label_space) <= 1
+                or (
+                    int(self.label_space[0]) == 0
+                    and int(self.label_space[1]) == 1
                 )
-
-        return VennPrediction(probs, self.label_space)
+            )
+        )
+        if _is_binary:
+            taxonomies = self._compute_taxonomies(D_aug, labels_aug, k_eff)
+        else:
+            taxonomies = self._compute_taxonomies_multiclass(D_aug, labels_aug, k_eff)
+        return taxonomies, labels_aug, test_idx
 
     @staticmethod
     def _compute_taxonomies(D, labels, k):

@@ -5,8 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ## [0.3.0] - 2026-06-15
 
 ### Added
@@ -31,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All four classes exported from `online_cp` top-level.
   - 45 tests in `tests/test_martingale_legendre.py`; 2 adversarial leancheck
     properties in `tests/test_properties_adversarial.py` (A7, A8).
+
+- **`VennPredictor` base class** (`online_cp.venn`) — shared abstract base for
+  all Venn predictors, analogous to `ConformalClassifier`/`ConformalRegressor`:
+  - Manages `label_space` initialisation and incremental updates
+    (`_update_label_space_batch`, `_update_label_space_one`).
+  - Provides `_empty_prediction()` and the taxonomy dispatch hook
+    `_categories_for_hypothesis` / `_venn_predict_from_taxonomy` for
+    subclasses that use partition-based taxonomies.
+  - `VennAbersPredictor` and `NearestNeighboursVennPredictor` now inherit
+    `VennPredictor`; all existing behaviour is unchanged.
 
 ### Changed
 

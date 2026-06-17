@@ -182,6 +182,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Property test suite aligned with LeanCheck idiom** (`tests/test_properties.py`,
+  `tests/test_properties_adversarial.py`):
+  - `leancheck.precondition()` now used for all vacuous-case guards (8 locations).
+    Previously `if condition: return True` inflated the passed-test count; skipped
+    cases are now reported honestly (e.g. `passed 354 tests` instead of `360`).
+  - Domain-specific `Enumerator` types registered as float subclasses:
+    `Epsilon` (12 significance levels including 0.01, 0.02), `UnitProb` (τ, p₀/p₁
+    on a 101-point [0, 1] grid), `PValue` (99-point open-(0, 1) grid). Property
+    signatures now express domain constraints directly; int→domain helper functions
+    (`_eps`, `_unit_prob`, `_tau_val`, `_pvals`) removed. LeanCheck exhausts finite
+    enumerators and reports `(exhausted)` — nesting properties now confirm complete
+    pairwise coverage at 132 tests, CPD boundary conditions at 101 tests.
+  - Three-tier test budget (`_TESTS_SLOW = 360`, `_TESTS_MED = 720`,
+    `_TESTS_FAST = 3600`) replaces the former two-tier `MAX_TESTS = 200` / 500 split.
+    Sequence-loop and matrix-decomposition properties were previously misclassified
+    as "fast"; they now use the correct MED tier. `minimum_training_set` properties
+    switched from `k: int` with modular arithmetic (wasted 3500+ repetitions at 3600
+    tests) to `eps: PValue` (exhausted at 99 tests in < 5 ms).
+  - `leancheck.main(verbose=True, exit_on_failure=False)` added to both files so
+    `python3 tests/test_properties.py` runs all properties with LeanCheck's native
+    per-property report.
+  - `_check()` wrapper removed; all `test_*` functions call `leancheck.check()`
+    directly with an explicit, named budget constant.
+
 - **martingale.py direct script execution**: Handle relative imports with try/except fallback for both package context and direct script execution (needed for CI `run-modules` step).
 - **Holistic audit findings** (pre-v0.3.0 freeze):
   - Exported but undocumented classes added to API docs: `Kernel`, `CustomKernel` (kernels.md), `ConformalPredictiveDecisionMaker` (decision.md), `MulticlassVennPrediction` (venn.md).

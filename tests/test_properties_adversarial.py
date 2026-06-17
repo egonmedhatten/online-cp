@@ -47,12 +47,21 @@ from online_cp import (
 )
 from online_cp.venn import log_loss_point
 
-MAX_TESTS = 300
+_TESTS_SLOW = 360  # model-fitting or full streaming-pipeline properties
+_TESTS_MED  = 720  # sequence-loop / matrix-decomposition properties
+_TESTS_FAST = 3600 # pure-arithmetic / data-structure properties
 
 
-def _check(prop) -> bool:
-    """Run a leancheck property silently and return pass/fail as a bool."""
-    return bool(leancheck.check(prop, max_tests=MAX_TESTS, silent=True))
+class UnitProb(float):
+    """Probability or tau value in [0.0, 1.0]."""
+
+
+class PValue(float):
+    """P-value in the open interval (0, 1)."""
+
+
+leancheck.Enumerator.register_choices(UnitProb, [i / 100.0 for i in range(101)])
+leancheck.Enumerator.register_choices(PValue, [(i + 1) / 100.0 for i in range(99)])
 
 
 def _perm_from_keys(keys: list[int], n: int) -> list[int]:
@@ -116,7 +125,7 @@ def prop_knn_regressor_tie_order_invariant(keys: list[int]) -> bool:
 
 
 def test_knn_regressor_tie_order_invariant():
-    assert _check(prop_knn_regressor_tie_order_invariant)
+    assert leancheck.check(prop_knn_regressor_tie_order_invariant, max_tests=_TESTS_SLOW, silent=True)
 
 
 # ======================================================================= #
@@ -134,40 +143,25 @@ _CPD_Y_DUP = np.ones(_CPD_N_DUPS)
 _CPD_XQ = np.array([0.5, 0.0])
 
 
-def _p_grid(k: int) -> float:
-    """Map int to p ∈ (0, 1) on a fine grid."""
-    return 0.01 + (abs(k) % 99) / 100.0  # 0.01, 0.02, …, 0.99
-
-
-def _tau_grid(k: int) -> float:
-    """Map int to tau ∈ [0, 1]."""
-    return (abs(k) % 101) / 100.0
-
-
-def prop_cpd_quantile_lower_bound_with_dups(k1: int, k2: int) -> bool:
+def prop_cpd_quantile_lower_bound_with_dups(p: PValue, tau: UnitProb) -> bool:
     """F(Q(p, tau), tau) ≥ p must hold even when C has tied values.
 
     Before the _compute_quantile fix: with C=[-inf,v,v,v,v,+inf] and
     p=0.6, tau=0.5 the formula returns Q=v but Pi(v,0.5)=0.5 < 0.6.
 
-    Degenerate tails (Q = ±inf) are skipped the same way as P18, because
-    Pi(−inf, tau) = 0 for all tau by definition and the infimum quantile
-    does not satisfy the lower-bound at the exact boundary.
+    Degenerate tails (Q = ±inf) are skipped via precondition, matching P18.
     """
     m = RidgePredictionMachine(a=1.0, warnings=False)
     m.learn_initial_training_set(_CPD_X_DUP, _CPD_Y_DUP)
     cpd = m.predict_cpd(_CPD_XQ)
-    p = _p_grid(k1)
-    tau = _tau_grid(k2)
-    Q = cpd.quantile(p, tau)
-    if not np.isfinite(Q):
-        return True  # skip degenerate tails (same guard as P18)
-    pi = cpd(Q, tau)
-    return bool(pi >= p - 1e-9)
+    Q = cpd.quantile(float(p), float(tau))
+    leancheck.precondition(np.isfinite(Q))
+    pi = cpd(Q, float(tau))
+    return bool(pi >= float(p) - 1e-9)
 
 
 def test_cpd_quantile_lower_bound_with_dups():
-    assert _check(prop_cpd_quantile_lower_bound_with_dups)
+    assert leancheck.check(prop_cpd_quantile_lower_bound_with_dups, max_tests=_TESTS_MED, silent=True)
 
 
 # ======================================================================= #
@@ -202,7 +196,7 @@ def prop_venn_binary_entries_in_unit_interval(k0: int, k1: int) -> bool:
 
 
 def test_venn_binary_entries_in_unit_interval():
-    assert _check(prop_venn_binary_entries_in_unit_interval)
+    assert leancheck.check(prop_venn_binary_entries_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
 
 
 # ======================================================================= #
@@ -230,7 +224,7 @@ def prop_log_loss_point_in_unit_interval(k0: int, k1: int) -> bool:
 
 
 def test_log_loss_point_in_unit_interval():
-    assert _check(prop_log_loss_point_in_unit_interval)
+    assert leancheck.check(prop_log_loss_point_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
 
 
 # ======================================================================= #
@@ -278,7 +272,7 @@ def prop_bag_pipeline_degenerate_order_invariant(keys: list[int]) -> bool:
 
 
 def test_bag_pipeline_degenerate_order_invariant():
-    assert _check(prop_bag_pipeline_degenerate_order_invariant)
+    assert leancheck.check(prop_bag_pipeline_degenerate_order_invariant, max_tests=_TESTS_SLOW, silent=True)
 
 
 # ======================================================================= #
@@ -288,19 +282,14 @@ def test_bag_pipeline_degenerate_order_invariant():
 # and assert that b_n integrates to 1 and M stays positive and finite.    #
 # ======================================================================= #
 
-_SLJ_GRID = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99]
-
-
-def prop_slj_betting_density_valid(keys: list[int]) -> bool:
+def prop_slj_betting_density_valid(pvs: list[PValue]) -> bool:
     """b_n must integrate to 1 and M must be positive and finite after any sequence."""
     from scipy.integrate import quad
 
-    if not keys:
-        return True
-    p_values = [_SLJ_GRID[abs(k) % len(_SLJ_GRID)] for k in keys[:20]]
+    leancheck.precondition(bool(pvs))
     slj = SimpleLegendreJumper(order=1, J=0.01)
-    for p in p_values:
-        slj.update(p)
+    for p in pvs[:20]:
+        slj.update(float(p))
     if not (np.isfinite(slj.logM) and slj.M > 0):
         return False
     integral, _ = quad(slj.b_n, 0.0, 1.0, limit=50)
@@ -308,7 +297,7 @@ def prop_slj_betting_density_valid(keys: list[int]) -> bool:
 
 
 def test_slj_betting_density_valid():
-    assert _check(prop_slj_betting_density_valid)
+    assert leancheck.check(prop_slj_betting_density_valid, max_tests=_TESTS_MED, silent=True)
 
 
 # ======================================================================= #
@@ -319,18 +308,20 @@ def test_slj_betting_density_valid():
 # ======================================================================= #
 
 
-def prop_vlj_logM_synced_and_positive(keys: list[int]) -> bool:
+def prop_vlj_logM_synced_and_positive(pvs: list[PValue]) -> bool:
     """logM must equal log_martingale_values[-1] and M > 0 after any sequence."""
-    if not keys:
-        return True
-    p_values = [_SLJ_GRID[abs(k) % len(_SLJ_GRID)] for k in keys[:20]]
+    leancheck.precondition(bool(pvs))
     vlj = VariationalLegendreJumper(orders=[1, 2], J=0.01)
-    for p in p_values:
-        vlj.update(p)
+    for p in pvs[:20]:
+        vlj.update(float(p))
     if not (np.isfinite(vlj.logM) and vlj.M > 0):
         return False
     return bool(np.isclose(vlj.logM, vlj.log_martingale_values[-1], atol=1e-12))
 
 
 def test_vlj_logM_synced_and_positive():
-    assert _check(prop_vlj_logM_synced_and_positive)
+    assert leancheck.check(prop_vlj_logM_synced_and_positive, max_tests=_TESTS_MED, silent=True)
+
+
+if __name__ == "__main__":
+    leancheck.main(verbose=True, exit_on_failure=False)

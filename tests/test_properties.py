@@ -5,13 +5,18 @@ a wide enumeration of discrete edge cases (insertion orders, delay sequences,
 quantized p-value streams, significance grids). They are fast and run in the
 default lane.
 
-``leancheck`` selects test generators from type annotations, so each ``prop_*``
-function takes typed arguments (``int``, ``list[int]``) that drive a
-deterministic reconstruction of the numeric inputs inside the property.
+``leancheck`` selects test generators from type annotations.  Domain-specific
+types (``Epsilon``, ``UnitProb``, ``PValue``) enumerate values directly in the
+correct range.  ``leancheck.precondition()`` skips vacuous inputs rather than
+returning ``True`` early (which would count as a pass).
 
-Run with::
+Run with pytest::
 
     pytest tests/test_properties.py
+
+Or run all properties standalone with LeanCheck reporting::
+
+    python tests/test_properties.py
 """
 
 # NOTE: do *not* add ``from __future__ import annotations`` here. leancheck
@@ -48,14 +53,50 @@ from online_cp.classifiers import ConformalClassifier, ConformalPredictionSet
 from online_cp.regressors import ConformalPredictionInterval, ConformalRegressor
 from online_cp.venn import _pava_inplace
 
-# Number of enumerated cases per property. Kept modest so the structural lane
-# stays fast (each case may fit a model or run a streaming loop).
-MAX_TESTS = 200
+# Enumerated-case budgets.
+#
+# _TESTS_SLOW: one full model fit (or streaming loop) per test case.
+#              ~0.5–1.2 ms/test → 360 tests ≈ 0.2–0.4 s per property.
+# _TESTS_MED:  one O(n) loop or matrix decomposition per test case
+#              (martingales, change detectors, PAVA, SVD/PCA).
+#              ~0.1–0.6 ms/test → 720 tests ≈ 0.1–0.4 s per property.
+# _TESTS_FAST: pure arithmetic / data-structure checks.
+#              < 0.01 ms/test → 3600 tests ≈ negligible.
+#
+# Total target: ~8 s for the full property suite in CI.
+_TESTS_SLOW = 360  # model-fitting or full streaming-pipeline properties
+_TESTS_MED  = 720  # sequence-loop / matrix-decomposition properties
+_TESTS_FAST = 3600 # pure-arithmetic / data-structure properties
+
+# =========================================================================== #
+# Domain types for LeanCheck enumeration.                                     #
+#                                                                             #
+# Registering float subclasses as Enumerator types lets property signatures  #
+# express domain constraints directly rather than through int→domain helpers. #
+# =========================================================================== #
 
 
-def _check(prop) -> bool:
-    """Run a leancheck property silently and return pass/fail as a bool."""
-    return bool(leancheck.check(prop, max_tests=MAX_TESTS, silent=True))
+class Epsilon(float):
+    """Significance level in [0.05, 0.50]."""
+
+
+class UnitProb(float):
+    """Probability or tau value in [0.0, 1.0]."""
+
+
+class PValue(float):
+    """P-value in the open interval (0, 1)."""
+
+
+# Epsilon: include practically important small values (0.01, 0.02) plus the
+# standard 0.05–0.50 grid.  These properties exhaust at 12×12−12=132 pairs
+# regardless of max_tests, giving complete pairwise coverage.
+leancheck.Enumerator.register_choices(
+    Epsilon,
+    [0.01, 0.02] + [0.05 + i * 0.05 for i in range(10)],
+)
+leancheck.Enumerator.register_choices(UnitProb, [i / 100.0 for i in range(101)])
+leancheck.Enumerator.register_choices(PValue, [(i + 1) / 100.0 for i in range(99)])
 
 
 # --------------------------------------------------------------------------- #
@@ -99,7 +140,7 @@ def prop_ridge_prediction_order_invariant(keys: list[int]) -> bool:
 
 
 def test_ridge_prediction_order_invariant():
-    assert _check(prop_ridge_prediction_order_invariant)
+    assert leancheck.check(prop_ridge_prediction_order_invariant, max_tests=_TESTS_SLOW, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -145,7 +186,7 @@ def prop_streaming_accounting_integrity(delays: list[int]) -> bool:
 
 
 def test_streaming_accounting_integrity():
-    assert _check(prop_streaming_accounting_integrity)
+    assert leancheck.check(prop_streaming_accounting_integrity, max_tests=_TESTS_SLOW, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -158,27 +199,22 @@ def test_streaming_accounting_integrity():
 # --------------------------------------------------------------------------- #
 
 
-def _pvals(ks: list[int]) -> list[float]:
-    """Map enumerated ints to quantized p-values in the open interval (0, 1)."""
-    if len(ks) == 0:
-        return [0.5]
-    return [((abs(int(k)) % 100) + 0.5) / 100.0 for k in ks]
-
-
-def prop_cusum_gamma_at_least_one(ks: list[int]) -> bool:
+def prop_cusum_gamma_at_least_one(pvs: list[PValue]) -> bool:
+    leancheck.precondition(bool(pvs))
     cusum = CUSUMWrapper(SimpleJumper(J=0.01))
-    for p in _pvals(ks):
-        cusum.update(p)
+    for p in pvs:
+        cusum.update(float(p))
         if cusum.gamma < 1.0 - 1e-9:
             return False
     return True
 
 
-def prop_ville_max_monotone_and_dominates(ks: list[int]) -> bool:
+def prop_ville_max_monotone_and_dominates(pvs: list[PValue]) -> bool:
+    leancheck.precondition(bool(pvs))
     ville = VilleWrapper(SimpleJumper(J=0.01), threshold=20)
     prev_max = ville.log_max
-    for p in _pvals(ks):
-        ville.update(p)
+    for p in pvs:
+        ville.update(float(p))
         if ville.log_max < prev_max - 1e-12:
             return False
         if ville.log_max < ville.martingale.logM - 1e-9:
@@ -187,25 +223,26 @@ def prop_ville_max_monotone_and_dominates(ks: list[int]) -> bool:
     return True
 
 
-def prop_shiryaev_roberts_nonnegative(ks: list[int]) -> bool:
+def prop_shiryaev_roberts_nonnegative(pvs: list[PValue]) -> bool:
+    leancheck.precondition(bool(pvs))
     sr = ShiryaevRobertsWrapper(SimpleJumper(J=0.01))
-    for p in _pvals(ks):
-        sr.update(p)
+    for p in pvs:
+        sr.update(float(p))
         if sr.R < -1e-9:
             return False
     return True
 
 
 def test_cusum_gamma_at_least_one():
-    assert _check(prop_cusum_gamma_at_least_one)
+    assert leancheck.check(prop_cusum_gamma_at_least_one, max_tests=_TESTS_MED, silent=True)
 
 
 def test_ville_max_monotone_and_dominates():
-    assert _check(prop_ville_max_monotone_and_dominates)
+    assert leancheck.check(prop_ville_max_monotone_and_dominates, max_tests=_TESTS_MED, silent=True)
 
 
 def test_shiryaev_roberts_nonnegative():
-    assert _check(prop_shiryaev_roberts_nonnegative)
+    assert leancheck.check(prop_shiryaev_roberts_nonnegative, max_tests=_TESTS_MED, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -223,23 +260,16 @@ _NS_MODEL = ConformalRidgeRegressor(a=1.0, warnings=False)
 _NS_MODEL.learn_initial_training_set(_NS_X, _NS_Y)
 
 
-def _eps(k: int) -> float:
-    """Map an int to a significance level in [0.05, 0.5]."""
-    return 0.05 + (abs(int(k)) % 10) * 0.05
-
-
-def prop_intervals_nested_in_epsilon(a: int, b: int) -> bool:
-    e1, e2 = _eps(a), _eps(b)
-    lo, hi = min(e1, e2), max(e1, e2)
-    if hi - lo < 1e-9:
-        return True  # identical levels: nothing to compare
+def prop_intervals_nested_in_epsilon(e1: Epsilon, e2: Epsilon) -> bool:
+    leancheck.precondition(abs(float(e1) - float(e2)) >= 1e-9)
+    lo, hi = min(float(e1), float(e2)), max(float(e1), float(e2))
     iv_small_eps = _NS_MODEL.predict(_NS_XQ, epsilon=lo, bounds="both")
     iv_large_eps = _NS_MODEL.predict(_NS_XQ, epsilon=hi, bounds="both")
     return bool(iv_small_eps.width() >= iv_large_eps.width() - 1e-9)
 
 
 def test_intervals_nested_in_epsilon():
-    assert _check(prop_intervals_nested_in_epsilon)
+    assert leancheck.check(prop_intervals_nested_in_epsilon, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -268,8 +298,7 @@ def prop_pava_non_decreasing(ks: list[int]) -> bool:
 
 
 def prop_pava_bounded_by_input(ks: list[int]) -> bool:
-    if not ks:
-        return True
+    leancheck.precondition(bool(ks))
     y, w = _pava_array(ks)
     lo, hi = y.min(), y.max()
     _pava_inplace(y, w)
@@ -292,19 +321,19 @@ def prop_pava_idempotent(ks: list[int]) -> bool:
 
 
 def test_pava_non_decreasing():
-    assert leancheck.check(prop_pava_non_decreasing, max_tests=500, silent=True)
+    assert leancheck.check(prop_pava_non_decreasing, max_tests=_TESTS_MED, silent=True)
 
 
 def test_pava_bounded_by_input():
-    assert leancheck.check(prop_pava_bounded_by_input, max_tests=500, silent=True)
+    assert leancheck.check(prop_pava_bounded_by_input, max_tests=_TESTS_MED, silent=True)
 
 
 def test_pava_preserves_sum():
-    assert leancheck.check(prop_pava_preserves_sum, max_tests=500, silent=True)
+    assert leancheck.check(prop_pava_preserves_sum, max_tests=_TESTS_MED, silent=True)
 
 
 def test_pava_idempotent():
-    assert leancheck.check(prop_pava_idempotent, max_tests=500, silent=True)
+    assert leancheck.check(prop_pava_idempotent, max_tests=_TESTS_MED, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -347,7 +376,7 @@ def prop_metric_value_delay_invariant(delays: list[int]) -> bool:
 
 
 def test_metric_value_delay_invariant():
-    assert _check(prop_metric_value_delay_invariant)
+    assert leancheck.check(prop_metric_value_delay_invariant, max_tests=_TESTS_SLOW, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -370,11 +399,9 @@ _CS_CLF = ConformalNearestNeighboursClassifier(k=1, label_space=np.array([0, 1])
 _CS_CLF.learn_initial_training_set(_CS_X, _CS_LABELS)
 
 
-def prop_classifier_sets_nested_in_epsilon(a: int, b: int) -> bool:
-    e1, e2 = _eps(a), _eps(b)  # reuse _eps helper from Property 4
-    if abs(e1 - e2) < 1e-9:
-        return True
-    lo, hi = min(e1, e2), max(e1, e2)
+def prop_classifier_sets_nested_in_epsilon(e1: Epsilon, e2: Epsilon) -> bool:
+    leancheck.precondition(abs(float(e1) - float(e2)) >= 1e-9)
+    lo, hi = min(float(e1), float(e2)), max(float(e1), float(e2))
     # Single predict call: both levels share the same smoothing draw.
     ml = _CS_CLF.predict(_CS_XQ, epsilon=np.array([lo, hi]))
     set_lo = set(ml[lo].elements.tolist())
@@ -386,7 +413,7 @@ def prop_classifier_sets_nested_in_epsilon(a: int, b: int) -> bool:
 
 
 def test_classifier_sets_nested_in_epsilon():
-    assert _check(prop_classifier_sets_nested_in_epsilon)
+    assert leancheck.check(prop_classifier_sets_nested_in_epsilon, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -400,43 +427,35 @@ def test_classifier_sets_nested_in_epsilon():
 # --------------------------------------------------------------------------- #
 
 
-def _unit_prob(k: int) -> float:
-    """Map an enumerated int to a probability in [0, 1]."""
-    return (abs(int(k)) % 101) / 100.0
-
-
-def prop_venn_binary_rows_sum_to_one(a: int, b: int) -> bool:
-    p0, p1 = _unit_prob(a), _unit_prob(b)
-    vp = VennPrediction.binary(p0, p1)
+def prop_venn_binary_rows_sum_to_one(p0: UnitProb, p1: UnitProb) -> bool:
+    vp = VennPrediction.binary(float(p0), float(p1))
     row0_sum = float(vp.probs[0].sum())
     row1_sum = float(vp.probs[1].sum())
     return bool(abs(row0_sum - 1.0) < 1e-9 and abs(row1_sum - 1.0) < 1e-9)
 
 
-def prop_venn_binary_entries_in_unit_interval(a: int, b: int) -> bool:
-    p0, p1 = _unit_prob(a), _unit_prob(b)
-    vp = VennPrediction.binary(p0, p1)
+def prop_venn_binary_entries_in_unit_interval(p0: UnitProb, p1: UnitProb) -> bool:
+    vp = VennPrediction.binary(float(p0), float(p1))
     return bool(np.all((vp.probs >= -1e-9) & (vp.probs <= 1.0 + 1e-9)))
 
 
-def prop_venn_binary_point_sums_to_one(a: int, b: int) -> bool:
-    p0, p1 = _unit_prob(a), _unit_prob(b)
-    vp = VennPrediction.binary(p0, p1)
+def prop_venn_binary_point_sums_to_one(p0: UnitProb, p1: UnitProb) -> bool:
+    vp = VennPrediction.binary(float(p0), float(p1))
     point_sum = float(vp.point.sum())
-    point1_expected = (p0 + p1) / 2.0
+    point1_expected = (float(p0) + float(p1)) / 2.0
     return bool(abs(point_sum - 1.0) < 1e-9 and abs(float(vp.point[1]) - point1_expected) < 1e-9)
 
 
 def test_venn_binary_rows_sum_to_one():
-    assert _check(prop_venn_binary_rows_sum_to_one)
+    assert leancheck.check(prop_venn_binary_rows_sum_to_one, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_venn_binary_entries_in_unit_interval():
-    assert _check(prop_venn_binary_entries_in_unit_interval)
+    assert leancheck.check(prop_venn_binary_entries_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_venn_binary_point_sums_to_one():
-    assert _check(prop_venn_binary_point_sums_to_one)
+    assert leancheck.check(prop_venn_binary_point_sums_to_one, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -475,17 +494,12 @@ def prop_knn_prediction_order_invariant(keys: list[int]) -> bool:
 
 
 def test_knn_prediction_order_invariant():
-    assert _check(prop_knn_prediction_order_invariant)
+    assert leancheck.check(prop_knn_prediction_order_invariant, max_tests=_TESTS_SLOW, silent=True)
 
 
 # =========================================================================== #
 # Shared helpers for P10-P18
 # =========================================================================== #
-
-
-def _tau_val(k: int) -> float:
-    """Map an enumerated int to tau in [0, 1]."""
-    return (abs(int(k)) % 101) / 100.0
 
 
 def _alpha_array(ks: list[int]) -> np.ndarray:
@@ -510,26 +524,24 @@ def _alpha_array(ks: list[int]) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 
 
-def prop_regressor_p_value_in_unit_interval(ks: list[int], t: int) -> bool:
+def prop_regressor_p_value_in_unit_interval(ks: list[int], tau: UnitProb) -> bool:
     Alpha = _alpha_array(ks)
-    tau = _tau_val(t)
-    p = ConformalRegressor._compute_p_value(Alpha, tau=tau)
+    p = ConformalRegressor._compute_p_value(Alpha, tau=float(tau))
     return bool(-1e-9 <= p <= 1.0 + 1e-9)
 
 
-def prop_classifier_p_value_in_unit_interval(ks: list[int], t: int) -> bool:
+def prop_classifier_p_value_in_unit_interval(ks: list[int], tau: UnitProb) -> bool:
     Alpha = _alpha_array(ks)
-    tau = _tau_val(t)
-    p = ConformalClassifier._compute_p_value(Alpha, tau=tau)
+    p = ConformalClassifier._compute_p_value(Alpha, tau=float(tau))
     return bool(-1e-9 <= p <= 1.0 + 1e-9)
 
 
 def test_regressor_p_value_in_unit_interval():
-    assert leancheck.check(prop_regressor_p_value_in_unit_interval, max_tests=500, silent=True)
+    assert leancheck.check(prop_regressor_p_value_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_classifier_p_value_in_unit_interval():
-    assert leancheck.check(prop_classifier_p_value_in_unit_interval, max_tests=500, silent=True)
+    assert leancheck.check(prop_classifier_p_value_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -539,24 +551,24 @@ def test_classifier_p_value_in_unit_interval():
 # --------------------------------------------------------------------------- #
 
 
-def prop_minimum_training_set_both_bounds(k: int) -> bool:
-    eps = 0.01 + (abs(int(k)) % 99) * 0.01  # eps in [0.01, 0.99]
-    result = ConformalRegressor.minimum_training_set(eps, bounds="both")
-    return result == int(np.ceil(2.0 / eps))
+def prop_minimum_training_set_both_bounds(eps: PValue) -> bool:
+    # PValue enumerates (0.01, ..., 0.99) — exactly the eps grid needed.
+    # LeanCheck exhausts all 99 values, so no modular arithmetic required.
+    result = ConformalRegressor.minimum_training_set(float(eps), bounds="both")
+    return result == int(np.ceil(2.0 / float(eps)))
 
 
-def prop_minimum_training_set_one_sided(k: int) -> bool:
-    eps = 0.01 + (abs(int(k)) % 99) * 0.01
-    result = ConformalRegressor.minimum_training_set(eps, bounds="lower")
-    return result == int(np.ceil(1.0 / eps))
+def prop_minimum_training_set_one_sided(eps: PValue) -> bool:
+    result = ConformalRegressor.minimum_training_set(float(eps), bounds="lower")
+    return result == int(np.ceil(1.0 / float(eps)))
 
 
 def test_minimum_training_set_both_bounds():
-    assert leancheck.check(prop_minimum_training_set_both_bounds, max_tests=500, silent=True)
+    assert leancheck.check(prop_minimum_training_set_both_bounds, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_minimum_training_set_one_sided():
-    assert leancheck.check(prop_minimum_training_set_one_sided, max_tests=500, silent=True)
+    assert leancheck.check(prop_minimum_training_set_one_sided, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -583,11 +595,11 @@ def prop_interval_containment_iff_in_bounds(a: int, b: int, c: int) -> bool:
 
 
 def test_interval_width_equals_upper_minus_lower():
-    assert leancheck.check(prop_interval_width_equals_upper_minus_lower, max_tests=500, silent=True)
+    assert leancheck.check(prop_interval_width_equals_upper_minus_lower, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_interval_containment_iff_in_bounds():
-    assert leancheck.check(prop_interval_containment_iff_in_bounds, max_tests=500, silent=True)
+    assert leancheck.check(prop_interval_containment_iff_in_bounds, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -603,19 +615,18 @@ _CM_IV_OUT = ConformalPredictionInterval(100.0, 200.0, 0.1)  # never covers y=0
 
 
 def prop_cumulative_mean_matches_formula(ks: list[int]) -> bool:
+    leancheck.precondition(bool(ks))
     metric = ErrorRate()
     for k in ks:
         iv = _CM_IV_IN if abs(k) % 2 == 0 else _CM_IV_OUT
         metric.update(y=0.0, Gamma=iv)
-    if metric._n == 0:
-        return True
     cm = metric.cumulative_mean()
     expected = np.cumsum(metric._values) / np.arange(1, metric._n + 1)
     return bool(np.allclose(cm, expected))
 
 
 def test_cumulative_mean_matches_formula():
-    assert leancheck.check(prop_cumulative_mean_matches_formula, max_tests=500, silent=True)
+    assert leancheck.check(prop_cumulative_mean_matches_formula, max_tests=_TESTS_MED, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -626,10 +637,11 @@ def test_cumulative_mean_matches_formula():
 # --------------------------------------------------------------------------- #
 
 
-def prop_plugin_martingale_logM_synced(ks: list[int]) -> bool:
+def prop_plugin_martingale_logM_synced(pvs: list[PValue]) -> bool:
+    leancheck.precondition(bool(pvs))
     m = PluginMartingale()
-    for i, p in enumerate(_pvals(ks)):
-        m.update(p)
+    for i, p in enumerate(pvs):
+        m.update(float(p))
         if not np.isclose(m.logM, m.log_martingale_values[-1]):
             return False
         if len(m.log_martingale_values) != i + 2:  # [0.0] + one per update
@@ -640,7 +652,7 @@ def prop_plugin_martingale_logM_synced(ks: list[int]) -> bool:
 
 
 def test_plugin_martingale_logM_synced():
-    assert _check(prop_plugin_martingale_logM_synced)
+    assert leancheck.check(prop_plugin_martingale_logM_synced, max_tests=_TESTS_MED, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -663,7 +675,7 @@ def prop_metrics_composition_n_sync(ks: list[int]) -> bool:
 
 
 def test_metrics_composition_n_sync():
-    assert leancheck.check(prop_metrics_composition_n_sync, max_tests=500, silent=True)
+    assert leancheck.check(prop_metrics_composition_n_sync, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -699,11 +711,11 @@ def prop_observed_excess_plus_coverage_equals_set_size(a: int, b: int) -> bool:
 
 
 def test_error_rate_plus_coverage_equals_one():
-    assert leancheck.check(prop_error_rate_plus_coverage_equals_one, max_tests=500, silent=True)
+    assert leancheck.check(prop_error_rate_plus_coverage_equals_one, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_observed_excess_plus_coverage_equals_set_size():
-    assert leancheck.check(prop_observed_excess_plus_coverage_equals_set_size, max_tests=500, silent=True)
+    assert leancheck.check(prop_observed_excess_plus_coverage_equals_set_size, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -756,7 +768,7 @@ def prop_predict_return_update_state_equivalence(ks: list[int]) -> bool:
 
 
 def test_predict_return_update_state_equivalence():
-    assert _check(prop_predict_return_update_state_equivalence)
+    assert leancheck.check(prop_predict_return_update_state_equivalence, max_tests=_TESTS_SLOW, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -781,51 +793,46 @@ _CPD_MODEL.learn_initial_training_set(_CPD_X, _CPD_Y)
 _CPD = _CPD_MODEL.predict_cpd(_CPD_XQ)
 
 
-def prop_cpd_values_in_unit_interval(a: int, t: int) -> bool:
-    tau = _tau_val(t)
+def prop_cpd_values_in_unit_interval(a: int, tau: UnitProb) -> bool:
     y = float(a % 40 - 10)
-    p = _CPD(y, tau)
+    p = _CPD(y, float(tau))
     return bool(-1e-9 <= p <= 1.0 + 1e-9)
 
 
-def prop_cpd_monotone_in_y(a: int, b: int, t: int) -> bool:
-    tau = _tau_val(t)
+def prop_cpd_monotone_in_y(a: int, b: int, tau: UnitProb) -> bool:
     y1 = float(a % 40 - 10)
     gap = float(abs(b) % 20)
-    if gap < 1e-9:
-        return True
+    leancheck.precondition(gap >= 1e-9)
     y2 = y1 + gap
-    return bool(_CPD(y1, tau) <= _CPD(y2, tau) + 1e-9)
+    return bool(_CPD(y1, float(tau)) <= _CPD(y2, float(tau)) + 1e-9)
 
 
-def prop_cpd_boundary_conditions(t: int) -> bool:
-    tau = _tau_val(t)
-    return bool(abs(_CPD(-np.inf, tau)) < 1e-9 and abs(_CPD(np.inf, tau) - 1.0) < 1e-9)
+def prop_cpd_boundary_conditions(tau: UnitProb) -> bool:
+    return bool(
+        abs(_CPD(-np.inf, float(tau))) < 1e-9 and abs(_CPD(np.inf, float(tau)) - 1.0) < 1e-9
+    )
 
 
-def prop_cpd_quantile_lower_bound(a: int, t: int) -> bool:
-    tau = _tau_val(t)
-    p = ((abs(int(a)) % 99) + 1) / 100.0  # p in [0.01, 0.99]
-    q = _CPD.quantile(p, tau)
-    if not np.isfinite(q):
-        return True  # skip degenerate tails
-    return bool(_CPD(q, tau) >= p - 1e-9)
+def prop_cpd_quantile_lower_bound(p: PValue, tau: UnitProb) -> bool:
+    q = _CPD.quantile(float(p), float(tau))
+    leancheck.precondition(np.isfinite(q))
+    return bool(_CPD(q, float(tau)) >= float(p) - 1e-9)
 
 
 def test_cpd_values_in_unit_interval():
-    assert leancheck.check(prop_cpd_values_in_unit_interval, max_tests=500, silent=True)
+    assert leancheck.check(prop_cpd_values_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_cpd_monotone_in_y():
-    assert leancheck.check(prop_cpd_monotone_in_y, max_tests=500, silent=True)
+    assert leancheck.check(prop_cpd_monotone_in_y, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_cpd_boundary_conditions():
-    assert leancheck.check(prop_cpd_boundary_conditions, max_tests=500, silent=True)
+    assert leancheck.check(prop_cpd_boundary_conditions, max_tests=_TESTS_FAST, silent=True)
 
 
 def test_cpd_quantile_lower_bound():
-    assert leancheck.check(prop_cpd_quantile_lower_bound, max_tests=500, silent=True)
+    assert leancheck.check(prop_cpd_quantile_lower_bound, max_tests=_TESTS_FAST, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -870,7 +877,7 @@ def prop_bag_pipeline_p_value_order_invariant(keys: list[int]) -> bool:
 
 
 def test_bag_pipeline_p_value_order_invariant():
-    assert _check(prop_bag_pipeline_p_value_order_invariant)
+    assert leancheck.check(prop_bag_pipeline_p_value_order_invariant, max_tests=_TESTS_SLOW, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -897,7 +904,7 @@ def prop_pca_components_orthonormal(idx: int) -> bool:
 
 
 def test_pca_components_orthonormal():
-    assert leancheck.check(prop_pca_components_orthonormal, max_tests=MAX_TESTS, silent=True)
+    assert leancheck.check(prop_pca_components_orthonormal, max_tests=_TESTS_MED, silent=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -916,4 +923,8 @@ def prop_svd_components_orthonormal(idx: int) -> bool:
 
 
 def test_svd_components_orthonormal():
-    assert leancheck.check(prop_svd_components_orthonormal, max_tests=MAX_TESTS, silent=True)
+    assert leancheck.check(prop_svd_components_orthonormal, max_tests=_TESTS_MED, silent=True)
+
+
+if __name__ == "__main__":
+    leancheck.main(verbose=True, exit_on_failure=False)

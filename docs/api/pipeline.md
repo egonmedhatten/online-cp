@@ -19,3 +19,7 @@
 ::: online_cp.preprocessing.StandardScaler
 
 ::: online_cp.preprocessing.MinMaxScaler
+
+::: online_cp.preprocessing.PCA
+
+::: online_cp.preprocessing.SVD

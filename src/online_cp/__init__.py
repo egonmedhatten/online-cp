@@ -315,7 +315,13 @@ from online_cp.preprocessing import (
     MinMaxScaler as MinMaxScaler,
 )
 from online_cp.preprocessing import (
+    PCA as PCA,
+)
+from online_cp.preprocessing import (
     StandardScaler as StandardScaler,
+)
+from online_cp.preprocessing import (
+    SVD as SVD,
 )
 from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,

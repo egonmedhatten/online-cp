@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — targeting 0.3.1
+
+### Added
+
+- **`PCA` transformer** (`online_cp.preprocessing`) — principal-component rotation
+  for use as a preprocessing step in `Pipeline`.
+  - Computes the unbiased sample covariance matrix and decomposes it via
+    `numpy.linalg.eigh`; eigenvectors are sorted by descending explained variance
+    and given a deterministic sign convention (largest-magnitude element positive).
+  - Parameters: `n_components` (int or None), `mode` ("frozen"/"bag").
+  - Attributes: `mean_`, `components_` (shape k×d), `singular_values_`, `n_`.
+  - Full `save`/`load` serialization via `SerializableMixin`.
+  - Primary use-case: axis-aligning features before Mondrian conformal methods to
+    yield tighter, more balanced partitions.
+
+- **`SVD` transformer** (`online_cp.preprocessing`) — truncated right-singular-vector
+  projection for dimensionality reduction and multicollinearity removal.
+  - Identical algorithm to `PCA`; adds a `center` parameter (default `True`).
+    When `center=True` the result is numerically identical to `PCA`; `center=False`
+    uses the raw (uncentred) Gram matrix with an `n` denominator.
+  - Parameters: `n_components`, `mode`, `center`.
+  - Full `save`/`load` serialization via `SerializableMixin`.
+  - Primary use-case: stabilising `ConformalRidgeRegressor` and `RidgePredictionMachine`
+    on near-collinear or high-dimensional feature matrices.
+
+- Both `PCA` and `SVD` exported from `online_cp` top-level.
+- 27 unit tests in `tests/test_preprocessing.py`.
+- 8 round-trip serialization tests in `tests/test_save_load.py`.
+- 2 leancheck orthonormality properties (P22, P23) in `tests/test_properties.py`.
+- `docs/api/pipeline.md` updated with mkdocstrings entries for both classes.
+
+---
+
 ## [0.3.0] - 2026-06-15
 
 ### Added

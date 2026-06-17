@@ -850,3 +850,101 @@ class TestFuncTransformerRoundTrip:
         with pytest.raises(SerializationError):
             pipe.save(str(path))
 
+
+# ---------------------------------------------------------------------------
+# Phase C — PCA and SVD serialization
+# ---------------------------------------------------------------------------
+
+from online_cp import PCA, SVD
+
+
+class TestPCARoundTrip:
+    def test_round_trip_transforms_equal(self, tmp_path):
+        """fit → save → load → transform must produce identical arrays."""
+        pca = PCA(n_components=2)
+        pca.fit(X_REG)
+        path = tmp_path / "pca.joblib"
+        pca.save(str(path))
+        loaded = PCA.load(str(path))
+        np.testing.assert_allclose(
+            pca.transform(X_REG), loaded.transform(X_REG), atol=1e-10
+        )
+
+    def test_state_preserved(self, tmp_path):
+        """components_, singular_values_, mean_, n_ all survive round-trip."""
+        pca = PCA()
+        pca.fit(X_REG)
+        path = tmp_path / "pca_state.joblib"
+        pca.save(str(path))
+        loaded = PCA.load(str(path))
+        np.testing.assert_allclose(pca.mean_, loaded.mean_, atol=1e-14)
+        np.testing.assert_allclose(pca.components_, loaded.components_, atol=1e-14)
+        np.testing.assert_allclose(pca.singular_values_, loaded.singular_values_, atol=1e-14)
+        assert pca.n_ == loaded.n_
+
+    def test_params_preserved(self, tmp_path):
+        pca = PCA(n_components=1, mode="frozen")
+        pca.fit(X_REG)
+        path = tmp_path / "pca_params.joblib"
+        pca.save(str(path))
+        loaded = PCA.load(str(path))
+        assert loaded.n_components == 1
+        assert loaded.mode == "frozen"
+
+    def test_pipeline_pca_ridge_round_trip(self, tmp_path):
+        """Full Pipeline(PCA, ConformalRidgeRegressor) save/load round-trip."""
+        from online_cp import Pipeline
+        pipe = Pipeline(PCA(n_components=1), ConformalRidgeRegressor(a=1e-3, rnd_state=7))
+        pipe.learn_initial_training_set(X_REG, Y_REG)
+        path = tmp_path / "pipeline_pca_ridge.joblib"
+        pipe.save(str(path))
+        loaded = Pipeline.load(str(path))
+        orig = pipe.predict(X_TEST_REG, epsilon=0.1)
+        back = loaded.predict(X_TEST_REG, epsilon=0.1)
+        assert abs(orig.lower - back.lower) < 1e-10
+        assert abs(orig.upper - back.upper) < 1e-10
+
+
+class TestSVDRoundTrip:
+    def test_round_trip_transforms_equal_center_true(self, tmp_path):
+        svd = SVD(n_components=1, center=True)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_center.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        np.testing.assert_allclose(
+            svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10
+        )
+
+    def test_round_trip_transforms_equal_center_false(self, tmp_path):
+        svd = SVD(n_components=1, center=False)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_nocenter.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        np.testing.assert_allclose(
+            svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10
+        )
+        assert loaded.mean_ is None
+
+    def test_state_preserved(self, tmp_path):
+        svd = SVD(n_components=1)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_state.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        np.testing.assert_allclose(svd.mean_, loaded.mean_, atol=1e-14)
+        np.testing.assert_allclose(svd.components_, loaded.components_, atol=1e-14)
+        np.testing.assert_allclose(svd.singular_values_, loaded.singular_values_, atol=1e-14)
+        assert svd.n_ == loaded.n_
+
+    def test_params_preserved(self, tmp_path):
+        svd = SVD(n_components=1, mode="frozen", center=False)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_params.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        assert loaded.n_components == 1
+        assert loaded.mode == "frozen"
+        assert loaded.center is False
+

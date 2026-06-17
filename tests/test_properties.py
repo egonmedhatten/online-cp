@@ -871,3 +871,49 @@ def prop_bag_pipeline_p_value_order_invariant(keys: list[int]) -> bool:
 
 def test_bag_pipeline_p_value_order_invariant():
     assert _check(prop_bag_pipeline_p_value_order_invariant)
+
+
+# --------------------------------------------------------------------------- #
+# Property 22: PCA components_ are orthonormal across random data shapes.    #
+#                                                                              #
+# V @ V^T must equal I_k for any valid (n ≥ 2, d ≥ 1) batch; this also      #
+# validates the sign-flip convention leaves the vectors normalised.           #
+# --------------------------------------------------------------------------- #
+
+from online_cp import PCA, SVD
+
+_PROP22_RNG = np.random.default_rng(22)
+_PROP22_SIZES = [(n, d) for n in [4, 8, 20] for d in [1, 2, 5]]
+
+
+def prop_pca_components_orthonormal(idx: int) -> bool:
+    """PCA components_ @ components_.T == I_k for a fixed set of data shapes."""
+    n, d = _PROP22_SIZES[idx % len(_PROP22_SIZES)]
+    X = _PROP22_RNG.normal(size=(n, d))
+    pca = PCA()
+    pca.fit(X)
+    gram = pca.components_ @ pca.components_.T
+    return bool(np.allclose(gram, np.eye(gram.shape[0]), atol=1e-10))
+
+
+def test_pca_components_orthonormal():
+    assert leancheck.check(prop_pca_components_orthonormal, max_tests=MAX_TESTS, silent=True)
+
+
+# --------------------------------------------------------------------------- #
+# Property 23: SVD components_ are orthonormal (center=True and False).      #
+# --------------------------------------------------------------------------- #
+
+def prop_svd_components_orthonormal(idx: int) -> bool:
+    """SVD components_ @ components_.T == I_k regardless of center flag."""
+    n, d = _PROP22_SIZES[idx % len(_PROP22_SIZES)]
+    center = bool(idx % 2)
+    X = _PROP22_RNG.normal(size=(n, d))
+    svd = SVD(center=center)
+    svd.fit(X)
+    gram = svd.components_ @ svd.components_.T
+    return bool(np.allclose(gram, np.eye(gram.shape[0]), atol=1e-10))
+
+
+def test_svd_components_orthonormal():
+    assert leancheck.check(prop_svd_components_orthonormal, max_tests=MAX_TESTS, silent=True)

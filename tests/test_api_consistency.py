@@ -10,17 +10,15 @@ import pytest
 
 from online_cp import (
     ConformalNearestNeighboursRegressor,
-    ConformalRidgeRegressor,
     GaussianKernel,
     LinearKernel,
+    NearestNeighboursVennPredictor,
     PeriodicKernel,
     RidgePredictionMachine,
-    NearestNeighboursVennPredictor,
 )
 from online_cp.classifiers import ConformalClassifierWrapper
-from online_cp.kernels import LinearCombinationKernel
 from online_cp.CPS import ConformalPredictiveDistributionFunction
-
+from online_cp.kernels import LinearCombinationKernel
 
 # ---------------------------------------------------------------------------
 # Phase 1: Bug fixes

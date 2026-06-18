@@ -303,6 +303,14 @@ import numpy as np
 # Freeze-scale then predict — training-conditional validity (ALRW2 §4.7)
 pipe = StandardScaler() | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
 
+# PCA rotation (axis-align features, useful before Mondrian methods)
+from online_cp import PCA
+pipe = PCA(n_components=3) | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
+# SVD projection (dimensionality reduction / multicollinearity removal)
+from online_cp import SVD
+pipe = SVD(n_components=3) | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+
 # Fixed map (always safe, exchangeability trivially preserved)
 pipe = FuncTransformer(np.log1p) | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
 
@@ -376,7 +384,9 @@ pipe.summary()
 
 | I want... | Use | Class |
 |-----------|-----|-------|
-| Preprocessing before conformal prediction | Pipeline | `Pipeline` / `StandardScaler` / `FuncTransformer` |
+| Preprocessing before conformal prediction | Pipeline | `Pipeline` / `StandardScaler` / `MinMaxScaler` / `FuncTransformer` |
+| Axis-align features (e.g. before Mondrian) | Pipeline | `PCA` |
+| Dimensionality reduction / collinearity removal | Pipeline | `SVD` |
 | Prediction interval (linear) | Regressor | `ConformalRidgeRegressor` |
 | Prediction interval (nonlinear) | Regressor | `KernelConformalRidgeRegressor` or `ConformalNearestNeighboursRegressor` |
 | Prediction interval (sparse) | Regressor | `ConformalLassoRegressor` |

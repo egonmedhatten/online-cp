@@ -6,7 +6,6 @@ import pytest
 from online_cp.metrics import CalibrationError
 from online_cp.venn import VennPrediction
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

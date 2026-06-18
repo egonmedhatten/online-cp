@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "online-cp"
-version = "0.2.0"
+version = "0.3.0"
 authors = [
 	{ name="Johan Hallberg Szabadvary", email="johan.hallberg.szabadvary@ju.se" },
 ]
@@ -16,6 +16,8 @@ dependencies = [
 	'scipy',
 	'joblib >= 1.4.2',
 	'matplotlib',
+	'tqdm',
+	'pandas',
 ]
 classifiers = [
 	"Development Status :: 3 - Alpha",
@@ -27,6 +29,11 @@ classifiers = [
 [project.optional-dependencies]
 fast = [
 	"numba",
+]
+# Note: the 'graphviz' pip package also requires the system 'dot' binary
+# (e.g. 'apt install graphviz' or 'brew install graphviz').
+viz = [
+	"graphviz",
 ]
 dev = [
 	"pytest",
@@ -41,27 +48,21 @@ docs = [
 ci = [
 	"online-cp[all]",
 	"coverage",
-	"leancheck",
 	"nbconvert",
 	"ipykernel",
 	"scikit-learn",
-	"tqdm",
 	"ipywidgets",
 	"ucimlrepo",
+	"graphviz",
 	"validate-pyproject",
 	"trove-classifiers",
 ]
-progress = [
-	"tqdm",
-]
 all = [
-	"online-cp[fast,dev,progress]",
+	"online-cp[fast,dev,viz]",
 ]
 benchmark = [
 	"scikit-learn",
 	"ucimlrepo",
-	"pandas",
-	"tqdm",
 	"crepes",
 ]
 

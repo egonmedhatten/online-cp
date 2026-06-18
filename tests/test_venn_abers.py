@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 
 from online_cp.venn import (
-    VennPrediction,
     MulticlassVennPrediction,
     VennAbersPredictor,
+    VennPrediction,
+    VennPredictor,
     _isotonic_calibrate,
     _pava_inplace,
     brier_point,
     log_loss_point,
 )
-
 
 # ---------------------------------------------------------------------------
 # PAVA tests
@@ -360,7 +360,7 @@ class TestVennAbersSVM:
         vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
         vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
         for i in range(self.n_train, self.n_train + 5):
-            pred = vap.predict(self.X[i])
+            vap.predict(self.X[i])
             vap.learn_one(self.X[i], self.y[i])
         assert vap.K.shape == (self.n_train + 5, self.n_train + 5)
 
@@ -509,7 +509,19 @@ class TestAggregationFunctions:
 # NearestNeighboursVennPredictor
 # ---------------------------------------------------------------------------
 
-from online_cp.venn import NearestNeighboursVennPredictor
+from online_cp.venn import NearestNeighboursVennPredictor  # noqa: E402
+
+
+class TestVennPredictorInheritance:
+    """Both concrete predictors must be instances of the VennPredictor base."""
+
+    def test_venn_abers_is_venn_predictor(self):
+        vap = VennAbersPredictor(scorer="ridge", a=1.0)
+        assert isinstance(vap, VennPredictor)
+
+    def test_nearest_neighbours_is_venn_predictor(self):
+        vp = NearestNeighboursVennPredictor(k=1)
+        assert isinstance(vp, VennPredictor)
 
 
 class TestNearestNeighboursVennPredictor:
@@ -712,7 +724,6 @@ class TestNearestNeighboursVennValidity:
 # Multiclass NearestNeighboursVennPredictor tests
 # ===========================================================================
 
-from online_cp.venn import NearestNeighboursVennPredictor
 
 
 class TestMulticlassNearestNeighboursVenn:

@@ -7,11 +7,12 @@ from online_cp import (
     ConformalRidgeRegressor,
     ErrorRate,
     MinMaxScaler,
+    PCA,
     Pipeline,
     StandardScaler,
+    SVD,
     progressive_val,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -329,3 +330,222 @@ class TestMinMaxScalerBagMode:
 
     def test_frozen_default_unchanged(self):
         assert MinMaxScaler().mode == "frozen"
+
+
+# ===========================================================================
+# PCA
+# ===========================================================================
+
+
+class TestPCA:
+    def test_fit_shapes(self, small_batch):
+        pca = PCA()
+        pca.fit(small_batch)
+        n, d = small_batch.shape
+        k = min(n - 1, d)
+        assert pca.components_.shape == (k, d)
+        assert pca.singular_values_.shape == (k,)
+        assert pca.n_ == n
+
+    def test_n_components_reduces_dim(self, small_batch):
+        pca = PCA(n_components=2)
+        pca.fit(small_batch)
+        Xt = pca.transform(small_batch)
+        assert Xt.shape == (len(small_batch), 2)
+
+    def test_components_orthonormal(self, small_batch):
+        pca = PCA()
+        pca.fit(small_batch)
+        gram = pca.components_ @ pca.components_.T
+        np.testing.assert_allclose(gram, np.eye(gram.shape[0]), atol=1e-10)
+
+    def test_singular_values_descending(self, small_batch):
+        pca = PCA()
+        pca.fit(small_batch)
+        sv = pca.singular_values_
+        assert np.all(sv[:-1] >= sv[1:] - 1e-12)
+
+    def test_transform_batch_shape(self, small_batch):
+        pca = PCA(n_components=2)
+        pca.fit(small_batch)
+        Xt = pca.transform(small_batch)
+        assert Xt.shape == (len(small_batch), 2)
+
+    def test_transform_one_matches_transform(self, small_batch):
+        pca = PCA(n_components=2)
+        pca.fit(small_batch)
+        for x in small_batch:
+            np.testing.assert_allclose(
+                pca.transform_one(x), pca.transform(x.reshape(1, -1))[0]
+            )
+
+    def test_sign_convention_stable(self, rng):
+        """Permuting rows must not change components_ (permutation-invariant fit)."""
+        X = rng.normal(size=(30, 4))
+        perm = rng.permutation(len(X))
+        pca1 = PCA()
+        pca1.fit(X)
+        pca2 = PCA()
+        pca2.fit(X[perm])
+        np.testing.assert_allclose(pca1.components_, pca2.components_, atol=1e-10)
+        np.testing.assert_allclose(pca1.singular_values_, pca2.singular_values_, atol=1e-10)
+
+    def test_raises_before_fit(self):
+        pca = PCA()
+        with pytest.raises(RuntimeError, match="not been fitted"):
+            pca.transform(np.ones((3, 2)))
+
+    def test_raises_before_fit_one(self):
+        pca = PCA()
+        with pytest.raises(RuntimeError, match="not been fitted"):
+            pca.transform_one(np.ones(2))
+
+    def test_too_few_samples_raises(self):
+        pca = PCA()
+        with pytest.raises(ValueError, match="at least 2 samples"):
+            pca.fit(np.ones((1, 3)))
+
+    def test_invalid_n_components_raises(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            PCA(n_components=0)
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="mode must be"):
+            PCA(mode="incremental")
+
+    def test_zero_variance_column_no_nan(self, rng):
+        X = rng.normal(size=(20, 3))
+        X[:, 1] = 7.0  # constant column
+        pca = PCA()
+        pca.fit(X)
+        Xt = pca.transform(X)
+        assert np.all(np.isfinite(Xt))
+
+    def test_mode_is_frozen(self):
+        assert PCA().mode == "frozen"
+
+    def test_mean_subtracted(self, small_batch):
+        """Projected training data should have near-zero mean."""
+        pca = PCA()
+        pca.fit(small_batch)
+        Xt = pca.transform(small_batch)
+        np.testing.assert_allclose(Xt.mean(axis=0), 0.0, atol=1e-10)
+
+    def test_pipeline_mondrian_smoke(self, rng):
+        """PCA | ConformalRidgeRegressor end-to-end smoke test (axis-alignment use case)."""
+        X = rng.normal(loc=[0.0, 0.0], scale=[10.0, 0.1], size=(40, 2))
+        y = X[:, 0] * 0.5 + rng.normal(scale=0.1, size=40)
+        pipe = PCA() | ConformalRidgeRegressor(a=1.0, epsilon=0.1)
+        pipe.learn_initial_training_set(X, y)
+        interval = pipe.predict(X[0], epsilon=0.1)
+        assert interval.lower <= interval.upper
+
+
+# ===========================================================================
+# SVD
+# ===========================================================================
+
+
+class TestSVD:
+    def test_fit_shapes(self, small_batch):
+        svd = SVD()
+        svd.fit(small_batch)
+        n, d = small_batch.shape
+        k = min(n - 1, d)  # center=True uses n-1
+        assert svd.components_.shape == (k, d)
+        assert svd.singular_values_.shape == (k,)
+        assert svd.n_ == n
+
+    def test_n_components_reduces_dim(self, small_batch):
+        svd = SVD(n_components=2)
+        svd.fit(small_batch)
+        Xt = svd.transform(small_batch)
+        assert Xt.shape == (len(small_batch), 2)
+
+    def test_components_orthonormal(self, small_batch):
+        svd = SVD()
+        svd.fit(small_batch)
+        gram = svd.components_ @ svd.components_.T
+        np.testing.assert_allclose(gram, np.eye(gram.shape[0]), atol=1e-10)
+
+    def test_singular_values_descending(self, small_batch):
+        svd = SVD()
+        svd.fit(small_batch)
+        sv = svd.singular_values_
+        assert np.all(sv[:-1] >= sv[1:] - 1e-12)
+
+    def test_transform_one_matches_transform(self, small_batch):
+        svd = SVD(n_components=2)
+        svd.fit(small_batch)
+        for x in small_batch:
+            np.testing.assert_allclose(
+                svd.transform_one(x), svd.transform(x.reshape(1, -1))[0]
+            )
+
+    def test_center_false_no_mean(self, small_batch):
+        svd = SVD(center=False)
+        svd.fit(small_batch)
+        assert svd.mean_ is None
+
+    def test_center_true_equivalent_to_pca(self, small_batch):
+        """SVD(center=True) must produce the same components_ as PCA."""
+        svd = SVD()
+        svd.fit(small_batch)
+        pca = PCA()
+        pca.fit(small_batch)
+        # Both keep min(n-1, d) components; compare the first d cols
+        np.testing.assert_allclose(svd.components_, pca.components_, atol=1e-10)
+        np.testing.assert_allclose(svd.singular_values_, pca.singular_values_, atol=1e-10)
+
+    def test_sign_convention_stable(self, rng):
+        X = rng.normal(size=(30, 4))
+        perm = rng.permutation(len(X))
+        svd1 = SVD(n_components=3)
+        svd1.fit(X)
+        svd2 = SVD(n_components=3)
+        svd2.fit(X[perm])
+        np.testing.assert_allclose(svd1.components_, svd2.components_, atol=1e-10)
+
+    def test_raises_before_fit(self):
+        svd = SVD()
+        with pytest.raises(RuntimeError, match="not been fitted"):
+            svd.transform(np.ones((3, 2)))
+
+    def test_raises_before_fit_one(self):
+        svd = SVD()
+        with pytest.raises(RuntimeError, match="not been fitted"):
+            svd.transform_one(np.ones(2))
+
+    def test_too_few_samples_raises(self):
+        svd = SVD()
+        with pytest.raises(ValueError, match="at least 2 samples"):
+            svd.fit(np.ones((1, 3)))
+
+    def test_invalid_n_components_raises(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            SVD(n_components=0)
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="mode must be"):
+            SVD(mode="incremental")
+
+    def test_zero_variance_column_no_nan(self, rng):
+        X = rng.normal(size=(20, 3))
+        X[:, 0] = 3.0  # constant column
+        svd = SVD()
+        svd.fit(X)
+        Xt = svd.transform(X)
+        assert np.all(np.isfinite(Xt))
+
+    def test_mode_is_frozen(self):
+        assert SVD().mode == "frozen"
+
+    def test_pipeline_ridge_smoke(self, rng):
+        """SVD(n_components=2) | ConformalRidgeRegressor end-to-end smoke test."""
+        X = rng.normal(size=(50, 5))
+        X[:, 2] = X[:, 0] + 0.01 * rng.normal(size=50)  # near-collinear
+        y = X[:, 0] - X[:, 1] + rng.normal(scale=0.1, size=50)
+        pipe = SVD(n_components=2) | ConformalRidgeRegressor(a=1e-3, epsilon=0.1)
+        pipe.learn_initial_training_set(X, y)
+        interval = pipe.predict(X[0], epsilon=0.1)
+        assert interval.lower <= interval.upper

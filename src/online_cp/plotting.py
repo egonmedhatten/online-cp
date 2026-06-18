@@ -8,7 +8,8 @@ All functions return a matplotlib ``Axes`` object for composability.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -502,7 +503,7 @@ def plot_reliability_diagram(
             counts_list.append(n_bin)
         mean_pred = np.array(mean_pred_list)
         frac_pos = np.array(frac_pos_list)
-        counts = np.array(counts_list)
+        _counts = np.array(counts_list)  # noqa: F841 (retained for potential future use)
 
     # Diagonal reference
     ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Perfect calibration")

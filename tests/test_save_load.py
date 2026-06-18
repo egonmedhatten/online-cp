@@ -11,9 +11,6 @@ Tests cover:
 
 from __future__ import annotations
 
-import os
-import warnings
-
 import numpy as np
 import pytest
 
@@ -30,7 +27,6 @@ from online_cp import (
 )
 from online_cp._serialization import (
     SerializationError,
-    SerializableMixin,
     register_callable,
 )
 
@@ -672,8 +668,8 @@ class TestMondrianConformalRegressorRoundTrip:
 
 class TestMondrianConformalClassifierRoundTrip:
     def test_label_category_fn(self, tmp_path):
-        from online_cp.mondrian import MondrianConformalClassifier
         from online_cp.classifiers import ConformalNearestNeighboursClassifier
+        from online_cp.mondrian import MondrianConformalClassifier
         base = ConformalNearestNeighboursClassifier(k=5, label_space=[-1, 1])
         m = MondrianConformalClassifier(base, category_fn="label")
         m.learn_initial_training_set(X_CLF, Y_CLF)
@@ -685,8 +681,8 @@ class TestMondrianConformalClassifierRoundTrip:
         np.testing.assert_array_equal(orig.elements, new.elements)
 
     def test_callable_category_fn(self, tmp_path):
-        from online_cp.mondrian import MondrianConformalClassifier
         from online_cp.classifiers import ConformalNearestNeighboursClassifier
+        from online_cp.mondrian import MondrianConformalClassifier
         base = ConformalNearestNeighboursClassifier(k=5, label_space=[-1, 1])
         m = MondrianConformalClassifier(base, category_fn=_mondrian_cat_clf)
         m.learn_initial_training_set(X_CLF, Y_CLF)
@@ -710,8 +706,8 @@ def _test_utility_fn(x, y, d):
 
 class TestDecisionMakerRoundTrip:
     def test_round_trip(self, tmp_path):
-        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         from online_cp.CPS import RidgePredictionMachine
+        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         utility = UtilityFunction(fn=_test_utility_fn, decisions=[-1.0, 1.0])
         dm = ConformalPredictiveDecisionMaker(utility, RidgePredictionMachine)
         dm.learn_initial_training_set(X_REG, Y_REG)
@@ -723,8 +719,8 @@ class TestDecisionMakerRoundTrip:
         assert orig == new
 
     def test_utility_fn_preserved(self, tmp_path):
-        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         from online_cp.CPS import RidgePredictionMachine
+        from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
         utility = UtilityFunction(fn=_test_utility_fn, decisions=[-1.0, 1.0])
         dm = ConformalPredictiveDecisionMaker(utility, RidgePredictionMachine)
         path = tmp_path / "decision_fn.joblib"
@@ -812,7 +808,7 @@ def _shift_features(x):
 
 class TestFuncTransformerRoundTrip:
     def test_numpy_ufunc_round_trip(self, tmp_path):
-        from online_cp import Pipeline, FuncTransformer
+        from online_cp import FuncTransformer, Pipeline
         # log1p requires non-negative inputs.
         X = np.abs(X_REG) + 0.1
         ft = FuncTransformer(np.log1p)
@@ -829,7 +825,7 @@ class TestFuncTransformerRoundTrip:
         assert abs(orig.upper - new.upper) < 1e-10
 
     def test_named_function_round_trip(self, tmp_path):
-        from online_cp import Pipeline, FuncTransformer
+        from online_cp import FuncTransformer, Pipeline
         ft = FuncTransformer(_shift_features)
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(ft, regressor)
@@ -845,7 +841,7 @@ class TestFuncTransformerRoundTrip:
         assert abs(orig.upper - new.upper) < 1e-10
 
     def test_lambda_raises_serialization_error(self, tmp_path):
-        from online_cp import Pipeline, FuncTransformer
+        from online_cp import FuncTransformer, Pipeline
         ft = FuncTransformer(lambda x: x + 1.0)
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(ft, regressor)
@@ -853,4 +849,102 @@ class TestFuncTransformerRoundTrip:
         path = tmp_path / "pipeline_lambda.joblib"
         with pytest.raises(SerializationError):
             pipe.save(str(path))
+
+
+# ---------------------------------------------------------------------------
+# Phase C — PCA and SVD serialization
+# ---------------------------------------------------------------------------
+
+from online_cp import PCA, SVD
+
+
+class TestPCARoundTrip:
+    def test_round_trip_transforms_equal(self, tmp_path):
+        """fit → save → load → transform must produce identical arrays."""
+        pca = PCA(n_components=2)
+        pca.fit(X_REG)
+        path = tmp_path / "pca.joblib"
+        pca.save(str(path))
+        loaded = PCA.load(str(path))
+        np.testing.assert_allclose(
+            pca.transform(X_REG), loaded.transform(X_REG), atol=1e-10
+        )
+
+    def test_state_preserved(self, tmp_path):
+        """components_, singular_values_, mean_, n_ all survive round-trip."""
+        pca = PCA()
+        pca.fit(X_REG)
+        path = tmp_path / "pca_state.joblib"
+        pca.save(str(path))
+        loaded = PCA.load(str(path))
+        np.testing.assert_allclose(pca.mean_, loaded.mean_, atol=1e-14)
+        np.testing.assert_allclose(pca.components_, loaded.components_, atol=1e-14)
+        np.testing.assert_allclose(pca.singular_values_, loaded.singular_values_, atol=1e-14)
+        assert pca.n_ == loaded.n_
+
+    def test_params_preserved(self, tmp_path):
+        pca = PCA(n_components=1, mode="frozen")
+        pca.fit(X_REG)
+        path = tmp_path / "pca_params.joblib"
+        pca.save(str(path))
+        loaded = PCA.load(str(path))
+        assert loaded.n_components == 1
+        assert loaded.mode == "frozen"
+
+    def test_pipeline_pca_ridge_round_trip(self, tmp_path):
+        """Full Pipeline(PCA, ConformalRidgeRegressor) save/load round-trip."""
+        from online_cp import Pipeline
+        pipe = Pipeline(PCA(n_components=1), ConformalRidgeRegressor(a=1e-3, rnd_state=7))
+        pipe.learn_initial_training_set(X_REG, Y_REG)
+        path = tmp_path / "pipeline_pca_ridge.joblib"
+        pipe.save(str(path))
+        loaded = Pipeline.load(str(path))
+        orig = pipe.predict(X_TEST_REG, epsilon=0.1)
+        back = loaded.predict(X_TEST_REG, epsilon=0.1)
+        assert abs(orig.lower - back.lower) < 1e-10
+        assert abs(orig.upper - back.upper) < 1e-10
+
+
+class TestSVDRoundTrip:
+    def test_round_trip_transforms_equal_center_true(self, tmp_path):
+        svd = SVD(n_components=1, center=True)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_center.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        np.testing.assert_allclose(
+            svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10
+        )
+
+    def test_round_trip_transforms_equal_center_false(self, tmp_path):
+        svd = SVD(n_components=1, center=False)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_nocenter.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        np.testing.assert_allclose(
+            svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10
+        )
+        assert loaded.mean_ is None
+
+    def test_state_preserved(self, tmp_path):
+        svd = SVD(n_components=1)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_state.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        np.testing.assert_allclose(svd.mean_, loaded.mean_, atol=1e-14)
+        np.testing.assert_allclose(svd.components_, loaded.components_, atol=1e-14)
+        np.testing.assert_allclose(svd.singular_values_, loaded.singular_values_, atol=1e-14)
+        assert svd.n_ == loaded.n_
+
+    def test_params_preserved(self, tmp_path):
+        svd = SVD(n_components=1, mode="frozen", center=False)
+        svd.fit(X_REG)
+        path = tmp_path / "svd_params.joblib"
+        svd.save(str(path))
+        loaded = SVD.load(str(path))
+        assert loaded.n_components == 1
+        assert loaded.mode == "frozen"
+        assert loaded.center is False
 

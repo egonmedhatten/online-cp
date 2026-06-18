@@ -6,18 +6,15 @@ import pytest
 from online_cp import (
     ConformalNearestNeighboursClassifier,
     ConformalRidgeRegressor,
-    Discard,
     FuncTransformer,
-    ObservedFuzziness,
     IntervalWidth,
+    ObservedFuzziness,
     Pipeline,
     Select,
     Transformer,
-    TransformerUnion,
     iter_progressive_val,
     progressive_val,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -203,7 +200,6 @@ def test_progressive_val_regressor_pipeline_coverage(linear_dataset):
     )
     pipe.learn_initial_training_set(X[:n_train], y[:n_train])
 
-    from online_cp import IntervalWidth
 
     metric = IntervalWidth()
     progressive_val(pipe, X[n_train:], y[n_train:], metric=metric)

@@ -5,7 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+---
+
+## [0.3.0] — 2026-06-18
+
+### Added
+
+- **Legendre Jumper Martingales** (`online_cp.martingale`) — four new conformal
+  test martingales based on Legendre polynomial betting, following:
+
+  > "([LegendreJumper, preprint]).
+
+  - `SimpleLegendreJumper(order, J, epsilon_grid)` — Algorithm 2; single-order
+    Legendre polynomial basis with Markov expert chain.
+  - `ProductLegendreJumper(orders, J, epsilon_grid)` — Algorithm 3; full
+    Cartesian product state space E_1 × ⋯ × E_K with Z-normalised product
+    betting function.
+  - `VariationalLegendreJumper(orders, J, epsilon_grid)` — Algorithm 4;
+    O(|K|·g) per-step linear alternative using independent sub-jumpers,
+    consensus parameters, and precomputed Gaunt coefficients.
+  - `CompositeLegendreJumper(base_class, J)` — arithmetic mean over multiple
+    jump rates; analogue of `CompositeJumper` for Legendre families.
+  - Utility functions: `shifted_legendre_poly`, `compute_normalization_Z`,
+    `product_betting_value`, `STANDARD_GRID`.
+  - All four classes exported from `online_cp` top-level.
+  - 45 tests in `tests/test_martingale_legendre.py`; 2 adversarial leancheck
+    properties in `tests/test_properties_adversarial.py` (A7, A8).
+
+- **`VennPredictor` base class** (`online_cp.venn`) — shared abstract base for
+  all Venn predictors, analogous to `ConformalClassifier`/`ConformalRegressor`:
+  - Manages `label_space` initialisation and incremental updates
+    (`_update_label_space_batch`, `_update_label_space_one`).
+  - Provides `_empty_prediction()` and the taxonomy dispatch hook
+    `_categories_for_hypothesis` / `_venn_predict_from_taxonomy` for
+    subclasses that use partition-based taxonomies.
+  - `VennAbersPredictor` and `NearestNeighboursVennPredictor` now inherit
+    `VennPredictor`; all existing behaviour is unchanged.
+
+  - **`PCA` transformer** (`online_cp.preprocessing`) — principal-component rotation
+    for use as a preprocessing step in `Pipeline`.
+    - Computes the unbiased sample covariance matrix and decomposes it via
+      `numpy.linalg.eigh`; eigenvectors are sorted by descending explained variance
+      and given a deterministic sign convention (largest-magnitude element positive).
+    - Parameters: `n_components` (int or None), `mode` ("frozen"/"bag").
+    - Attributes: `mean_`, `components_` (shape k×d), `singular_values_`, `n_`.
+    - Full `save`/`load` serialization via `SerializableMixin`.
+    - Primary use-case: axis-aligning features before Mondrian conformal methods to
+      yield tighter, more balanced partitions.
+
+- **`SVD` transformer** (`online_cp.preprocessing`) — truncated right-singular-vector
+    projection for dimensionality reduction and multicollinearity removal.
+    - Identical algorithm to `PCA`; adds a `center` parameter (default `True`).
+      When `center=True` the result is numerically identical to `PCA`; `center=False`
+      uses the raw (uncentred) Gram matrix with an `n` denominator.
+    - Parameters: `n_components`, `mode`, `center`.
+    - Full `save`/`load` serialization via `SerializableMixin`.
+    - Primary use-case: stabilising `ConformalRidgeRegressor` and `RidgePredictionMachine`
+      on near-collinear or high-dimensional feature matrices.
+
+  - Both `PCA` and `SVD` exported from `online_cp` top-level.
+  - 27 unit tests in `tests/test_preprocessing.py`.
+  - 8 round-trip serialization tests in `tests/test_save_load.py`.
+  - 2 leancheck orthonormality properties (P22, P23) in `tests/test_properties.py`.
+  - `docs/api/pipeline.md` updated with mkdocstrings entries for both classes.
+
+### Changed
+
+- **`ConformalSupportVectorMachine` nonconformity measure** — default NCM
+  changed from Lagrange multiplier (`alpha_i`) to signed margin
+  (`-(y_i · f(x_i))`, where `f` is the SVM decision function). The margin
+  NCM is continuous (no ties), improving efficiency (smaller prediction sets)
+  on noisy and overlapping data while preserving the coverage guarantee.
+  The original `alpha` NCM is retained via `nonconformity='alpha'`; the new
+  default is `nonconformity='margin'`. The multiclass same-class restriction
+  required for validity in OVR decomposition applies to both NCMs.
+
+- **`online_cp.martingale` is now a package** (`martingale/`) split into
+  submodules `base`, `jumpers`, `sleepers`, `wrappers`, `legendre`. All
+  existing public names remain importable at the same paths — no breakage.
 
 ### Added
 
@@ -105,6 +182,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Property test suite aligned with LeanCheck idiom** (`tests/test_properties.py`,
+  `tests/test_properties_adversarial.py`):
+  - `leancheck.precondition()` now used for all vacuous-case guards (8 locations).
+    Previously `if condition: return True` inflated the passed-test count; skipped
+    cases are now reported honestly (e.g. `passed 354 tests` instead of `360`).
+  - Domain-specific `Enumerator` types registered as float subclasses:
+    `Epsilon` (12 significance levels including 0.01, 0.02), `UnitProb` (τ, p₀/p₁
+    on a 101-point [0, 1] grid), `PValue` (99-point open-(0, 1) grid). Property
+    signatures now express domain constraints directly; int→domain helper functions
+    (`_eps`, `_unit_prob`, `_tau_val`, `_pvals`) removed. LeanCheck exhausts finite
+    enumerators and reports `(exhausted)` — nesting properties now confirm complete
+    pairwise coverage at 132 tests, CPD boundary conditions at 101 tests.
+  - Three-tier test budget (`_TESTS_SLOW = 360`, `_TESTS_MED = 720`,
+    `_TESTS_FAST = 3600`) replaces the former two-tier `MAX_TESTS = 200` / 500 split.
+    Sequence-loop and matrix-decomposition properties were previously misclassified
+    as "fast"; they now use the correct MED tier. `minimum_training_set` properties
+    switched from `k: int` with modular arithmetic (wasted 3500+ repetitions at 3600
+    tests) to `eps: PValue` (exhausted at 99 tests in < 5 ms).
+  - `leancheck.main(verbose=True, exit_on_failure=False)` added to both files so
+    `python3 tests/test_properties.py` runs all properties with LeanCheck's native
+    per-property report.
+  - `_check()` wrapper removed; all `test_*` functions call `leancheck.check()`
+    directly with an explicit, named budget constant.
+
 - **martingale.py direct script execution**: Handle relative imports with try/except fallback for both package context and direct script execution (needed for CI `run-modules` step).
 - **Holistic audit findings** (pre-v0.3.0 freeze):
   - Exported but undocumented classes added to API docs: `Kernel`, `CustomKernel` (kernels.md), `ConformalPredictiveDecisionMaker` (decision.md), `MulticlassVennPrediction` (venn.md).
@@ -113,6 +214,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Version alignment: CITATION.cff updated 0.1.1 → 0.2.0.
 
 ### Changed
+
+- **Documentation pass** — all public docstrings enriched for v0.3.0:
+  ALRW2 section/theorem citations, MathJax LaTeX formulas, property
+  classifications (proper scoring rules vs. efficiency criteria), and full
+  parameter docs across all modules. RST directives (`.. math::`,
+  `.. warning::`) converted to MkDocs/admonition syntax. Pre-existing
+  broken module-level doctests fixed (`evaluate`, `Metrics`, `PluginMartingale`,
+  `UtilityFunction`). `martingale_legendre_dev.py` removed (superseded by
+  `legendre.py`).
 
 - **BREAKING**: `VennPrediction` is now a unified class for binary *and*
   multiclass predictions. Binary: `VennPrediction.binary(p0, p1)`.

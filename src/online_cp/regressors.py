@@ -1,8 +1,33 @@
-"""Online conformal regressors.
+r"""Online conformal regressors.
 
-This module implements conformal regressors that produce prediction intervals
-with guaranteed coverage. Includes ridge regression, kernel ridge regression,
-and Lasso-based conformal regressors.
+Conformal regressors turn any point predictor into an interval predictor with a
+finite-sample, distribution-free coverage guarantee. Given a *nonconformity
+measure* $A$ that scores how unusual a labelled example $(x, y)$ looks relative
+to the others, the conformal predictor outputs the set of candidate labels whose
+conformal p-value exceeds the significance level $\epsilon$. Under
+exchangeability of the data stream this set is *valid*:
+
+$$
+\mathbb{P}\bigl(y_n \in \Gamma^\epsilon(x_n)\bigr) \geq 1 - \epsilon ,
+$$
+
+and in the online (sequential) setting the long-run error rate converges to
+$\epsilon$ (the predictor is *well calibrated*; see [ALRW2 Ch.2]).
+
+The regressors differ only in their underlying point predictor and hence in the
+nonconformity measure they induce:
+
+- :class:`ConformalRidgeRegressor` — ridge regression; NCM is the (optionally
+  studentised) residual $|y - \hat y|$.
+- :class:`ConformalNearestNeighboursRegressor` — $k$-NN; NCM is the
+  leave-one-out $k$-NN residual.
+- :class:`KernelConformalRidgeRegressor` — kernel ridge regression in an RKHS.
+- :class:`ConformalLassoRegressor` — Lasso / elastic net via exact homotopy.
+
+References
+----------
+[ALRW2] Vovk, Gammerman & Shafer, *Algorithmic Learning in a Random World*,
+2nd ed., Springer, 2022.
 """
 
 from __future__ import annotations
@@ -244,8 +269,19 @@ class ConformalRegressor(SerializableMixin):
                 return int(np.ceil(1 / epsilon.min()))
 
 class ConformalRidgeRegressor(ConformalRegressor):
-    """
-    Conformal ridge regression (Algorithm 2.4 in Algorithmic Learning in a Random World)
+    r"""Conformal ridge regression ([ALRW2 §2.3], Algorithm 2.4).
+
+    Online conformal predictor built on ridge regression. The nonconformity
+    measure is the residual $\alpha_i = |y_i - \hat y_i|$ of the ridge fit; with
+    ``studentised=True`` it is divided by $\sqrt{1 - h_{ii}}$ (the leverage
+    correction), which makes the scores more exchangeable when leverages differ.
+    Because ridge residuals are an affine function of the hypothesised test
+    label, the whole prediction interval is computed in closed form (no grid
+    search) and the design-matrix inverse is maintained online via the
+    Sherman–Morrison update.
+
+    Under exchangeability the resulting intervals satisfy
+    $\mathbb{P}(y \in \Gamma^\epsilon(x)) \geq 1 - \epsilon$.
 
     Let's create a dataset with noisy evaluations of the function f(x1,x2) = x1+x2:
 
@@ -291,16 +327,32 @@ class ConformalRidgeRegressor(ConformalRegressor):
     def __init__(
         self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon, recompute_every: int | None = None
     ) -> None:
-        """
-        The ridge parameter (L2 regularisation) is a.
-        Setting autotune=True automatically tunes the ridge parameter using generalized cross validation when learning initial training set.
+        r"""Create a conformal ridge regressor.
 
         Parameters
         ----------
-        recompute_every : int or None
+        a : float, default 0
+            Ridge (L2) regularisation parameter. ``a > 0`` is required if
+            $X^\top X$ is singular (e.g. fewer examples than features).
+        warnings : bool, default True
+            Whether to emit numerical-stability warnings (e.g. ill-conditioned
+            inverse, significance level too small for the training set).
+        autotune : bool, default False
+            If True, tune ``a`` by generalized cross-validation when
+            :meth:`learn_initial_training_set` is called.
+        verbose : int, default 0
+            Verbosity level.
+        rnd_state : int or None, default None
+            Seed for the random number generator used to draw the smoothing
+            variable $\tau$ for smoothed p-values.
+        studentised : bool, default False
+            If True, use studentised residuals $|y - \hat y| / \sqrt{1 - h_{ii}}$
+            as the nonconformity measure instead of raw residuals.
+        epsilon : float, default 0.1
+            Default significance level.
+        recompute_every : int or None, default None
             If set, recompute the full matrix inverse from scratch every N
             Sherman-Morrison updates to correct accumulated floating-point drift.
-            Default None (no periodic recomputation).
         """
         super().__init__(epsilon=epsilon)
 
@@ -328,6 +380,19 @@ class ConformalRidgeRegressor(ConformalRegressor):
         self._n_sm_updates = 0
 
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
+        """Batch-fit the ridge model on an initial training set.
+
+        Stores ``X``/``y`` and computes the design-matrix inverse
+        $(X^\\top X + aI)^{-1}$ that is updated online thereafter. If
+        ``autotune`` is set, the ridge parameter is tuned first.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n, d)
+            Training objects.
+        y : ndarray of shape (n,)
+            Training responses.
+        """
         self.X = X
         self.y = y
         self.p = X.shape[1]
@@ -643,8 +708,33 @@ class ConformalRidgeRegressor(ConformalRegressor):
             return result
 
     def compute_p_value(self, x, y, bounds="both", precomputed=None, tau=None, smoothed=True):
-        """
-        Computes the smoothed p-value of the example (x, y).
+        r"""Conformal p-value of the candidate example $(x, y)$.
+
+        The p-value is the (smoothed) rank of the test example's nonconformity
+        score among all scores; a candidate label $y$ is included in
+        $\Gamma^\epsilon(x)$ iff its p-value exceeds $\epsilon$.
+
+        Parameters
+        ----------
+        x : ndarray of shape (d,)
+            Test object.
+        y : float
+            Candidate response.
+        bounds : {"both", "lower", "upper"}, default "both"
+            Which tail(s) of the conformity region to score.
+        precomputed : dict or None
+            Cached ``{X, XTXinv, A, B}`` from :meth:`predict` (with
+            ``return_update=True``) to avoid recomputation.
+        tau : float or None
+            Smoothing variable in $[0, 1]$. If None and ``smoothed`` is True it
+            is drawn uniformly at random.
+        smoothed : bool, default True
+            Whether to return the smoothed (exactly valid) p-value.
+
+        Returns
+        -------
+        float
+            The conformal p-value.
         """
         if tau is None and smoothed:
             tau = self.rnd_gen.uniform(0, 1)
@@ -996,7 +1086,6 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # Strategy: compute all training nonconformity scores under the
         # augmented distance matrix, then find the threshold.
 
-        k = min(self.k, n_aug - 1)
         agg_func = np.mean if self.aggregation == "mean" else np.median
 
         # For each training point i (0..n-1), compute its leave-one-out
@@ -1156,6 +1245,18 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
 
 class KernelConformalRidgeRegressor(ConformalRegressor):
+    r"""Kernel conformal ridge regression ([ALRW2 §2.3, §7.4]).
+
+    The "kernel trick" applied to :class:`ConformalRidgeRegressor`: ridge
+    regression is performed implicitly in the reproducing-kernel Hilbert space
+    induced by ``kernel``, so the predictor can fit non-linear targets while
+    keeping the same closed-form, exchangeability-based validity. The
+    nonconformity measure is the (optionally studentised) residual in feature
+    space; the kernel matrix inverse is maintained online by a rank-1 update.
+
+    Some ready-made kernels live in :mod:`online_cp.kernels`, but most
+    scikit-learn kernels and any callable ``kernel(X, X') -> ndarray`` also work.
+    """
 
     _SAVE_PARAMS: tuple = (
         "kernel", "a", "warnings", "verbose", "rnd_state",

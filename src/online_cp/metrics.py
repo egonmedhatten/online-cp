@@ -1,8 +1,25 @@
-"""Evaluation metrics for online conformal prediction.
+r"""Evaluation metrics for online conformal prediction.
 
 Provides stateful metric objects that accumulate results step-by-step
 in the online learning protocol. Metrics are composable via the ``+``
 operator and share a uniform ``.update()`` interface.
+
+The metrics fall into three theoretical families:
+
+- **Criteria of efficiency** for conformal predictors and transducers
+  [ALRW2 §3.1]. These come in *prior* (label-independent) and *observed*
+  (label-dependent) variants, and in *$\epsilon$-dependent* and *$\epsilon$-free*
+  forms. :class:`SetSize` (N), :class:`ObservedExcess` (OE) and
+  :class:`ObservedFuzziness` (OF) are **conditionally strongly proper**
+  [ALRW2 §3.1.5, Thm 3.1]; :class:`ErrorRate` measures validity rather than
+  efficiency.
+- **Proper scoring rules** for distributional / probabilistic forecasts:
+  :class:`WinklerScore`, :class:`BrierScore`, :class:`LogLoss`, and the CRPS
+  family (:class:`TruncatedCRPS`, :class:`ConformalCRPS`).
+- **Calibration diagnostics**: :class:`CalibrationError`, :class:`Width`.
+
+References to ALRW2 are to V. Vovk, A. Gammerman and G. Shafer,
+*Algorithmic Learning in a Random World*, 2nd ed., Springer, 2022.
 
 Example
 -------
@@ -121,10 +138,15 @@ class Metric:
 class Metrics:
     """Composite of multiple metrics, created via the ``+`` operator.
 
+    Calling :meth:`update` forwards the observation to every contained metric,
+    and :meth:`get` returns a ``{name: running_mean}`` dictionary.
+
     Example
     -------
-    >>> metric = ErrorRate() + IntervalWidth()
-    >>> metric.update(y=1.0, Gamma=interval)
+    >>> metric = ErrorRate() + SetSize()
+    >>> metric.update(y=1, Gamma={1, 2})
+    >>> metric.get()
+    {'ErrorRate': 0.0, 'SetSize': 2.0}
     """
 
     def __init__(self, metrics: list[Metric]) -> None:
@@ -183,8 +205,20 @@ class Metrics:
 
 
 class ErrorRate(Metric):
-    """Fraction of times the true label falls outside the prediction set.
+    r"""Error rate: fraction of times the true label is excluded.
 
+    For a prediction set / interval $\Gamma^\epsilon$ at significance level
+    $\epsilon$, the per-step score is the miss indicator
+
+    $$
+    \mathrm{err}^\epsilon = \mathbf{1}\{y \notin \Gamma^\epsilon\},
+    $$
+
+    and ``get()`` returns the running error rate $\mathrm{Err}_n^\epsilon / n$.
+    This is a measure of *validity* rather than efficiency: for an (exactly)
+    valid conformal predictor the errors at level $\epsilon$ behave like
+    independent Bernoulli($\epsilon$) trials, so
+    $\mathrm{Err}_n^\epsilon / n \to \epsilon$ almost surely [ALRW2 §2.1, §3.1].
     Works for both classifiers (prediction sets) and regressors (intervals).
     """
 
@@ -193,10 +227,31 @@ class ErrorRate(Metric):
 
 
 class ObservedExcess(Metric):
-    """Number of incorrect labels in the prediction set (OE).
+    r"""Observed excess (OE): number of *false* labels in the prediction set.
 
-    For classifiers: |Gamma| - 1 if y in Gamma, else |Gamma|.
-    A conditionally proper efficiency criterion.
+    Per-step score at significance level $\epsilon$,
+
+    $$
+    \mathrm{OE}^\epsilon = \bigl|\Gamma^\epsilon \setminus \{y\}\bigr|
+        = |\Gamma^\epsilon| - \mathbf{1}\{y \in \Gamma^\epsilon\},
+    $$
+
+    i.e. $|\Gamma| - 1$ when the true label is covered and $|\Gamma|$ when it is
+    not. ``get()`` returns the average over the stream.
+
+    **Criterion type.** OE is an *observed* (it depends on the realised label
+    $y$) and *$\epsilon$-dependent* criterion of efficiency. By
+    [ALRW2 §3.1.5, Thm 3.1] it is one of the four criteria (S, N, OF, OE) that
+    are **conditionally strongly proper**: the conditional-probability idealised
+    conformity measure $A(x, y) = Q(y \mid x)$, and every refinement of it, is
+    optimal for OE. Intuitively, a conditionally proper criterion rewards
+    conformity scores that rank labels by their true conditional probability, so
+    optimising OE does not pull the underlying scorer away from the
+    Bayes-optimal ordering. Contrast with the prior $\epsilon$-dependent
+    counterpart :class:`SetSize` (N) and the $\epsilon$-free observed
+    counterpart :class:`ObservedFuzziness` (OF).
+
+    Smaller is better.
     """
 
     def _score(self, y, Gamma, **kw):
@@ -206,10 +261,29 @@ class ObservedExcess(Metric):
 
 
 class ObservedFuzziness(Metric):
-    """Sum of p-values for incorrect labels (OF).
+    r"""Observed fuzziness (OF): sum of p-values for the *false* labels.
 
-    Requires ``p_values`` keyword argument (dict: label -> p-value).
-    A conditionally proper efficiency criterion independent of epsilon.
+    Given the system of conformal p-values $(p^{y'} : y' \in \mathbf{Y})$ for the
+    test object, the per-step score is
+
+    $$
+    \mathrm{OF} = \sum_{y' \neq y} p^{y'},
+    $$
+
+    the sum of p-values over all labels other than the realised one. ``get()``
+    returns the average over the stream.
+
+    **Criterion type.** OF is an *observed* and *$\epsilon$-free* criterion of
+    efficiency (it needs no significance level, only the p-values). By
+    [ALRW2 §3.1.5, Thm 3.1] it is **conditionally strongly proper** — it shares
+    the optimal idealised conformity measures of S, N and OE, namely all
+    refinements of the conditional-probability measure $A(x, y) = Q(y \mid x)$.
+    Being $\epsilon$-free, it summarises efficiency across all significance
+    levels at once, and is the natural $\epsilon$-free analogue of
+    :class:`ObservedExcess` (OE).
+
+    Requires the ``p_values`` keyword argument (a ``dict`` mapping each label to
+    its conformal p-value). Smaller is better.
     """
 
     def _score(self, y, Gamma=None, *, p_values=None, **kw):
@@ -219,24 +293,73 @@ class ObservedFuzziness(Metric):
 
 
 class SetSize(Metric):
-    """Size of the prediction set (for classifiers)."""
+    r"""Set size (N): number of labels in the prediction set.
+
+    Per-step score $|\Gamma^\epsilon|$ at significance level $\epsilon$;
+    ``get()`` returns the average. Intended for classification; for regression
+    use :class:`IntervalWidth` as the analogous sharpness measure.
+
+    **Criterion type.** N is a *prior* criterion (it ignores the realised label
+    $y$) and is *$\epsilon$-dependent*. By [ALRW2 §3.1.5, Thm 3.1] it is
+    **conditionally strongly proper**, sharing the optimal idealised conformity
+    measures of S, OF and OE. It is the prior counterpart of the observed
+    criterion :class:`ObservedExcess` (OE): where OE counts only false labels, N
+    counts all labels — including the true one, which a valid predictor covers
+    with probability $1 - \epsilon$.
+
+    Smaller is better.
+    """
 
     def _score(self, y, Gamma, **kw):
         return float(len(Gamma))
 
 
 class IntervalWidth(Metric):
-    """Width of the prediction interval (for regressors)."""
+    r"""Interval width: sharpness measure for regression.
+
+    Per-step score is the length $u - \ell$ of the prediction interval
+    $\Gamma^\epsilon = [\ell, u]$ produced at significance level $\epsilon$;
+    ``get()`` returns the average. This is the regression analogue of
+    :class:`SetSize` (N): given (approximately) valid coverage, narrower
+    intervals are more informative.
+
+    Width alone does not penalise miscoverage, so it should be read together with
+    :class:`ErrorRate`; see :class:`WinklerScore` for a single proper score that
+    combines width and coverage.
+    """
 
     def _score(self, y, Gamma, **kw):
         return float(Gamma.width())
 
 
 class WinklerScore(Metric):
-    """Winkler interval score — a proper scoring rule for interval forecasts.
+    r"""Winkler interval score — a proper scoring rule for interval forecasts.
 
-    Requires the prediction interval to have ``.lower`` and ``.upper``
-    attributes, and ``epsilon`` to be provided.
+    For a central $(1 - \epsilon)$ prediction interval $[\ell, u]$ the per-step
+    score is
+
+    $$
+    W^\epsilon = (u - \ell)
+    + \frac{2}{\epsilon}(\ell - y)\,\mathbf{1}\{y < \ell\}
+    + \frac{2}{\epsilon}(y - u)\,\mathbf{1}\{y > u\},
+    $$
+
+    i.e. the interval width plus a coverage penalty, scaled by $2/\epsilon$, for
+    realisations falling outside the interval. Unlike the pure efficiency
+    criteria (:class:`SetSize`, :class:`IntervalWidth`) this is a **proper
+    scoring rule**: it is minimised in expectation by the true central
+    $(1-\epsilon)$ interval, so it rewards calibration and sharpness jointly
+    rather than width alone. Smaller is better; an infinite interval yields an
+    infinite score.
+
+    Notes
+    -----
+    Requires the prediction interval to expose ``.lower`` and ``.upper``.
+
+    The significance level used for the $2/\epsilon$ tail penalty is resolved
+    per score: an explicit ``epsilon`` keyword takes precedence; otherwise the
+    interval's own ``Gamma.epsilon`` attribute is used; if neither is available
+    it falls back to ``0.1``. It must be positive.
     """
 
     def _score(self, y, Gamma, *, epsilon=None, **kw):
@@ -257,13 +380,23 @@ class WinklerScore(Metric):
 
 
 class CRPS(Metric):
-    """Continuous Ranked Probability Score for conformal predictive distributions.
+    r"""Continuous Ranked Probability Score (CRPS) for conformal predictive systems.
 
-    .. deprecated::
-        This class delegates to :class:`TruncatedCRPS`. Prefer using
-        ``TruncatedCRPS`` or ``ConformalCRPS`` explicitly.
+    The CRPS of a predictive CDF $F$ against an outcome $y$ is
+    $\int_{-\infty}^{\infty} (F(t) - \mathbf{1}\{y \leq t\})^2 \, dt$, a
+    **proper scoring rule** for distributional forecasts. For a conformal
+    predictive distribution the integral is taken against the (randomised)
+    predictive CDF $Q_\tau$.
 
-    Requires ``cpd`` keyword argument (a conformal predictive distribution object).
+    !!! warning "Deprecated"
+        This class is retained for backward compatibility and simply delegates
+        to :class:`TruncatedCRPS`. The raw CRPS integral diverges for a conformal
+        predictive distribution because its tails are mass-deficient (they do not
+        reach 0 and 1); prefer :class:`TruncatedCRPS` or :class:`ConformalCRPS`,
+        which keep the score finite by truncating the integral or replacing the
+        Heaviside indicator, respectively.
+
+    Requires the ``cpd`` keyword argument (a conformal predictive distribution).
     """
 
     def _score(self, y, Gamma=None, *, cpd=None, **kw):
@@ -277,23 +410,28 @@ class CRPS(Metric):
 
 
 class TruncatedCRPS(Metric):
-    """Truncated CRPS: integrate over data support only.
+    r"""Truncated CRPS: integrate the CRPS over the data support only.
 
-    Computes the standard CRPS formula but restricted to the interval
-    [C_1, C_{n-1}] (the finite critical points), avoiding divergence
-    from the mass-deficient tails. Uses exact piecewise-constant summation.
+    Computes the CRPS integrand but restricts it to the interval
+    $[C_1, C_{m-1}]$ spanned by the *finite* critical points of the conformal
+    predictive distribution, avoiding the divergence caused by its
+    mass-deficient tails. Using the exact piecewise-constant form,
 
-    .. math::
+    $$
+    \mathrm{TruncatedCRPS} = \sum_{j=1}^{m-1}
+        \bigl[Q_\tau(C_j) - \mathbf{1}\{y \leq C_j\}\bigr]^2 \,
+        (C_{j+1} - C_j),
+    $$
 
-        \\text{TruncatedCRPS} = \\sum_{j=1}^{m-1}
-            [Q_\\tau(C_j) - \\mathbf{1}(y \\leq C_j)]^2 \\, (C_{j+1} - C_j)
+    where $C_1 < \dots < C_m$ are the finite critical points (the sorted
+    conformal scores), $Q_\tau$ is the conformal predictive CDF evaluated at
+    randomisation $\tau$, and the indicator is the usual Heaviside step.
 
-    where :math:`Q_\\tau` is the CPD evaluated at randomisation :math:`\\tau`
-    and the sum runs over finite critical points.
+    Because of the truncation it is **not strictly proper**, but it is finite,
+    cheap, and a common pragmatic choice. See :class:`ConformalCRPS` for a
+    variant that replaces the Heaviside indicator instead of truncating.
 
-    NOT strictly proper (due to truncation), but pragmatic and common.
-
-    Requires ``cpd`` keyword argument and optionally ``tau`` (default 0.5).
+    Requires the ``cpd`` keyword argument and optionally ``tau`` (default 0.5).
     """
 
     def _score(self, y, Gamma=None, *, cpd=None, tau=0.5, **kw):
@@ -321,22 +459,25 @@ class TruncatedCRPS(Metric):
 
 
 class ConformalCRPS(Metric):
-    """Conformal CRPS: replace the indicator with the CPD's conformal indicator.
+    r"""Conformal CRPS: replace the Heaviside indicator with the CPD's own CDF.
 
-    Instead of the standard Heaviside indicator :math:`\\mathbf{1}(y \\leq x)`,
-    uses the CPD's own CDF evaluated at the true outcome :math:`Q_\\tau(y)` as
-    the "conformal indicator", ensuring the integrand shares the CPD's
-    mass-deficiency bounds.
+    Instead of truncating the integral, this variant replaces the Heaviside
+    indicator $\mathbf{1}\{y \leq C_j\}$ with the conformal predictive CDF
+    evaluated at the true outcome, $Q_\tau(y)$, used as a "conformal indicator".
+    This keeps both terms bounded by the CPD's mass, so the integrand inherits
+    the same mass-deficiency bounds:
 
-    .. math::
+    $$
+    \mathrm{ConformalCRPS} = \sum_{j=1}^{m-1}
+        \bigl[Q_\tau(C_j) - Q_\tau(y)\bigr]^2 \, (C_{j+1} - C_j),
+    $$
 
-        \\text{ConformalCRPS} = \\sum_{j=1}^{m-1}
-            [Q_\\tau(C_j) - Q_\\tau(y)]^2 \\, (C_{j+1} - C_j)
+    with $C_1 < \dots < C_m$ the finite critical points and $Q_\tau$ the
+    conformal predictive CDF at randomisation $\tau$. Finite by construction;
+    **not strictly proper**, but theoretically motivated and a natural companion
+    to :class:`TruncatedCRPS`.
 
-    Finite by construction (both terms bounded by CPD mass). NOT strictly
-    proper, but theoretically motivated.
-
-    Requires ``cpd`` keyword argument and optionally ``tau`` (default 0.5).
+    Requires the ``cpd`` keyword argument and optionally ``tau`` (default 0.5).
     """
 
     def _score(self, y, Gamma=None, *, cpd=None, tau=0.5, **kw):
@@ -368,13 +509,24 @@ class ConformalCRPS(Metric):
 
 
 class BrierScore(Metric):
-    """Brier score for Venn predictor outputs.
+    r"""Brier score for Venn predictor outputs — a proper scoring rule.
 
-    Evaluates the aggregated point probability from a ``VennPrediction``
-    using the standard Brier score: :math:`(p_{\\text{point}} - \\mathbf{1}\\{y = k\\})^2`
-    summed over all labels.
+    Scores the aggregated point probability $p_{\text{point}}$ of a
+    :class:`~online_cp.venn.VennPrediction` with the multiclass Brier score
 
-    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+    $$
+    \mathrm{BS} = \sum_{k \in \mathbf{Y}}
+        \bigl(p_{\text{point}}[k] - \mathbf{1}\{y = k\}\bigr)^2 ,
+    $$
+
+    the squared $\ell_2$ distance between the probability vector and the one-hot
+    outcome. The Brier score is a **proper scoring rule**, so it is minimised in
+    expectation by the true conditional class probabilities and rewards both
+    calibration and sharpness. The Venn point probability is the multiprobability
+    average and requires no renormalisation. Smaller is better; compare with
+    :class:`LogLoss`.
+
+    Requires the ``venn`` keyword argument (a ``VennPrediction`` object).
     """
 
     def _score(self, y, Gamma=None, *, venn=None, **kw):
@@ -392,12 +544,22 @@ class BrierScore(Metric):
 
 
 class LogLoss(Metric):
-    """Log loss for Venn predictor outputs.
+    r"""Log loss (negative log-likelihood) for Venn outputs — a proper scoring rule.
 
-    Evaluates the aggregated point probability from a ``VennPrediction``
-    using negative log-likelihood: :math:`-\\log(p_{\\text{point}}[y])`.
+    Scores the aggregated point probability $p_{\text{point}}$ of a
+    :class:`~online_cp.venn.VennPrediction` by
 
-    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+    $$
+    \mathrm{LogLoss} = -\log p_{\text{point}}[y] ,
+    $$
+
+    the negative log-probability assigned to the realised label. Like the Brier
+    score it is a **proper scoring rule**, but it penalises confident mistakes
+    far more severely (unboundedly as $p_{\text{point}}[y] \to 0$). The
+    probability is clipped to $[10^{-15}, 1]$ before taking the logarithm to
+    avoid $-\infty$. Smaller is better; compare with :class:`BrierScore`.
+
+    Requires the ``venn`` keyword argument (a ``VennPrediction`` object).
     """
 
     _EPS = 1e-15  # clip to avoid log(0)
@@ -416,12 +578,23 @@ class LogLoss(Metric):
 
 
 class Width(Metric):
-    """Width (sharpness) of a Venn multiprobability prediction.
+    r"""Width (sharpness) of a Venn multiprobability prediction.
 
-    Mean over labels of (max − min) probability across hypotheses.
-    For binary predictions, this equals :math:`|p_1 - p_0|`.
+    A Venn predictor outputs, for each label, an *interval* of probabilities
+    (one entry per hypothesised label). This metric reports the mean width of
+    those intervals,
 
-    Requires ``venn`` keyword argument (a ``VennPrediction`` object).
+    $$
+    \mathrm{Width} = \frac{1}{|\mathbf{Y}|} \sum_{k \in \mathbf{Y}}
+        \Bigl(\max_{h} P^{h}(k) - \min_{h} P^{h}(k)\Bigr) ,
+    $$
+
+    averaged over labels $k$ and taken across hypotheses $h$. For binary
+    predictions this reduces to $|p_1 - p_0|$. Smaller width means a tighter
+    (more decisive) multiprobability prediction; it measures sharpness, not
+    validity, and is the Venn analogue of interval width.
+
+    Requires the ``venn`` keyword argument (a ``VennPrediction`` object).
     """
 
     def _score(self, y, Gamma=None, *, venn=None, **kw):
@@ -434,11 +607,20 @@ class Width(Metric):
 
 
 class CalibrationError(Metric):
-    """Expected Calibration Error (ECE) for Venn predictor outputs.
+    r"""Expected Calibration Error (ECE) for Venn predictor outputs.
 
-    Accumulates (predicted probability, true indicator) pairs from a
-    stream of ``VennPrediction`` objects, enabling post-hoc ECE
-    computation via binning.
+    Accumulates (predicted probability, true indicator) pairs from a stream of
+    :class:`~online_cp.venn.VennPrediction` objects, enabling post-hoc ECE
+    computation by binning. With $B$ bins, the binned ECE is
+
+    $$
+    \mathrm{ECE} = \sum_{b=1}^{B} \frac{n_b}{n}
+        \bigl| \bar{p}_b - \bar{y}_b \bigr| ,
+    $$
+
+    where $n_b$ is the number of predictions in bin $b$, $\bar{p}_b$ their mean
+    predicted probability and $\bar{y}_b$ the observed frequency of the target
+    class; see :meth:`ece`.
 
     Two modes:
 
@@ -446,12 +628,12 @@ class CalibrationError(Metric):
       from ``venn.point``. This is the aggregated probability and is
       typically well-calibrated empirically.
     - ``use_hypothesis=True``: evaluates the correct-hypothesis probability
-      :math:`P^y(y)`, which is *theoretically calibrated* by the Venn
-      validity guarantee (ALRW2 Theorem 6.4).
+      $P^y(y)$, which is *theoretically calibrated* by the Venn validity
+      guarantee [ALRW2, Thm 6.4].
 
-    The per-step ``_score()`` returns :math:`|p - \\mathbf{1}\\{y = k\\}|`
-    (absolute calibration gap), so ``metric.get()`` gives the running mean
-    absolute error. Use :meth:`ece` for the standard binned ECE.
+    The per-step ``_score()`` returns $|p - \mathbf{1}\{y = k\}|$ (the absolute
+    calibration gap), so ``metric.get()`` gives the running mean absolute error.
+    Use :meth:`ece` for the standard binned ECE.
 
     For binary classification, the tracked class defaults to ``label_space[1]``
     (the "positive" class). For multiclass, specify ``target_class`` explicitly.

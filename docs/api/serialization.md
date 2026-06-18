@@ -1,7 +1,7 @@
 # Serialization
 
 All model classes support `save(filepath)` / `cls.load(filepath)` round-trips.
-See the [README](../../README.md#saving-and-loading-models) for usage examples.
+See the [README](../index.md#saving-and-loading-models) for usage examples.
 
 ## SerializationError
 

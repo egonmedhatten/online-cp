@@ -4,19 +4,18 @@ import pytest
 from online_cp.classifiers import ConformalPredictionSet
 from online_cp.metrics import (
     CRPS,
+    BrierScore,
     ConformalCRPS,
-    TruncatedCRPS,
     ErrorRate,
     IntervalWidth,
-    Metric,
+    LogLoss,
     Metrics,
     ObservedExcess,
     ObservedFuzziness,
     SetSize,
-    WinklerScore,
-    BrierScore,
-    LogLoss,
+    TruncatedCRPS,
     Width,
+    WinklerScore,
 )
 from online_cp.regressors import ConformalPredictionInterval
 from online_cp.venn import VennPrediction
@@ -415,7 +414,7 @@ class TestCRPSDeprecation:
 # CalibrationError tests
 # ---------------------------------------------------------------------------
 
-from online_cp.metrics import CalibrationError
+from online_cp.metrics import CalibrationError  # noqa: E402
 
 
 class TestCalibrationError:

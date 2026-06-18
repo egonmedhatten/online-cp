@@ -14,6 +14,16 @@
 
 ::: online_cp.martingale.SleeperDrifter
 
+## Legendre Jumper Martingales
+
+::: online_cp.martingale.SimpleLegendreJumper
+
+::: online_cp.martingale.ProductLegendreJumper
+
+::: online_cp.martingale.VariationalLegendreJumper
+
+::: online_cp.martingale.CompositeLegendreJumper
+
 ## Change-Point Detection Wrappers
 
 ::: online_cp.martingale.VilleWrapper

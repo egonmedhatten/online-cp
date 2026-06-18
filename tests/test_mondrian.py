@@ -296,14 +296,14 @@ class TestMondrianConformalRegressorLasso:
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
-        
+
         # Test multi-epsilon prediction
         epsilon_vals = [0.05, 0.1, 0.2, 0.3]
         result = wrapper.predict(X_test[0], epsilon=epsilon_vals)
-        
+
         # Should return MultiLevelPredictionInterval
         assert hasattr(result, '__getitem__'), "Multi-epsilon should return dict-like object"
-        
+
         # Verify nesting property: smaller epsilon should have wider bounds
         for i in range(len(epsilon_vals) - 1):
             eps1, eps2 = epsilon_vals[i], epsilon_vals[i+1]
@@ -323,15 +323,15 @@ class TestMondrianConformalRegressorLasso:
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
-        
+
         # Compute both smoothed and unsmoothed p-values
         p_smooth = wrapper.compute_p_value(X_test[0], y_test[0], smoothed=True)
         p_unsm = wrapper.compute_p_value(X_test[0], y_test[0], smoothed=False)
-        
+
         # Both should be in [0, 1]
         assert 0 <= p_smooth <= 1, f"Smoothed p-value out of bounds: {p_smooth}"
         assert 0 <= p_unsm <= 1, f"Unsmoothed p-value out of bounds: {p_unsm}"
-        
+
         # Unsmoothed should be more conservative (≥ smoothed for quantile-based methods)
         # This is a soft check - exact relationship depends on implementation
         # Just verify both are reasonable
@@ -345,21 +345,21 @@ class TestMondrianConformalRegressorLasso:
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
-        
+
         # Test multiple epsilon levels
         epsilon_levels = [0.1, 0.2, 0.3]
-        
+
         for eps in epsilon_levels:
             coverage = 0.0
             n_tests = min(20, len(X_test))
-            
+
             for i in range(n_tests):
                 x_i, y_i = X_test[i], y_test[i]
                 interval = wrapper.predict(x_i, epsilon=eps)
                 if y_i in interval:
                     coverage += 1
                 wrapper.learn_one(x_i, y_i)
-            
+
             coverage /= n_tests
             # Coverage should be roughly 1 - epsilon (with some tolerance for small samples)
             expected_coverage = 1 - eps
@@ -376,17 +376,17 @@ class TestMondrianConformalRegressorLasso:
         beta_sparse = np.zeros(p)
         beta_sparse[:3] = [5, -3, 2]
         y_train = X_train @ beta_sparse + rng.normal(0, 0.3, n_train)
-        
+
         wrapper = MondrianConformalRegressor(
             base_model=ConformalLassoRegressor(lam=0.1),
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
-        
+
         # Should handle sparse solutions without crashing
         x_test = rng.standard_normal(p)
         interval = wrapper.predict(x_test, epsilon=0.1)
-        
+
         # Verify valid interval
         assert np.isfinite(interval.lower)
         assert np.isfinite(interval.upper)
@@ -621,7 +621,7 @@ class TestMondrianClassifierReturnPValues:
         pred_set, p_values = result
         assert 0 in pred_set or 1 in pred_set
         assert isinstance(p_values, dict)
-        for label, pval in p_values.items():
+        for _label, pval in p_values.items():
             assert 0 <= pval <= 1
 
     def test_return_p_values_svm(self, svm_data):
@@ -636,7 +636,7 @@ class TestMondrianClassifierReturnPValues:
         result = wrapper.predict(X_test[0], epsilon=0.1, return_p_values=True)
         pred_set, p_values = result
         assert isinstance(p_values, dict)
-        for label, pval in p_values.items():
+        for _label, pval in p_values.items():
             assert 0 <= pval <= 1
 
 

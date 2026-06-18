@@ -1,9 +1,26 @@
-"""Conformal predictive systems (CPS) and conformal predictive distributions.
+r"""Conformal predictive systems (CPS) and conformal predictive distributions.
 
-This module implements conformal predictive systems based on ridge regression,
-kernel ridge regression, nearest neighbours, and the Dempster-Hill approach.
-Each CPS produces a conformal predictive distribution (CPD) for a new test
-object, which can be used to form prediction sets at any significance level.
+A *conformal predictive system* extends conformal regression from prediction
+*intervals* to a full predictive *distribution*. Instead of a single coverage
+level, a CPS outputs, for each test object $x$, a *conformal predictive
+distribution* (CPD): a function $\Pi(y)$ that behaves like a cumulative
+distribution function over the unknown label and from which prediction intervals
+at **any** significance level can be read off as quantiles.
+
+Because the rank of the test label is uniform under exchangeability, the CPD is
+*calibrated* in the strong sense that $\Pi(y_n)$ is (asymptotically) uniform on
+$[0, 1]$ ([ALRW2 Ch.7], Vovk et al. 2019). The CPD is reported as a pair of
+lower/upper step functions $(\Pi_0, \Pi_1)$ bracketing the true value at the
+jumps; a smoothing variable $\tau \in [0, 1]$ interpolates between them to give
+an exactly calibrated randomised value $(1 - \tau)\Pi_0 + \tau\Pi_1$.
+
+This module provides CPS based on ridge regression, kernel ridge regression,
+nearest neighbours, and the label-only Dempster–Hill construction.
+
+References
+----------
+[ALRW2] Vovk, Gammerman & Shafer, *Algorithmic Learning in a Random World*,
+2nd ed., Springer, 2022.
 """
 
 from __future__ import annotations
@@ -74,9 +91,13 @@ class ConformalPredictiveSystem(SerializableMixin):
 
 
 class RidgePredictionMachine(ConformalPredictiveSystem):
-    """Conformal predictive system based on ridge regression.
+    """Conformal predictive system based on ridge regression ([ALRW2 §7.1]).
 
-    Uses studentised residuals as the conformity measure.
+    The Ridge Prediction Machine (RPM) is the predictive-distribution analogue
+    of :class:`~online_cp.regressors.ConformalRidgeRegressor`: it uses the
+    studentised ridge residual as its conformity measure and, because that score
+    is monotone in the hypothesised label, inverts it in closed form to produce
+    a full conformal predictive distribution rather than a single interval.
 
     Parameters
     ----------
@@ -706,13 +727,29 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
 
 class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
+    r"""Label-only conformal predictive system (Dempster–Hill).
+
+    The simplest CPS: it ignores the objects $x$ entirely and builds the
+    predictive distribution from the labels alone, placing the test label among
+    the sorted training labels. This is the conformalised version of Hill's
+    $A_{(n)}$ assumption / Dempster's direct probabilities, and serves as a
+    distribution-free baseline (the predictive distribution of an exchangeable
+    sequence with no covariate information). See [ALRW2 §7.5].
+    """
 
     _SAVE_PARAMS: tuple = ("epsilon",)
     _SAVE_STATE: tuple = ("y",)
 
     def __init__(self, epsilon=default_epsilon):
-        """
-        The Dempster-Hill conformal predictive system uses only the labels of the examples, so the latter can be ignored.
+        """Create a Dempster–Hill CPS.
+
+        Only the labels are used, so objects passed to the ``learn_*`` methods
+        are ignored.
+
+        Parameters
+        ----------
+        epsilon : float, default 0.1
+            Default significance level.
         """
         super().__init__(epsilon=epsilon)
         self.y = None
@@ -752,9 +789,26 @@ class ConformalPredictiveDistributionFunction:
         self.epsilon = epsilon
 
     def __call__(self, y, tau=None):
-        """Evaluate the CPD at y.
+        r"""Evaluate the conformal predictive distribution at ``y``.
 
-        Returns (Pi0, Pi1) if tau is None, else (1-tau)*Pi0 + tau*Pi1.
+        The CPD is a step function with jumps at the observed labels, so its
+        value at ``y`` is reported as a lower/upper pair $(\Pi_0, \Pi_1)$ that
+        brackets the jump. Supplying a smoothing variable $\tau \in [0, 1]$
+        returns the interpolated, exactly calibrated value
+        $(1 - \tau)\Pi_0 + \tau\Pi_1$.
+
+        Parameters
+        ----------
+        y : float
+            Point at which to evaluate the predictive distribution.
+        tau : float or None
+            Smoothing variable in $[0, 1]$. If None, the $(\Pi_0, \Pi_1)$ pair
+            is returned.
+
+        Returns
+        -------
+        tuple of float, or float
+            $(\Pi_0, \Pi_1)$ if ``tau`` is None, else the interpolated value.
         """
         Pi0, Pi1 = self._cdf_bounds(y)
         if tau is None:
@@ -1011,7 +1065,7 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
         # Between Y[k] and Y[k+1]: Pi = (1-tau)*L[k] + tau*U[k]
         # L and U have K'+1 entries (indices 0..K')
         # Find smallest y where Pi(y, tau) >= p
-        Kprime = len(self.L) - 1
+        # (K' = len(self.L) - 1 entries)
 
         # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=0..K'
         between_levels = (1 - tau) * self.L + tau * self.U

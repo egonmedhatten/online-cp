@@ -1,11 +1,51 @@
 #!/usr/bin/env python
 """online-cp: Online Conformal Prediction.
 
-Provides conformal regressors, classifiers, conformal predictive systems,
-conformal test martingales, and evaluation metrics.
+``online_cp`` is a library for *online conformal prediction*: turning the
+point predictions of an underlying model into set/interval/probability
+predictions that come with finite-sample, distribution-free validity
+guarantees, and updating them example-by-example as a data stream arrives.
+
+The core promise is **validity under exchangeability**: a conformal predictor
+at significance level :math:`\\epsilon` errs with probability at most
+:math:`\\epsilon`, and in the online setting the long-run error rate converges
+to :math:`\\epsilon` regardless of the data distribution or the underlying model.
+
+Submodules
+----------
+regressors
+    Conformal *prediction intervals* (ridge, kernel ridge, k-NN, Lasso).
+classifiers
+    Conformal *prediction sets* (nearest neighbours, SVM).
+CPS
+    Conformal predictive *systems* / distributions (full predictive CDFs).
+venn
+    Venn(-Abers) *calibrated probability* predictors.
+mondrian
+    Mondrian (group-/label-conditional) conformal wrappers.
+martingale, betting
+    Conformal test martingales for online change-point / exchangeability
+    testing, and the betting strategies that drive them.
+decision
+    Conformal predictive decision making (utility maximisation).
+metrics, evaluate, plotting, pipeline
+    Evaluation criteria, progressive validation, visualisation and pipelines.
+
+Examples
+--------
+>>> import numpy as np
+>>> from online_cp import ConformalRidgeRegressor
+>>> rng = np.random.default_rng(0)
+>>> X = rng.uniform(0, 1, (30, 2))
+>>> y = X.sum(axis=1) + rng.normal(0, 0.1, 30)
+>>> cp = ConformalRidgeRegressor()
+>>> cp.learn_initial_training_set(X, y)
+>>> interval = cp.predict(np.array([0.5, 0.5]), epsilon=0.1, bounds="both")
+>>> bool(interval.lower < interval.upper)
+True
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from online_cp._serialization import (
     SerializationError as SerializationError,
@@ -13,7 +53,6 @@ from online_cp._serialization import (
 from online_cp._serialization import (
     register_callable as register_callable,
 )
-
 from online_cp.classifiers import (
     ConformalNearestNeighboursClassifier as ConformalNearestNeighboursClassifier,
 )
@@ -32,71 +71,41 @@ from online_cp.CPS import (
 from online_cp.CPS import (
     RidgePredictionMachine as RidgePredictionMachine,
 )
-from online_cp.evaluate import (
-    progressive_val as progressive_val,
+from online_cp.decision import (
+    ConformalPredictiveDecisionMaker as ConformalPredictiveDecisionMaker,
+)
+from online_cp.decision import (
+    UtilityFunction as UtilityFunction,
+)
+from online_cp.decision import (
+    alpha_regret as alpha_regret,
+)
+from online_cp.decision import (
+    alpha_utility as alpha_utility,
+)
+from online_cp.decision import (
+    cps_decision as cps_decision,
+)
+from online_cp.decision import (
+    cps_expected_utilities as cps_expected_utilities,
+)
+from online_cp.decision import (
+    venn_decision as venn_decision,
+)
+from online_cp.decision import (
+    venn_expected_utilities as venn_expected_utilities,
 )
 from online_cp.evaluate import (
     iter_progressive_val as iter_progressive_val,
 )
-from online_cp.metrics import (
-    CRPS as CRPS,
+from online_cp.evaluate import (
+    iter_progressive_val_venn as iter_progressive_val_venn,
 )
-from online_cp.metrics import (
-    ErrorRate as ErrorRate,
-)
-from online_cp.metrics import (
-    IntervalWidth as IntervalWidth,
-)
-from online_cp.metrics import (
-    Metric as Metric,
-)
-from online_cp.metrics import (
-    Metrics as Metrics,
-)
-from online_cp.metrics import (
-    ObservedExcess as ObservedExcess,
-)
-from online_cp.metrics import (
-    ObservedFuzziness as ObservedFuzziness,
-)
-from online_cp.metrics import (
-    SetSize as SetSize,
-)
-from online_cp.metrics import (
-    WinklerScore as WinklerScore,
-)
-from online_cp.metrics import (
-    BrierScore as BrierScore,
-)
-from online_cp.metrics import (
-    LogLoss as LogLoss,
-)
-from online_cp.metrics import (
-    Width as Width,
-)
-from online_cp.metrics import (
-    CalibrationError as CalibrationError,
-)
-from online_cp.plotting import (
-    plot_reliability_diagram as plot_reliability_diagram,
-)
-from online_cp.plotting import (
-    plot_reliability_diagram_venn as plot_reliability_diagram_venn,
-)
-from online_cp.plotting import (
-    plot_sharpness as plot_sharpness,
-)
-from online_cp.plotting import (
-    plot_pit_histogram as plot_pit_histogram,
-)
-from online_cp.plotting import (
-    plot_calibration_conditional as plot_calibration_conditional,
+from online_cp.evaluate import (
+    progressive_val as progressive_val,
 )
 from online_cp.evaluate import (
     progressive_val_venn as progressive_val_venn,
-)
-from online_cp.evaluate import (
-    iter_progressive_val_venn as iter_progressive_val_venn,
 )
 from online_cp.kernels import (
     CustomKernel as CustomKernel,
@@ -129,6 +138,9 @@ from online_cp.kernels import (
     kernel_matrix_to_distance_matrix as kernel_matrix_to_distance_matrix,
 )
 from online_cp.martingale import (
+    STANDARD_GRID as STANDARD_GRID,
+)
+from online_cp.martingale import (
     BetaKernel as BetaKernel,
 )
 from online_cp.martingale import (
@@ -139,6 +151,12 @@ from online_cp.martingale import (
 )
 from online_cp.martingale import (
     CompositeJumper as CompositeJumper,
+)
+from online_cp.martingale import (
+    CompositeLegendreJumper as CompositeLegendreJumper,
+)
+from online_cp.martingale import (
+    CUSUMWrapper as CUSUMWrapper,
 )
 from online_cp.martingale import (
     ExpertAggregationStrategy as ExpertAggregationStrategy,
@@ -153,49 +171,118 @@ from online_cp.martingale import (
     ParticleFilterStrategy as ParticleFilterStrategy,
 )
 from online_cp.martingale import (
+    PiecewiseConstantBetting as PiecewiseConstantBetting,
+)
+from online_cp.martingale import (
     PluginMartingale as PluginMartingale,
 )
 from online_cp.martingale import (
-    SimpleJumper as SimpleJumper,
-)
-from online_cp.martingale import (
-    SimpleMixtureMartingale as SimpleMixtureMartingale,
-)
-from online_cp.martingale import (
-    SleeperStayer as SleeperStayer,
-)
-from online_cp.martingale import (
-    SleeperDrifter as SleeperDrifter,
-)
-from online_cp.martingale import (
-    VilleWrapper as VilleWrapper,
-)
-from online_cp.martingale import (
-    CUSUMWrapper as CUSUMWrapper,
+    ProductLegendreJumper as ProductLegendreJumper,
 )
 from online_cp.martingale import (
     ShiryaevRobertsWrapper as ShiryaevRobertsWrapper,
 )
 from online_cp.martingale import (
-    PiecewiseConstantBetting as PiecewiseConstantBetting,
+    SimpleJumper as SimpleJumper,
 )
-from online_cp.regressors import (
-    ConformalLassoRegressor as ConformalLassoRegressor,
+from online_cp.martingale import (
+    SimpleLegendreJumper as SimpleLegendreJumper,
 )
-from online_cp.regressors import (
-    ConformalNearestNeighboursRegressor as ConformalNearestNeighboursRegressor,
+from online_cp.martingale import (
+    SimpleMixtureMartingale as SimpleMixtureMartingale,
 )
-from online_cp.regressors import (
-    ConformalRidgeRegressor as ConformalRidgeRegressor,
+from online_cp.martingale import (
+    SleeperDrifter as SleeperDrifter,
 )
-from online_cp.regressors import (
-    KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
+from online_cp.martingale import (
+    SleeperStayer as SleeperStayer,
+)
+from online_cp.martingale import (
+    VariationalLegendreJumper as VariationalLegendreJumper,
+)
+from online_cp.martingale import (
+    VilleWrapper as VilleWrapper,
+)
+from online_cp.martingale import (
+    compute_normalization_Z as compute_normalization_Z,
+)
+from online_cp.martingale import (
+    product_betting_value as product_betting_value,
+)
+from online_cp.martingale import (
+    shifted_legendre_poly as shifted_legendre_poly,
+)
+from online_cp.metrics import (
+    CRPS as CRPS,
+)
+from online_cp.metrics import (
+    BrierScore as BrierScore,
+)
+from online_cp.metrics import (
+    CalibrationError as CalibrationError,
+)
+from online_cp.metrics import (
+    ConformalCRPS as ConformalCRPS,
+)
+from online_cp.metrics import (
+    ErrorRate as ErrorRate,
+)
+from online_cp.metrics import (
+    IntervalWidth as IntervalWidth,
+)
+from online_cp.metrics import (
+    LogLoss as LogLoss,
+)
+from online_cp.metrics import (
+    Metric as Metric,
+)
+from online_cp.metrics import (
+    Metrics as Metrics,
+)
+from online_cp.metrics import (
+    ObservedExcess as ObservedExcess,
+)
+from online_cp.metrics import (
+    ObservedFuzziness as ObservedFuzziness,
+)
+from online_cp.metrics import (
+    SetSize as SetSize,
+)
+from online_cp.metrics import (
+    TruncatedCRPS as TruncatedCRPS,
+)
+from online_cp.metrics import (
+    Width as Width,
+)
+from online_cp.metrics import (
+    WinklerScore as WinklerScore,
 )
 from online_cp.mondrian import (
     MondrianConformalClassifier as MondrianConformalClassifier,
 )
 from online_cp.mondrian import (
     MondrianConformalRegressor as MondrianConformalRegressor,
+)
+from online_cp.pipeline import (
+    Discard as Discard,
+)
+from online_cp.pipeline import (
+    FuncTransformer as FuncTransformer,
+)
+from online_cp.pipeline import (
+    Pipeline as Pipeline,
+)
+from online_cp.pipeline import (
+    Select as Select,
+)
+from online_cp.pipeline import (
+    Transformer as Transformer,
+)
+from online_cp.pipeline import (
+    TransformerUnion as TransformerUnion,
+)
+from online_cp.plotting import (
+    plot_calibration_conditional as plot_calibration_conditional,
 )
 from online_cp.plotting import (
     plot_coverage as plot_coverage,
@@ -210,77 +297,59 @@ from online_cp.plotting import (
     plot_martingale as plot_martingale,
 )
 from online_cp.plotting import (
+    plot_pit_histogram as plot_pit_histogram,
+)
+from online_cp.plotting import (
+    plot_reliability_diagram as plot_reliability_diagram,
+)
+from online_cp.plotting import (
+    plot_reliability_diagram_venn as plot_reliability_diagram_venn,
+)
+from online_cp.plotting import (
     plot_set_sizes as plot_set_sizes,
 )
-from online_cp.venn import (
-    VennPrediction as VennPrediction,
+from online_cp.plotting import (
+    plot_sharpness as plot_sharpness,
+)
+from online_cp.preprocessing import (
+    MinMaxScaler as MinMaxScaler,
+)
+from online_cp.preprocessing import (
+    PCA as PCA,
+)
+from online_cp.preprocessing import (
+    StandardScaler as StandardScaler,
+)
+from online_cp.preprocessing import (
+    SVD as SVD,
+)
+from online_cp.regressors import (
+    ConformalLassoRegressor as ConformalLassoRegressor,
+)
+from online_cp.regressors import (
+    ConformalNearestNeighboursRegressor as ConformalNearestNeighboursRegressor,
+)
+from online_cp.regressors import (
+    ConformalRidgeRegressor as ConformalRidgeRegressor,
+)
+from online_cp.regressors import (
+    KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
 )
 from online_cp.venn import (
     MulticlassVennPrediction as MulticlassVennPrediction,
 )
 from online_cp.venn import (
+    NearestNeighboursVennPredictor as NearestNeighboursVennPredictor,
+)
+from online_cp.venn import (
     VennAbersPredictor as VennAbersPredictor,
 )
 from online_cp.venn import (
-    NearestNeighboursVennPredictor as NearestNeighboursVennPredictor,
+    VennPrediction as VennPrediction,
 )
 from online_cp.venn import (
     brier_point as brier_point,
 )
 from online_cp.venn import (
     log_loss_point as log_loss_point,
-)
-from online_cp.decision import (
-    UtilityFunction as UtilityFunction,
-)
-from online_cp.decision import (
-    cps_expected_utilities as cps_expected_utilities,
-)
-from online_cp.decision import (
-    cps_decision as cps_decision,
-)
-from online_cp.decision import (
-    venn_expected_utilities as venn_expected_utilities,
-)
-from online_cp.decision import (
-    venn_decision as venn_decision,
-)
-from online_cp.decision import (
-    alpha_utility as alpha_utility,
-)
-from online_cp.decision import (
-    alpha_regret as alpha_regret,
-)
-from online_cp.decision import (
-    ConformalPredictiveDecisionMaker as ConformalPredictiveDecisionMaker,
-)
-from online_cp.metrics import (
-    TruncatedCRPS as TruncatedCRPS,
-)
-from online_cp.metrics import (
-    ConformalCRPS as ConformalCRPS,
-)
-from online_cp.pipeline import (
-    FuncTransformer as FuncTransformer,
-)
-from online_cp.pipeline import (
-    Pipeline as Pipeline,
-)
-from online_cp.pipeline import (
-    Transformer as Transformer,
-)
-from online_cp.pipeline import (
-    TransformerUnion as TransformerUnion,
-)
-from online_cp.pipeline import (
-    Select as Select,
-)
-from online_cp.pipeline import (
-    Discard as Discard,
-)
-from online_cp.preprocessing import (
-    StandardScaler as StandardScaler,
-)
-from online_cp.preprocessing import (
-    MinMaxScaler as MinMaxScaler,
 )

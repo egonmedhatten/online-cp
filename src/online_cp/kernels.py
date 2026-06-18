@@ -5,7 +5,8 @@ Provides Gaussian (RBF), linear, polynomial, periodic, and composite kernels.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from collections.abc import Sequence
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray

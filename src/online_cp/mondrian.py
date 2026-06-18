@@ -28,7 +28,8 @@ Example
 
 from __future__ import annotations
 
-from typing import Any, Callable, Hashable
+from collections.abc import Hashable
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -68,22 +69,36 @@ __all__ = ["MondrianConformalRegressor", "MondrianConformalClassifier"]
 
 
 class MondrianConformalRegressor(SerializableMixin):
-    """Mondrian conformal regressor: group-conditional coverage.
+    r"""Mondrian conformal regressor: group-conditional coverage.
 
-    Wraps a conformal regressor (ridge, kernel ridge, or lasso). A single
-    pooled model is trained on ALL data. At prediction time, the nonconformity
-    scores are computed using the pooled model, but the calibration step
-    (interval construction) only compares against scores from the SAME category.
+    Wraps a conformal regressor (ridge, kernel ridge, or lasso). A *single*
+    pooled model is trained on ALL data; the Mondrian construction lives in the
+    calibration step, not in the model. At prediction time the nonconformity
+    scores are computed from the pooled model, but the interval is calibrated
+    only against scores from training examples in the SAME Mondrian category as
+    the test object. This is the Mondrian taxonomy construction of [ALRW2 §4.6]
+    (Vovk et al.).
 
-    This yields valid group-conditional coverage:
-        P(y in Gamma(x) | category(x) = k) >= 1 - epsilon  for all k.
+    The result is valid **group-conditional** (object-conditional) coverage: for
+    every category $k$,
+
+    $$
+    \mathbb{P}\bigl(y \in \Gamma^\epsilon(x) \mid \kappa(x) = k\bigr)
+        \geq 1 - \epsilon ,
+    $$
+
+    where $\kappa$ is the category function. Unconditional conformal predictors
+    only guarantee this marginally; conditioning on a Mondrian taxonomy restores
+    the guarantee within each group, at the cost of a smaller effective
+    calibration set per category.
 
     Parameters
     ----------
     base_model : ConformalRidgeRegressor, KernelConformalRidgeRegressor, or ConformalLassoRegressor
         The underlying conformal regressor. Trained on all data (pooled).
     category_fn : callable
-        A function ``(x) -> hashable`` that assigns a category to each input.
+        A function ``(x) -> hashable`` mapping each object to its Mondrian
+        category $\kappa(x)$.
     """
 
     _SAVE_PARAMS: tuple = ("base_model", "category_fn")
@@ -105,22 +120,63 @@ class MondrianConformalRegressor(SerializableMixin):
         self.categories_ = []
 
     def learn_initial_training_set(self, X, y):
-        """Train the pooled model on all data and record categories."""
+        r"""Batch-train the pooled model and record each object's category.
+
+        Fits ``base_model`` on the full training set ``(X, y)`` and stores the
+        Mondrian category $\kappa(x_i)$ of every training object, so later
+        predictions can be calibrated within categories.
+
+        Parameters
+        ----------
+        X : array-like of shape (n, d)
+            Training objects.
+        y : array-like of shape (n,)
+            Training responses.
+        """
         X = np.asarray(X)
         y = np.asarray(y)
         self.base_model.learn_initial_training_set(X, y)
         self.categories_ = [self.category_fn(x_i) for x_i in X]
 
     def learn_one(self, x, y, **kwargs):
-        """Learn a single example in the pooled model and record its category."""
+        """Update the pooled model with one example and record its category.
+
+        Parameters
+        ----------
+        x : array-like of shape (d,)
+            New object.
+        y : float
+            Observed response.
+        **kwargs
+            Forwarded to the underlying model's ``learn_one`` (e.g. a
+            ``precomputed`` cache returned by :meth:`predict`).
+        """
         self.base_model.learn_one(x, y, **kwargs)
         self.categories_.append(self.category_fn(x))
 
     def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, bounds: str = "both") -> ConformalPredictionInterval | MultiLevelPredictionInterval:
-        """Compute the Mondrian conformal prediction interval.
+        """Compute the Mondrian (group-conditional) prediction interval.
 
-        Uses the pooled model's A, B decomposition but calibrates only
-        against same-category training examples.
+        Computes the pooled model's $A$/$B$ nonconformity decomposition for the
+        test object, then builds the interval using only the training scores
+        whose category matches the test object's Mondrian category (a boolean
+        ``cat_mask`` over the pooled scores). This restricts calibration to the
+        test object's group while reusing the single pooled fit.
+
+        Parameters
+        ----------
+        x : array-like of shape (d,)
+            Test object.
+        epsilon : float, array-like, or None
+            Significance level(s). If None, uses ``base_model.epsilon``. An
+            iterable yields a :class:`MultiLevelPredictionInterval`.
+        bounds : {"both", "lower", "upper"}, default "both"
+            Which side(s) of the interval to compute.
+
+        Returns
+        -------
+        ConformalPredictionInterval or MultiLevelPredictionInterval
+            The group-conditional prediction interval at ``epsilon``.
         """
         if epsilon is None:
             epsilon = self.base_model.epsilon
@@ -241,7 +297,6 @@ class MondrianConformalRegressor(SerializableMixin):
         return rank <= threshold
 
     def _run_homotopy_mondrian(self, x_new, direction, t_bound, cat_mask_train, threshold):
-        from online_cp.regressors import _compute_crossings
 
         model = self.base_model
         sign = 1 if direction > 0 else -1
@@ -394,7 +449,27 @@ class MondrianConformalRegressor(SerializableMixin):
         return result_intervals
 
     def compute_p_value(self, x, y, **kwargs):
-        """Compute the Mondrian conformal p-value for (x, y)."""
+        r"""Mondrian conformal p-value for the candidate pair $(x, y)$.
+
+        Computes the (optionally smoothed) conformal p-value using only the
+        pooled nonconformity scores from the same Mondrian category as $x$, so
+        the p-value is calibrated group-conditionally. Dispatches to the
+        appropriate backend (ridge, kernel ridge, or lasso).
+
+        Parameters
+        ----------
+        x : array-like of shape (d,)
+            Test object.
+        y : float
+            Candidate response.
+        **kwargs
+            Backend options such as ``bounds``, ``smoothed`` and ``tau``.
+
+        Returns
+        -------
+        float
+            The group-conditional p-value.
+        """
         cat = self.category_fn(x)
         model = self.base_model
         if isinstance(model, ConformalRidgeRegressor):
@@ -515,7 +590,7 @@ class MondrianConformalRegressor(SerializableMixin):
 
     @property
     def categories(self):
-        """Return the set of discovered categories."""
+        """Set of Mondrian categories discovered in the training stream so far."""
         return set(self.categories_)
 
     def __repr__(self):
@@ -532,19 +607,22 @@ class MondrianConformalRegressor(SerializableMixin):
 
 
 class MondrianConformalClassifier(SerializableMixin):
-    """Mondrian conformal classifier: group-conditional coverage.
+    r"""Mondrian conformal classifier: group-conditional coverage.
 
     Wraps a conformal classifier (KNN or SVM). A single pooled model is trained
-    on ALL data. At prediction time, nonconformity scores are computed using the
-    pooled model, but the p-value computation only compares against scores from
-    the SAME category.
+    on ALL data; only the p-value computation is restricted to training examples
+    in the SAME Mondrian category as the (hypothesised) test example. This yields
+    valid **group-conditional** coverage: for every category $k$,
 
-    This yields valid group-conditional coverage:
-        P(y in Gamma(x) | category(x) = k) >= 1 - epsilon  for all k.
+    $$
+    \mathbb{P}\bigl(y \in \Gamma^\epsilon(x) \mid \kappa(x, y) = k\bigr)
+        \geq 1 - \epsilon .
+    $$
 
     The most common special case is **label-conditional** conformal prediction
-    (ALRW2 §4.6.7), where the category of an example is its label:
-    κ(n, (x, y)) = y. Use ``category_fn="label"`` for this.
+    [ALRW2 §4.6.7], where the category of an example is its label,
+    $\kappa(n, (x, y)) = y$. Use ``category_fn="label"`` for this; it guarantees
+    per-class coverage and is the standard remedy for class imbalance.
 
     Parameters
     ----------
@@ -593,7 +671,20 @@ class MondrianConformalClassifier(SerializableMixin):
         self.categories_ = []
 
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[Any]) -> None:
-        """Train the pooled model on all data and record categories."""
+        r"""Batch-train the pooled model and record each example's category.
+
+        Fits ``base_model`` on the full training set and stores the Mondrian
+        category of every training example. For a label-aware taxonomy (e.g.
+        ``category_fn="label"``) the category depends on both $x_i$ and $y_i$;
+        for an object-conditional taxonomy it depends on $x_i$ only.
+
+        Parameters
+        ----------
+        X : array-like of shape (n, d)
+            Training objects.
+        y : array-like of shape (n,)
+            Training labels.
+        """
         X = np.asarray(X)
         y = np.asarray(y)
         self.base_model.learn_initial_training_set(X, y)
@@ -603,7 +694,17 @@ class MondrianConformalClassifier(SerializableMixin):
             self.categories_ = [self._category_fn(x_i) for x_i in X]
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: Any, **kwargs: Any) -> None:
-        """Learn a single example in the pooled model and record its category."""
+        """Update the pooled model with one example and record its category.
+
+        Parameters
+        ----------
+        x : array-like of shape (d,)
+            New object.
+        y : hashable
+            Observed label.
+        **kwargs
+            Forwarded to the underlying model's ``learn_one``.
+        """
         self.base_model.learn_one(x, y, **kwargs)
         if self._label_aware:
             self.categories_.append(self._category_fn(x, y))
@@ -611,7 +712,35 @@ class MondrianConformalClassifier(SerializableMixin):
             self.categories_.append(self._category_fn(x))
 
     def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> Any:
-        """Compute the Mondrian conformal prediction set."""
+        r"""Compute the Mondrian (group-conditional) prediction set.
+
+        For each candidate label the conformal p-value is computed from the
+        pooled scores, restricted to the matching Mondrian category:
+
+        - **Label-aware taxonomy** (e.g. ``category_fn="label"``): each
+          hypothesised label $y$ defines its own category mask $\kappa(x, y)$,
+          so the candidate is calibrated against training examples sharing that
+          category. This is what makes label-conditional coverage possible.
+        - **Object-conditional taxonomy**: a single mask $\kappa(x)$ is shared
+          across all candidate labels.
+
+        For a multiclass SVM the scores are first restricted to the one-vs-rest
+        positive class before the category mask is applied, matching the SVM's
+        per-class nonconformity construction.
+
+        Parameters
+        ----------
+        x : array-like of shape (d,)
+            Test object.
+        epsilon : float, array-like, or None
+            Significance level(s). If None, uses ``base_model.epsilon``.
+        return_p_values : bool, default False
+            If True, also return the ``{label: p_value}`` dict.
+
+        Returns
+        -------
+        prediction set, or ``(prediction set, p_values)`` if ``return_p_values``.
+        """
         from online_cp.classifiers import (
             ConformalNearestNeighboursClassifier,
             ConformalSupportVectorMachine,
@@ -719,7 +848,7 @@ class MondrianConformalClassifier(SerializableMixin):
 
     @property
     def categories(self):
-        """Return the set of discovered categories."""
+        """Set of Mondrian categories discovered in the training stream so far."""
         return set(self.categories_)
 
     def __repr__(self):

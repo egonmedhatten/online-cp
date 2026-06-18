@@ -18,12 +18,13 @@ References
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Sequence
+from collections.abc import Sequence
+from typing import Any, Callable
 
 try:
-    from ._serialization import SerializableMixin, SerializationError, to_token, from_token
+    from ._serialization import SerializableMixin, SerializationError, from_token, to_token
 except ImportError:
-    from _serialization import SerializableMixin, SerializationError, to_token, from_token
+    from _serialization import SerializableMixin, SerializationError, from_token, to_token
 
 import numpy as np
 from numpy.typing import NDArray
@@ -60,8 +61,8 @@ class UtilityFunction:
     --------
     >>> utility = UtilityFunction(lambda x, y, d: -(y - d)**2,
     ...                           decisions=[0.0, 0.5, 1.0, 1.5, 2.0])
-    >>> utility(None, 1.0, 1.0)
-    0.0
+    >>> utility(None, 1.0, 0.5)
+    -0.25
     """
 
     def __init__(self, fn: Callable[..., float], decisions: Sequence[Any]) -> None:
@@ -90,16 +91,16 @@ def cps_expected_utilities(
     x: Any,
     tau: float = 0.5,
 ) -> dict[Any, float]:
-    """Compute expected utility under a CPD for each decision (Vovk & Bendtsen 2018).
+    r"""Compute expected utility under a CPD for each decision (Vovk & Bendtsen 2018).
 
     For each decision *d* in ``utility.decisions``, computes:
 
-    .. math::
+    $$
+    \mathbb{E}_\tau[U(x, \cdot, d)] = \sum_j U(x, C_j, d) \, \Delta Q_\tau(C_j)
+    $$
 
-        E_\\tau[U(x, \\cdot, d)] = \\sum_j U(x, C_j, d) \\, \\Delta Q_\\tau(C_j)
-
-    where :math:`\\Delta Q_\\tau(C_j)` is the probability mass at critical
-    point :math:`C_j` under randomisation parameter :math:`\\tau`.
+    where $\Delta Q_\tau(C_j)$ is the probability mass at critical point $C_j$
+    under randomisation parameter $\tau$.
 
     Parameters
     ----------
@@ -140,13 +141,13 @@ def venn_expected_utilities(
     utility: UtilityFunction,
     x: Any,
 ) -> dict[Any, NDArray[np.floating]]:
-    """Compute expected utility under each Venn hypothesis for each decision.
+    r"""Compute expected utility under each Venn hypothesis for each decision.
 
     For each decision *d* and hypothesis *v*:
 
-    .. math::
-
-        E_{P^v}[U(x, \\cdot, d)] = \\sum_j P^v(\\text{label}_j) \\, U(x, \\text{label}_j, d)
+    $$
+    \mathbb{E}_{P^v}[U(x, \cdot, d)] = \sum_j P^v(\text{label}_j) \, U(x, \text{label}_j, d)
+    $$
 
     Parameters
     ----------
@@ -429,7 +430,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
         """Return the decision with highest expected utility.
 
         For each decision *d*, computes the conformal mean of the
-        utility-CPD :math:`Q^*_d` and returns the decision maximising it.
+        utility-CPD $Q^*_d$ and returns the decision maximising it.
 
         Parameters
         ----------
@@ -501,8 +502,9 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
         :func:`~online_cp.register_callable` or be a module-level named
         function; lambdas will raise :class:`~online_cp.SerializationError`.
 
-        .. warning::
-            Only load files from **trusted sources**.
+        !!! warning
+            Only load files from **trusted sources**. Deserialising a file from
+            an untrusted source can execute arbitrary code.
         """
         import joblib
 
@@ -530,13 +532,15 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
             ) from exc
 
     @classmethod
-    def load(cls, filepath: str | os.PathLike) -> "ConformalPredictiveDecisionMaker":
+    def load(cls, filepath: str | os.PathLike) -> ConformalPredictiveDecisionMaker:
         """Load a decision maker from *filepath*.
 
-        .. warning::
-            Only load files from **trusted sources**.
+        !!! warning
+            Only load files from **trusted sources**. Deserialising a file from
+            an untrusted source can execute arbitrary code.
         """
         import warnings as _warnings
+
         import joblib
 
         try:

@@ -2,11 +2,8 @@
 
 import warnings
 
-import numpy as np
-import pytest
-
-from benchmarks.datasets import load_datasets
 from benchmarks.configs import get_configs
+from benchmarks.datasets import load_datasets
 from benchmarks.runner import run_benchmark
 
 

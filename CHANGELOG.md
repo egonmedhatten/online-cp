@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — targeting 0.3.0
+## [0.3.0] — 2026-06-18
 
 ### Added
 
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Primary use-case: axis-aligning features before Mondrian conformal methods to
       yield tighter, more balanced partitions.
 
-  - **`SVD` transformer** (`online_cp.preprocessing`) — truncated right-singular-vector
+- **`SVD` transformer** (`online_cp.preprocessing`) — truncated right-singular-vector
     projection for dimensionality reduction and multicollinearity removal.
     - Identical algorithm to `PCA`; adds a `center` parameter (default `True`).
       When `center=True` the result is numerically identical to `PCA`; `center=False`

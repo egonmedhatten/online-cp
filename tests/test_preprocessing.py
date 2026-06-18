@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 
 from online_cp import (
+    PCA,
+    SVD,
     ConformalRidgeRegressor,
     ErrorRate,
     MinMaxScaler,
-    PCA,
     Pipeline,
     StandardScaler,
-    SVD,
     progressive_val,
 )
 

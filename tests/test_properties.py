@@ -32,6 +32,8 @@ import leancheck
 import numpy as np
 
 from online_cp import (
+    PCA,
+    SVD,
     ConformalNearestNeighboursClassifier,
     ConformalNearestNeighboursRegressor,
     ConformalRidgeRegressor,
@@ -886,8 +888,6 @@ def test_bag_pipeline_p_value_order_invariant():
 # V @ V^T must equal I_k for any valid (n ≥ 2, d ≥ 1) batch; this also      #
 # validates the sign-flip convention leaves the vectors normalised.           #
 # --------------------------------------------------------------------------- #
-
-from online_cp import PCA, SVD
 
 _PROP22_RNG = np.random.default_rng(22)
 _PROP22_SIZES = [(n, d) for n in [4, 8, 20] for d in [1, 2, 5]]

@@ -389,7 +389,7 @@ class VennPredictor(SerializableMixin):
     # Shared prediction helpers
     # ------------------------------------------------------------------
 
-    def _empty_prediction(self) -> "VennPrediction":
+    def _empty_prediction(self) -> VennPrediction:
         """Uniform multiprobability prediction when no training data is available."""
         if self.label_space is not None and len(self.label_space) > 2:
             n_labels = len(self.label_space)
@@ -423,7 +423,7 @@ class VennPredictor(SerializableMixin):
             f"{type(self).__name__} must implement _categories_for_hypothesis"
         )
 
-    def _venn_predict_from_taxonomy(self, taxonomy_data: Any) -> "VennPrediction":
+    def _venn_predict_from_taxonomy(self, taxonomy_data: Any) -> VennPrediction:
         """Generic taxonomy → multiprobability prediction loop.
 
         Calls :meth:`_categories_for_hypothesis` once per hypothesis label,
@@ -489,7 +489,7 @@ class VennPredictor(SerializableMixin):
         """Incrementally add one labelled observation. Must be overridden by subclasses."""
         raise NotImplementedError
 
-    def predict(self, x: NDArray) -> "VennPrediction":
+    def predict(self, x: NDArray) -> VennPrediction:
         """Produce a Venn multiprobability prediction. Must be overridden by subclasses."""
         raise NotImplementedError
 

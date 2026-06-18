@@ -15,6 +15,8 @@ import numpy as np
 import pytest
 
 from online_cp import (
+    PCA,
+    SVD,
     ConformalLassoRegressor,
     ConformalNearestNeighboursClassifier,
     ConformalNearestNeighboursRegressor,
@@ -854,8 +856,6 @@ class TestFuncTransformerRoundTrip:
 # ---------------------------------------------------------------------------
 # Phase C — PCA and SVD serialization
 # ---------------------------------------------------------------------------
-
-from online_cp import PCA, SVD
 
 
 class TestPCARoundTrip:

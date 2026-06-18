@@ -3,6 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/online-cp.svg)](https://badge.fury.io/py/online-cp)
 [![Docs](https://img.shields.io/badge/docs-online-blue)](https://egonmedhatten.github.io/online-cp/)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/online-cp?period=total&units=INTERNATIONAL_SYSTEM&left_color=GRAY&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/online-cp)
 [![Tests](https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg)](https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml)
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)
 

@@ -1,0 +1,2138 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Valid prediction sets and intervals with guaranteed coverage, updated one example at a time.">
+      
+      
+      
+        <link rel="canonical" href="https://egonmedhatten.github.io/online-cp/guide/">
+      
+      
+        <link rel="prev" href="../quickstart/">
+      
+      
+        <link rel="next" href="../api/regressors/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Guide - online-cp: Online Conformal Prediction</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#which-method-should-i-use" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="online-cp: Online Conformal Prediction" class="md-header__button md-logo" aria-label="online-cp: Online Conformal Prediction" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            online-cp: Online Conformal Prediction
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Guide
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/egonmedhatten/online-cp" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="online-cp: Online Conformal Prediction" class="md-nav__button md-logo" aria-label="online-cp: Online Conformal Prediction" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    online-cp: Online Conformal Prediction
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/egonmedhatten/online-cp" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-output-do-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What output do you need?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regressors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regressors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Regressors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#classifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classifiers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Classifiers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conformal-predictive-systems-cps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal Predictive Systems (CPS)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conformal Predictive Systems (CPS)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#venn-predictors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Venn Predictors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Venn Predictors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#martingales-change-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Martingales &amp; Change Detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Martingales &amp; Change Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-martingale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which martingale?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#which-betting-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which betting strategy?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#which-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which wrapper?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mondrian-conformal-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mondrian Conformal Prediction
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mondrian Conformal Prediction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#label-conditional-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Label-conditional (classification)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#object-conditional-regression-or-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Object-conditional (regression or classification)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#general-taxonomy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        General taxonomy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pipelines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipelines
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pipelines">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#transformer-modes-and-validity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transformer modes and validity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inspecting-a-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inspecting a pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-decision-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary Decision Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/regressors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Regressors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/classifiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Classifiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/venn/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Venn Predictors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/mondrian/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mondrian CP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Predictive Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/decision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision Making
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/martingale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Martingales
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/betting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Betting Strategies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/plotting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plotting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/kernels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kernels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipelines & Preprocessing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/serialization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Serialization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-output-do-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What output do you need?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regressors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regressors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Regressors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#classifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classifiers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Classifiers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conformal-predictive-systems-cps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal Predictive Systems (CPS)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conformal Predictive Systems (CPS)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#venn-predictors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Venn Predictors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Venn Predictors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#martingales-change-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Martingales &amp; Change Detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Martingales &amp; Change Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-martingale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which martingale?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#which-betting-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which betting strategy?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#which-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which wrapper?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-start_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mondrian-conformal-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mondrian Conformal Prediction
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mondrian Conformal Prediction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#label-conditional-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Label-conditional (classification)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#object-conditional-regression-or-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Object-conditional (regression or classification)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#general-taxonomy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        General taxonomy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pipelines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipelines
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pipelines">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#transformer-modes-and-validity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transformer modes and validity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inspecting-a-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inspecting a pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-decision-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary Decision Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="which-method-should-i-use">Which Method Should I Use?<a class="headerlink" href="#which-method-should-i-use" title="Permanent link">&para;</a></h1>
+<p>This guide helps you choose the right class from <code>online-cp</code> for your problem.
+If you're new to conformal prediction, start with the <a href="https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Ftutorial.ipynb">tutorial notebook</a> first.</p>
+<hr />
+<h2 id="what-output-do-you-need">What output do you need?<a class="headerlink" href="#what-output-do-you-need" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    A[What do you need?] --&gt; B{Response type?}
+    B --&gt;|Continuous y| C{What kind of output?}
+    B --&gt;|Discrete labels| D{What kind of output?}
+
+    C --&gt;|Prediction interval| E[**Regressors**&lt;br&gt;ConformalRidgeRegressor&lt;br&gt;ConformalNearestNeighboursRegressor&lt;br&gt;KernelConformalRidgeRegressor&lt;br&gt;ConformalLassoRegressor]
+    C --&gt;|Full predictive distribution| F[**CPS**&lt;br&gt;RidgePredictionMachine&lt;br&gt;KernelRidgePredictionMachine&lt;br&gt;NearestNeighboursPredictionMachine]
+
+    D --&gt;|Prediction set with coverage guarantee| G[**Classifiers**&lt;br&gt;ConformalNearestNeighboursClassifier&lt;br&gt;ConformalSupportVectorMachine]
+    D --&gt;|Calibrated class probabilities| H[**Venn Predictors**&lt;br&gt;VennAbersPredictor&lt;br&gt;NearestNeighboursVennPredictor]
+
+    style E fill:#e8f5e9
+    style F fill:#e3f2fd
+    style G fill:#fff3e0
+    style H fill:#fce4ec</code></pre>
+<div class="admonition tip">
+<p class="admonition-title">Rule of thumb</p>
+<ul>
+<li>Need a <strong>yes/no coverage guarantee</strong>? → Regressors or Classifiers</li>
+<li>Need to <strong>make decisions under uncertainty</strong>? → CPS (gives you the full distribution to optimise over)</li>
+<li>Need <strong>calibrated probabilities</strong> for downstream scoring? → Venn predictors</li>
+</ul>
+</div>
+<hr />
+<h2 id="regressors">Regressors<a class="headerlink" href="#regressors" title="Permanent link">&para;</a></h2>
+<p>All regressors produce <code>ConformalPredictionInterval</code> objects with guaranteed marginal coverage.</p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Complexity (per step)</th>
+<th>Best when</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ConformalRidgeRegressor</code></td>
+<td><span class="arithmatex">\(O(p^2)\)</span></td>
+<td>Linear signal, moderate <span class="arithmatex">\(p\)</span></td>
+<td>Exact; fastest for <span class="arithmatex">\(p \ll n\)</span>. Supports studentised residuals.</td>
+</tr>
+<tr>
+<td><code>KernelConformalRidgeRegressor</code></td>
+<td><span class="arithmatex">\(O(n^2)\)</span></td>
+<td>Nonlinear signal, kernel trick</td>
+<td>Exact; any kernel from <code>online_cp.kernels</code> or sklearn.</td>
+</tr>
+<tr>
+<td><code>ConformalNearestNeighboursRegressor</code></td>
+<td><span class="arithmatex">\(O(n)\)</span></td>
+<td>Non-parametric, local patterns</td>
+<td>Good default for tabular data. Custom distance metrics.</td>
+</tr>
+<tr>
+<td><code>ConformalLassoRegressor</code></td>
+<td><span class="arithmatex">\(O(np)\)</span></td>
+<td>High-dimensional sparse signals</td>
+<td>Homotopy-based; supports elastic net (<span class="arithmatex">\(\rho &gt; 0\)</span>).</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Mondrian variants</p>
+<p>Wrap any regressor in <code>MondrianConformalRegressor</code> for <strong>group-conditional coverage</strong> when you have a known categorical covariate (e.g., site, sensor type).</p>
+</div>
+<h3 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalRidgeRegressor</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Linear, fast, good default</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">model</span> <span class="o">=</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># a = ridge parameter</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Nonlinear with Gaussian kernel</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">KernelConformalRidgeRegressor</span><span class="p">,</span> <span class="n">GaussianKernel</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">model</span> <span class="o">=</span> <span class="n">KernelConformalRidgeRegressor</span><span class="p">(</span><span class="n">kernel</span><span class="o">=</span><span class="n">GaussianKernel</span><span class="p">(</span><span class="n">sigma</span><span class="o">=</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">a</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># K-nearest neighbours</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalNearestNeighboursRegressor</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">model</span> <span class="o">=</span> <span class="n">ConformalNearestNeighboursRegressor</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="c1"># High-dimensional sparse</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalLassoRegressor</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">model</span> <span class="o">=</span> <span class="n">ConformalLassoRegressor</span><span class="p">(</span><span class="n">lam</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">autotune</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="classifiers">Classifiers<a class="headerlink" href="#classifiers" title="Permanent link">&para;</a></h2>
+<p>All classifiers produce <code>ConformalPredictionSet</code> objects — sets of labels guaranteed to contain the true label with probability <span class="arithmatex">\(\geq 1 - \varepsilon\)</span>.</p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Complexity (per step)</th>
+<th>Best when</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ConformalNearestNeighboursClassifier</code></td>
+<td><span class="arithmatex">\(O(n)\)</span></td>
+<td>General purpose, any metric space</td>
+<td>Default choice. Supports custom distance functions.</td>
+</tr>
+<tr>
+<td><code>ConformalSupportVectorMachine</code></td>
+<td><span class="arithmatex">\(O(n^2)\)</span> in worst case</td>
+<td>Kernel-based decision boundary</td>
+<td>Uses SMO solver; powerful but slower.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Mondrian variants</p>
+<p>Wrap in <code>MondrianConformalClassifier</code> for <strong>label-conditional coverage</strong> (validity within each class).</p>
+</div>
+<h3 id="quick-start_1">Quick start<a class="headerlink" href="#quick-start_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalNearestNeighboursClassifier</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Good default</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">model</span> <span class="o">=</span> <span class="n">ConformalNearestNeighboursClassifier</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># With SVM (kernel-based)</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalSupportVectorMachine</span><span class="p">,</span> <span class="n">GaussianKernel</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">model</span> <span class="o">=</span> <span class="n">ConformalSupportVectorMachine</span><span class="p">(</span><span class="n">kernel</span><span class="o">=</span><span class="n">GaussianKernel</span><span class="p">(</span><span class="n">sigma</span><span class="o">=</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">C</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="conformal-predictive-systems-cps">Conformal Predictive Systems (CPS)<a class="headerlink" href="#conformal-predictive-systems-cps" title="Permanent link">&para;</a></h2>
+<p>CPS outputs a full <strong>conformal predictive distribution</strong> — a valid distribution function over <span class="arithmatex">\(\mathbb{R}\)</span> that you can query at any quantile, use for decision-making, or extract prediction intervals from.</p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Complexity (per step)</th>
+<th>Best when</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RidgePredictionMachine</code></td>
+<td><span class="arithmatex">\(O(p^2)\)</span></td>
+<td>Linear signal</td>
+<td>Same as Ridge regressor but outputs CPD</td>
+</tr>
+<tr>
+<td><code>KernelRidgePredictionMachine</code></td>
+<td><span class="arithmatex">\(O(n^2)\)</span></td>
+<td>Nonlinear signal</td>
+<td>Any kernel</td>
+</tr>
+<tr>
+<td><code>NearestNeighboursPredictionMachine</code></td>
+<td><span class="arithmatex">\(O(n)\)</span></td>
+<td>Non-parametric</td>
+<td>Based on k-NN residuals</td>
+</tr>
+<tr>
+<td><code>DempsterHillConformalPredictiveSystem</code></td>
+<td><span class="arithmatex">\(O(n)\)</span></td>
+<td>No features (time series)</td>
+<td>Label-only; Dempster-Hill construction</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition info">
+<p class="admonition-title">CPS vs Regressor</p>
+<p>A CPS gives you <strong>more information</strong> — you get the full distribution, from which you can derive intervals at any level. Use a CPS when you need to:</p>
+<ul>
+<li>Extract prediction sets at multiple <span class="arithmatex">\(\varepsilon\)</span> levels simultaneously</li>
+<li>Make optimal decisions under a utility function</li>
+<li>Visualise the predictive distribution</li>
+<li>Score predictions with proper scoring rules (CRPS, log score)</li>
+</ul>
+<p>If you only need an interval at a fixed <span class="arithmatex">\(\varepsilon\)</span>, a Regressor is simpler and equally valid.</p>
+</div>
+<h3 id="quick-start_2">Quick start<a class="headerlink" href="#quick-start_2" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">RidgePredictionMachine</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">cps</span> <span class="o">=</span> <span class="n">RidgePredictionMachine</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">cps</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">cpd</span> <span class="o">=</span> <span class="n">cps</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">)</span>               <span class="c1"># Returns a CPD object</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">interval</span> <span class="o">=</span> <span class="n">cpd</span><span class="o">.</span><span class="n">predict_set</span><span class="p">(</span><span class="n">tau</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>  <span class="c1"># Extract interval</span>
+</code></pre></div>
+<hr />
+<h2 id="venn-predictors">Venn Predictors<a class="headerlink" href="#venn-predictors" title="Permanent link">&para;</a></h2>
+<p>Venn predictors output <strong>calibrated multi-probability predictions</strong> — a family of probability distributions over the label space, one for each hypothesis about the true label.</p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Scorer</th>
+<th>Best when</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>VennAbersPredictor</code></td>
+<td><code>"ridge"</code></td>
+<td>Linear scoring, fast</td>
+<td>Default for binary/multiclass</td>
+</tr>
+<tr>
+<td><code>VennAbersPredictor</code></td>
+<td><code>"kernel_ridge"</code></td>
+<td>Nonlinear scoring</td>
+<td>Requires a kernel</td>
+</tr>
+<tr>
+<td><code>VennAbersPredictor</code></td>
+<td><code>"knn"</code></td>
+<td>Non-parametric scoring</td>
+<td>Uses k-NN distances</td>
+</tr>
+<tr>
+<td><code>VennAbersPredictor</code></td>
+<td><code>"svm"</code></td>
+<td>Kernel SVM scoring</td>
+<td>Powerful but slower</td>
+</tr>
+<tr>
+<td><code>NearestNeighboursVennPredictor</code></td>
+<td>—</td>
+<td>Simple k-NN taxonomy</td>
+<td>Lightweight alternative</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition info">
+<p class="admonition-title">Venn vs Classifier</p>
+<ul>
+<li>A <strong>conformal classifier</strong> gives you a <em>set</em> of labels with a coverage guarantee.</li>
+<li>A <strong>Venn predictor</strong> gives you <em>probabilities</em> for each label, with a calibration guarantee.</li>
+</ul>
+<p>Use Venn when you need <strong>probability estimates</strong> (e.g., for ranking, expected utility, or downstream models). Use a classifier when you need a hard <strong>set-valued prediction</strong> with coverage.</p>
+</div>
+<h3 id="quick-start_3">Quick start<a class="headerlink" href="#quick-start_3" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">VennAbersPredictor</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Default: ridge scoring, full (transductive) mode</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">vap</span> <span class="o">=</span> <span class="n">VennAbersPredictor</span><span class="p">(</span><span class="n">scorer</span><span class="o">=</span><span class="s2">&quot;ridge&quot;</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">vap</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">pred</span> <span class="o">=</span> <span class="n">vap</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">)</span>  <span class="c1"># Returns VennPrediction</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nb">print</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">p0</span><span class="p">,</span> <span class="n">pred</span><span class="o">.</span><span class="n">p1</span><span class="p">)</span>    <span class="c1"># P(y=1) under each hypothesis (binary)</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="nb">print</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">point</span><span class="p">)</span>          <span class="c1"># Averaged point prediction</span>
+</code></pre></div>
+<hr />
+<h2 id="martingales-change-detection">Martingales &amp; Change Detection<a class="headerlink" href="#martingales-change-detection" title="Permanent link">&para;</a></h2>
+<p>Conformal test martingales detect <strong>violations of exchangeability</strong> (distribution changes) online. The martingale value <span class="arithmatex">\(M_n\)</span> grows when the data distribution deviates from the calibration distribution.</p>
+<h3 id="which-martingale">Which martingale?<a class="headerlink" href="#which-martingale" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Best when</th>
+<th>Key idea</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PluginMartingale</code></td>
+<td>General purpose</td>
+<td>Wraps any betting strategy with cautious-start mixing</td>
+</tr>
+<tr>
+<td><code>SimpleJumper</code></td>
+<td>Unknown alternative</td>
+<td>Jumps between epsilon-experts; robust to different alternatives</td>
+</tr>
+<tr>
+<td><code>CompositeJumper</code></td>
+<td>Unknown alternative</td>
+<td>Like SimpleJumper but also mixes over jump rates</td>
+</tr>
+<tr>
+<td><code>SleeperStayer</code></td>
+<td>Sudden change</td>
+<td>Maintains sleeping/awake copies; resets after detection</td>
+</tr>
+<tr>
+<td><code>SleeperDrifter</code></td>
+<td>Gradual drift</td>
+<td>Like SleeperStayer but forgets old data geometrically</td>
+</tr>
+<tr>
+<td><code>SimpleMixtureMartingale</code></td>
+<td>Conservative default</td>
+<td>Uniform mixture over strategies; hard to beat in worst case</td>
+</tr>
+</tbody>
+</table>
+<h3 id="which-betting-strategy">Which betting strategy?<a class="headerlink" href="#which-betting-strategy" title="Permanent link">&para;</a></h3>
+<p>Used inside <code>PluginMartingale</code> (or standalone):</p>
+<table>
+<thead>
+<tr>
+<th>Strategy</th>
+<th>Best when</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GaussianKDE</code></td>
+<td>General purpose</td>
+<td>Default. Adaptive bandwidth, window option.</td>
+</tr>
+<tr>
+<td><code>BetaKernel</code></td>
+<td>General purpose</td>
+<td>Better near boundaries of [0,1]</td>
+</tr>
+<tr>
+<td><code>BetaMLE</code></td>
+<td>Parametric alternative</td>
+<td>Fits Beta distribution by MLE</td>
+</tr>
+<tr>
+<td><code>BetaMoments</code></td>
+<td>Fast parametric</td>
+<td>Method-of-moments Beta fit</td>
+</tr>
+<tr>
+<td><code>ParticleFilterStrategy</code></td>
+<td>Non-stationary alternative</td>
+<td>Adapts to changing distribution</td>
+</tr>
+<tr>
+<td><code>ExpertAggregationStrategy</code></td>
+<td>Want to combine experts</td>
+<td>Exponential weights over a set of strategies</td>
+</tr>
+<tr>
+<td><code>FixedStrategy</code></td>
+<td>Known alternative</td>
+<td>Supply your own pdf/cdf</td>
+</tr>
+<tr>
+<td><code>PiecewiseConstantBetting</code></td>
+<td>Simple bin-based</td>
+<td>Histogram-like density on [0,1]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="which-wrapper">Which wrapper?<a class="headerlink" href="#which-wrapper" title="Permanent link">&para;</a></h3>
+<p>Wrappers convert a raw martingale into a <strong>change-point detector</strong> with a stopping rule:</p>
+<table>
+<thead>
+<tr>
+<th>Wrapper</th>
+<th>Detects</th>
+<th>Threshold</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>VilleWrapper</code></td>
+<td>Change anywhere</td>
+<td><span class="arithmatex">\(M_n \geq \lambda\)</span></td>
+<td>Classical Ville's inequality. Simple, anytime-valid.</td>
+</tr>
+<tr>
+<td><code>CUSUMWrapper</code></td>
+<td>Change after unknown time</td>
+<td>Page's CUSUM on <span class="arithmatex">\(\log M\)</span></td>
+<td>Lower detection delay post-change.</td>
+</tr>
+<tr>
+<td><code>ShiryaevRobertsWrapper</code></td>
+<td>Change after unknown time</td>
+<td>SR statistic</td>
+<td>Minimax optimal average detection delay (asymptotically).</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Default recommendation</p>
+<p>Start with <code>PluginMartingale(GaussianKDE)</code> wrapped in <code>VilleWrapper(threshold=20)</code>. This is robust, simple, and corresponds to a Bayes factor of 20 against exchangeability.</p>
+</div>
+<h3 id="quick-start_4">Quick start<a class="headerlink" href="#quick-start_4" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">PluginMartingale</span><span class="p">,</span> <span class="n">GaussianKDE</span><span class="p">,</span> <span class="n">SimpleJumper</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="n">VilleWrapper</span><span class="p">,</span> <span class="n">CUSUMWrapper</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">)</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Default: plugin with Gaussian KDE</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">mart</span> <span class="o">=</span> <span class="n">PluginMartingale</span><span class="p">(</span><span class="n">betting_strategy</span><span class="o">=</span><span class="n">GaussianKDE</span><span class="p">,</span> <span class="n">min_sample_size</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Or use a jumper (no tuning needed)</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">mart</span> <span class="o">=</span> <span class="n">SimpleJumper</span><span class="p">(</span><span class="n">J</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Wrap for detection</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="n">detector</span> <span class="o">=</span> <span class="n">VilleWrapper</span><span class="p">(</span><span class="n">mart</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># Feed p-values one at a time</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">p_values</span><span class="p">:</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>    <span class="n">detector</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>    <span class="k">if</span> <span class="n">detector</span><span class="o">.</span><span class="n">M</span> <span class="o">&gt;=</span> <span class="n">detector</span><span class="o">.</span><span class="n">threshold</span><span class="p">:</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Change detected!&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>        <span class="k">break</span>
+</code></pre></div>
+<hr />
+<h2 id="mondrian-conformal-prediction">Mondrian Conformal Prediction<a class="headerlink" href="#mondrian-conformal-prediction" title="Permanent link">&para;</a></h2>
+<p>Use Mondrian CP when you need validity guarantees <strong>within subgroups</strong>, not just overall.</p>
+<h3 id="label-conditional-classification">Label-conditional (classification)<a class="headerlink" href="#label-conditional-classification" title="Permanent link">&para;</a></h3>
+<p>The most common case: guarantee coverage <strong>per class</strong> — <span class="arithmatex">\(P(y \in \Gamma(x) \mid y = c) \geq 1 - \varepsilon\)</span> for all <span class="arithmatex">\(c\)</span> (ALRW2 §4.6.7).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalNearestNeighboursClassifier</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp.mondrian</span><span class="w"> </span><span class="kn">import</span> <span class="n">MondrianConformalClassifier</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">model</span> <span class="o">=</span> <span class="n">MondrianConformalClassifier</span><span class="p">(</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">base_model</span><span class="o">=</span><span class="n">ConformalNearestNeighboursClassifier</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">category_fn</span><span class="o">=</span><span class="s2">&quot;label&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">)</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">model</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="n">Gamma</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="object-conditional-regression-or-classification">Object-conditional (regression or classification)<a class="headerlink" href="#object-conditional-regression-or-classification" title="Permanent link">&para;</a></h3>
+<p>When you have a <strong>categorical covariate</strong> (site, sensor, group) and want group-conditional validity:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalRidgeRegressor</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp.mondrian</span><span class="w"> </span><span class="kn">import</span> <span class="n">MondrianConformalRegressor</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">base</span> <span class="o">=</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">model</span> <span class="o">=</span> <span class="n">MondrianConformalRegressor</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">category_fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">))</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">model</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">interval</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="general-taxonomy">General taxonomy<a class="headerlink" href="#general-taxonomy" title="Permanent link">&para;</a></h3>
+<p>For any taxonomy <span class="arithmatex">\(\kappa(x, y) \to \text{category}\)</span> depending on both features and label:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">MondrianConformalClassifier</span><span class="p">(</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">base_model</span><span class="o">=</span><span class="n">ConformalNearestNeighboursClassifier</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">category_fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)),</span>  <span class="c1"># cross label × feature group</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">)</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">When NOT to use Mondrian</p>
+<ul>
+<li>If your categories are very small → insufficient calibration data per group</li>
+<li>If category membership is unknown at test time (not applicable to label-conditional)</li>
+<li>If you want marginal (overall) coverage only → standard CP is simpler and tighter</li>
+</ul>
+</div>
+<hr />
+<h2 id="pipelines">Pipelines<a class="headerlink" href="#pipelines" title="Permanent link">&para;</a></h2>
+<p>A <code>Pipeline</code> chains one or more feature transformers before a conformal predictor, exposing exactly the same <code>learn_initial_training_set</code> / <code>learn_one</code> / <code>predict</code> API so the composed object drops straight into <code>progressive_val</code> unchanged.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="n">Pipeline</span><span class="p">,</span> <span class="n">StandardScaler</span><span class="p">,</span> <span class="n">FuncTransformer</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">Select</span><span class="p">,</span> <span class="n">Discard</span><span class="p">,</span> <span class="n">TransformerUnion</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">ConformalRidgeRegressor</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="p">)</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># Freeze-scale then predict — training-conditional validity (ALRW2 §4.7)</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">StandardScaler</span><span class="p">()</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="c1"># PCA rotation (axis-align features, useful before Mondrian methods)</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">PCA</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">PCA</span><span class="p">(</span><span class="n">n_components</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="c1"># SVD projection (dimensionality reduction / multicollinearity removal)</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">SVD</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">SVD</span><span class="p">(</span><span class="n">n_components</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="c1"># Fixed map (always safe, exchangeability trivially preserved)</span>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">FuncTransformer</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">log1p</span><span class="p">)</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="c1"># Bare callables are auto-wrapped in FuncTransformer</span>
+<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">Pipeline</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">,</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">))</span>
+<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a>
+<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a><span class="c1"># Keep only columns 0 and 2</span>
+<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">Select</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>
+<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a><span class="c1"># Drop noisy column 3</span>
+<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">Discard</span><span class="p">([</span><span class="mi">3</span><span class="p">])</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>
+<a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a><span class="c1"># Concatenate two feature views (original + absolute value)</span>
+<a id="__codelineno-8-32" name="__codelineno-8-32" href="#__codelineno-8-32"></a><span class="n">union</span> <span class="o">=</span> <span class="n">FuncTransformer</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="n">FuncTransformer</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">)</span>
+<a id="__codelineno-8-33" name="__codelineno-8-33" href="#__codelineno-8-33"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">union</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-8-34" name="__codelineno-8-34" href="#__codelineno-8-34"></a>
+<a id="__codelineno-8-35" name="__codelineno-8-35" href="#__codelineno-8-35"></a><span class="c1"># Chain multiple transformers</span>
+<a id="__codelineno-8-36" name="__codelineno-8-36" href="#__codelineno-8-36"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">Pipeline</span><span class="p">(</span>
+<a id="__codelineno-8-37" name="__codelineno-8-37" href="#__codelineno-8-37"></a>    <span class="n">Select</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]),</span>
+<a id="__codelineno-8-38" name="__codelineno-8-38" href="#__codelineno-8-38"></a>    <span class="n">StandardScaler</span><span class="p">(),</span>
+<a id="__codelineno-8-39" name="__codelineno-8-39" href="#__codelineno-8-39"></a>    <span class="n">FuncTransformer</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">tanh</span><span class="p">),</span>
+<a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a>    <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">),</span>
+<a id="__codelineno-8-41" name="__codelineno-8-41" href="#__codelineno-8-41"></a><span class="p">)</span>
+<a id="__codelineno-8-42" name="__codelineno-8-42" href="#__codelineno-8-42"></a>
+<a id="__codelineno-8-43" name="__codelineno-8-43" href="#__codelineno-8-43"></a><span class="n">pipe</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-8-44" name="__codelineno-8-44" href="#__codelineno-8-44"></a><span class="n">interval</span> <span class="o">=</span> <span class="n">pipe</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>   <span class="c1"># same API as a bare predictor</span>
+</code></pre></div>
+<h3 id="transformer-modes-and-validity">Transformer modes and validity<a class="headerlink" href="#transformer-modes-and-validity" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Example</th>
+<th>Conformal guarantee</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"fixed"</code></td>
+<td><code>FuncTransformer</code>, <code>Select</code>, <code>Discard</code></td>
+<td>Full exchangeability — always valid</td>
+<td>O(1)</td>
+</tr>
+<tr>
+<td><code>"frozen"</code></td>
+<td><code>StandardScaler()</code>, <code>MinMaxScaler()</code></td>
+<td>Training-conditional validity (ALRW2 §4.7)</td>
+<td>O(1)</td>
+</tr>
+<tr>
+<td><code>"bag"</code></td>
+<td><code>StandardScaler(mode="bag")</code>, <code>MinMaxScaler(mode="bag")</code></td>
+<td><strong>Exact finite-sample validity</strong> — no warm-up required</td>
+<td>O(n·d²+d³) per predict</td>
+</tr>
+</tbody>
+</table>
+<p>The pipeline raises a <code>ValueError</code> at construction if any transformer's mode is not in <code>{"fixed", "frozen", "bag"}</code>.
+Pass <code>unsafe_incremental=True</code> to opt out (this voids the finite-sample guarantee).</p>
+<p><strong>Bag mode</strong> (<code>mode="bag"</code>) refits the scaler at each prediction on the full augmented
+<em>object</em> bag <code>[X_train, x_test]</code> (label-free, symmetric → permutation-equivariant).
+This gives exact finite-sample validity with no required initial training set, and adapts
+naturally to distributional drift. The trade-off is losing the Sherman-Morrison incremental
+update, making the cost O(n·d²+d³) per <code>predict</code> call (O(n²) over a stream of n points).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Bag-fit: exact validity, no warm-up required, drift-adaptive</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">pipe</span> <span class="o">=</span> <span class="n">StandardScaler</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;bag&quot;</span><span class="p">)</span> <span class="o">|</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Start with just learn_one — no learn_initial_training_set needed</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">stream</span><span class="p">:</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">interval</span> <span class="o">=</span> <span class="n">pipe</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>   <span class="c1"># full-label-space until bag grows</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="n">pipe</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+</code></pre></div>
+<p>Mixing <code>"frozen"</code> and <code>"bag"</code> transformers in the same pipeline is rejected (v1).</p>
+<h3 id="inspecting-a-pipeline">Inspecting a pipeline<a class="headerlink" href="#inspecting-a-pipeline" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">pipe</span><span class="o">.</span><span class="n">summary</span><span class="p">()</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># {&#39;n_steps&#39;: 2,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1">#  &#39;transformers&#39;: [{&#39;type&#39;: &#39;StandardScaler&#39;, &#39;mode&#39;: &#39;frozen&#39;, &#39;fitted&#39;: True}],</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1">#  &#39;estimator&#39;: {&#39;type&#39;: &#39;ConformalRidgeRegressor&#39;},</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1">#  &#39;unsafe_incremental&#39;: False}</span>
+</code></pre></div>
+<hr />
+<h2 id="summary-decision-table">Summary Decision Table<a class="headerlink" href="#summary-decision-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>I want...</th>
+<th>Use</th>
+<th>Class</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preprocessing before conformal prediction</td>
+<td>Pipeline</td>
+<td><code>Pipeline</code> / <code>StandardScaler</code> / <code>MinMaxScaler</code> / <code>FuncTransformer</code></td>
+</tr>
+<tr>
+<td>Axis-align features (e.g. before Mondrian)</td>
+<td>Pipeline</td>
+<td><code>PCA</code></td>
+</tr>
+<tr>
+<td>Dimensionality reduction / collinearity removal</td>
+<td>Pipeline</td>
+<td><code>SVD</code></td>
+</tr>
+<tr>
+<td>Prediction interval (linear)</td>
+<td>Regressor</td>
+<td><code>ConformalRidgeRegressor</code></td>
+</tr>
+<tr>
+<td>Prediction interval (nonlinear)</td>
+<td>Regressor</td>
+<td><code>KernelConformalRidgeRegressor</code> or <code>ConformalNearestNeighboursRegressor</code></td>
+</tr>
+<tr>
+<td>Prediction interval (sparse)</td>
+<td>Regressor</td>
+<td><code>ConformalLassoRegressor</code></td>
+</tr>
+<tr>
+<td>Prediction set (classification)</td>
+<td>Classifier</td>
+<td><code>ConformalNearestNeighboursClassifier</code></td>
+</tr>
+<tr>
+<td>Full predictive distribution</td>
+<td>CPS</td>
+<td><code>RidgePredictionMachine</code></td>
+</tr>
+<tr>
+<td>Calibrated probabilities</td>
+<td>Venn</td>
+<td><code>VennAbersPredictor</code></td>
+</tr>
+<tr>
+<td>Change-point detection</td>
+<td>Martingale</td>
+<td><code>PluginMartingale</code> + <code>VilleWrapper</code></td>
+</tr>
+<tr>
+<td>Group-conditional coverage</td>
+<td>Mondrian</td>
+<td><code>MondrianConformalRegressor</code> / <code>MondrianConformalClassifier</code></td>
+</tr>
+<tr>
+<td>Label-conditional coverage</td>
+<td>Mondrian</td>
+<td><code>MondrianConformalClassifier(category_fn="label")</code></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

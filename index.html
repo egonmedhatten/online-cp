@@ -1,0 +1,1769 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Valid prediction sets and intervals with guaranteed coverage, updated one example at a time.">
+      
+      
+      
+        <link rel="canonical" href="https://egonmedhatten.github.io/online-cp/">
+      
+      
+      
+        <link rel="next" href="quickstart/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>online-cp: Online Conformal Prediction</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#online-cp-online-conformal-prediction" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="online-cp: Online Conformal Prediction" class="md-header__button md-logo" aria-label="online-cp: Online Conformal Prediction" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            online-cp: Online Conformal Prediction
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Home
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/egonmedhatten/online-cp" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="online-cp: Online Conformal Prediction" class="md-nav__button md-logo" aria-label="online-cp: Online Conformal Prediction" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    online-cp: Online Conformal Prediction
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/egonmedhatten/online-cp" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick start">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#conformal-regression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal regression
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conformal-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-level-predictions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-level predictions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#venn-abers-predictor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Venn-Abers predictor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nearest-neighbours-venn-predictor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nearest-neighbours Venn predictor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mondrian-conformal-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mondrian conformal prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streaming-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streaming evaluation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Streaming evaluation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#weak-lazy-teachers-delayed-and-sparse-feedback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Weak &amp; Lazy Teachers (delayed and sparse feedback)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conformal-test-martingales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal test martingales
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conformal-predictive-decision-making" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal predictive decision making
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API pattern
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#saving-and-loading-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Saving and Loading Models
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tutorial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tutorial
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#looking-for-inductive-split-conformal-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Looking for Inductive (Split) Conformal Prediction?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#citing-online-cp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📄 Citing online-cp
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="📄 Citing online-cp">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bibtex" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BibTeX
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatted-citation-apa-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Formatted Citation (APA Style)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/regressors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Regressors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/classifiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Classifiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/venn/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Venn Predictors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/mondrian/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mondrian CP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/cps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Predictive Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/decision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision Making
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/martingale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Martingales
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/betting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Betting Strategies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/plotting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plotting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/kernels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kernels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipelines & Preprocessing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/serialization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Serialization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick start">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#conformal-regression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal regression
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conformal-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-level-predictions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-level predictions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#venn-abers-predictor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Venn-Abers predictor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nearest-neighbours-venn-predictor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nearest-neighbours Venn predictor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mondrian-conformal-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mondrian conformal prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streaming-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streaming evaluation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Streaming evaluation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#weak-lazy-teachers-delayed-and-sparse-feedback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Weak &amp; Lazy Teachers (delayed and sparse feedback)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conformal-test-martingales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal test martingales
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conformal-predictive-decision-making" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conformal predictive decision making
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API pattern
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#saving-and-loading-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Saving and Loading Models
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tutorial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tutorial
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#looking-for-inductive-split-conformal-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Looking for Inductive (Split) Conformal Prediction?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#citing-online-cp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📄 Citing online-cp
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="📄 Citing online-cp">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bibtex" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BibTeX
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatted-citation-apa-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Formatted Citation (APA Style)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="online-cp-online-conformal-prediction">online-cp — Online Conformal Prediction<a class="headerlink" href="#online-cp-online-conformal-prediction" title="Permanent link">&para;</a></h1>
+<p><a href="https://badge.fury.io/py/online-cp"><img alt="PyPI version" src="https://badge.fury.io/py/online-cp.svg" /></a>
+<a href="https://egonmedhatten.github.io/online-cp/"><img alt="Docs" src="https://img.shields.io/badge/docs-online-blue" /></a>
+<a href="https://opensource.org/licenses/BSD-3-Clause"><img alt="License" src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" /></a>
+<a href="https://pepy.tech/projects/online-cp"><img alt="PyPI Downloads" src="https://static.pepy.tech/personalized-badge/online-cp?period=total&amp;units=INTERNATIONAL_SYSTEM&amp;left_color=GRAY&amp;right_color=GREEN&amp;left_text=downloads" /></a>
+<a href="https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/egonmedhatten/online-cp/actions/workflows/test.yml/badge.svg" /></a>
+<a href="https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb"><img alt="Binder" src="https://mybinder.org/badge_logo.svg" /></a></p>
+<p>A Python library for <strong>online conformal prediction</strong> — valid prediction sets and intervals with guaranteed coverage, updated one example at a time.</p>
+<h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>online-cp
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Optional: install with numba for faster Lasso homotopy and KDE</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>pip<span class="w"> </span>install<span class="w"> </span>online-cp<span class="o">[</span>fast<span class="o">]</span>
+</code></pre></div>
+<h3 id="conformal-regression">Conformal regression<a class="headerlink" href="#conformal-regression" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalRidgeRegressor</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Synthetic data: f(x) = x₁ + x₂ + noise</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">N</span> <span class="o">=</span> <span class="mi">100</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">X</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">y</span> <span class="o">=</span> <span class="n">X</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1"># Create regressor and learn an initial training set</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="n">cp</span> <span class="o">=</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">cp</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X</span><span class="p">[:</span><span class="mi">50</span><span class="p">],</span> <span class="n">y</span><span class="p">[:</span><span class="mi">50</span><span class="p">])</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="c1"># Online loop: predict then learn</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="n">N</span><span class="p">):</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="n">interval</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Prediction interval: </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="n">cp</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+</code></pre></div>
+<h3 id="conformal-classification">Conformal classification<a class="headerlink" href="#conformal-classification" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalNearestNeighboursClassifier</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">cp</span> <span class="o">=</span> <span class="n">ConformalNearestNeighboursClassifier</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">label_space</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]))</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">cp</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">Gamma</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Prediction set: </span><span class="si">{</span><span class="n">Gamma</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># e.g. array([1])</span>
+</code></pre></div>
+<p>Other estimators may still run, but should be treated as unverified and are
+expected to be less stable or slower in this transductive setting.</p>
+<h3 id="multi-level-predictions">Multi-level predictions<a class="headerlink" href="#multi-level-predictions" title="Permanent link">&para;</a></h3>
+<p>All predictors support multiple significance levels in a single call:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="p">[</span><span class="mf">0.01</span><span class="p">,</span> <span class="mf">0.05</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">])</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">result</span><span class="p">[</span><span class="mf">0.1</span><span class="p">]</span>          <span class="c1"># prediction at ε=0.1</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">result</span><span class="o">.</span><span class="n">levels</span>        <span class="c1"># [0.01, 0.05, 0.1, 0.2]</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">result</span><span class="o">.</span><span class="n">coverage</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>   <span class="c1"># {0.01: True, 0.05: True, 0.1: True, 0.2: False}</span>
+</code></pre></div>
+<h3 id="venn-abers-predictor">Venn-Abers predictor<a class="headerlink" href="#venn-abers-predictor" title="Permanent link">&para;</a></h3>
+<p>Calibrated probability predictions for binary classification via the full/transductive Venn-Abers predictor (Algorithm 6.1, ALRW2 §6.4). The prediction is a <strong>multiprobability pair</strong> <span class="arithmatex">\((p^0, p^1)\)</span> — not a point estimate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">VennAbersPredictor</span><span class="p">,</span> <span class="n">log_loss_point</span><span class="p">,</span> <span class="n">brier_point</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">vap</span> <span class="o">=</span> <span class="n">VennAbersPredictor</span><span class="p">(</span><span class="n">scorer</span><span class="o">=</span><span class="s2">&quot;ridge&quot;</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">vap</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">pred</span> <span class="o">=</span> <span class="n">vap</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">)</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">p0</span><span class="p">,</span> <span class="n">pred</span><span class="o">.</span><span class="n">p1</span><span class="p">)</span>  <span class="c1"># the multiprobability pair IS the prediction</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># For decision-making, merge into a single probability:</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">log_loss_point</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">p0</span><span class="p">,</span> <span class="n">pred</span><span class="o">.</span><span class="n">p1</span><span class="p">)</span>  <span class="c1"># minimises log loss</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="n">brier_point</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">p0</span><span class="p">,</span> <span class="n">pred</span><span class="o">.</span><span class="n">p1</span><span class="p">)</span>     <span class="c1"># minimises Brier loss</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="n">vap</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">y_new</span><span class="p">)</span>
+</code></pre></div>
+<p>Also supports k-NN scoring (<code>VennAbersPredictor(scorer="knn", k=5)</code>) and SVM scoring (<code>VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)</code>).</p>
+<h3 id="nearest-neighbours-venn-predictor">Nearest-neighbours Venn predictor<a class="headerlink" href="#nearest-neighbours-venn-predictor" title="Permanent link">&para;</a></h3>
+<p>Taxonomy-based Venn predictor using the k-NN voting taxonomy (ALRW2 §6.2). Supports <strong>binary and multiclass</strong> labels. The taxonomy categorises each example by the number of same-class labels among its k nearest neighbours:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">NearestNeighboursVennPredictor</span><span class="p">,</span> <span class="n">log_loss_point</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># Binary</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">vp</span> <span class="o">=</span> <span class="n">NearestNeighboursVennPredictor</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">vp</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">pred</span> <span class="o">=</span> <span class="n">vp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">p0</span><span class="p">,</span> <span class="n">pred</span><span class="o">.</span><span class="n">p1</span><span class="p">)</span>            <span class="c1"># multiprobability pair</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">log_loss_point</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">p0</span><span class="p">,</span> <span class="n">pred</span><span class="o">.</span><span class="n">p1</span><span class="p">)</span>   <span class="c1"># merge for decisions</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c1"># Multiclass (label_space inferred from data, or pass explicitly)</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="n">vp</span> <span class="o">=</span> <span class="n">NearestNeighboursVennPredictor</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">label_space</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="n">vp</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="n">pred</span> <span class="o">=</span> <span class="n">vp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">)</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="nb">print</span><span class="p">(</span><span class="n">pred</span><span class="o">.</span><span class="n">point</span><span class="p">)</span>                  <span class="c1"># calibrated class probabilities</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="n">vp</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">y_new</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="mondrian-conformal-prediction">Mondrian conformal prediction<a class="headerlink" href="#mondrian-conformal-prediction" title="Permanent link">&para;</a></h3>
+<p>Group-conditional coverage via a single pooled model with category-filtered calibration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalRidgeRegressor</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp.mondrian</span><span class="w"> </span><span class="kn">import</span> <span class="n">MondrianConformalRegressor</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">wrapper</span> <span class="o">=</span> <span class="n">MondrianConformalRegressor</span><span class="p">(</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">base_model</span><span class="o">=</span><span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">),</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">category_fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="s2">&quot;high&quot;</span> <span class="k">if</span> <span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">&quot;low&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">wrapper</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># Guarantees: P(y ∈ Γ | category = k) ≥ 1 − ε  for each k</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="n">interval</span> <span class="o">=</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_new</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="streaming-evaluation">Streaming evaluation<a class="headerlink" href="#streaming-evaluation" title="Permanent link">&para;</a></h3>
+<p>River-style test-then-train loop with composable metrics:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ErrorRate</span><span class="p">,</span> <span class="n">IntervalWidth</span><span class="p">,</span> <span class="n">WinklerScore</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp.evaluate</span><span class="w"> </span><span class="kn">import</span> <span class="n">progressive_val</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">metric</span> <span class="o">=</span> <span class="n">ErrorRate</span><span class="p">()</span> <span class="o">+</span> <span class="n">IntervalWidth</span><span class="p">()</span> <span class="o">+</span> <span class="n">WinklerScore</span><span class="p">()</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">progressive_val</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">X_test</span><span class="p">,</span> <span class="n">y_test</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">metric</span><span class="o">=</span><span class="n">metric</span><span class="p">)</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nb">print</span><span class="p">(</span><span class="n">metric</span><span class="p">)</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># ErrorRate: 0.0900</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># IntervalWidth: 0.4123</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="c1"># WinklerScore: 0.5012</span>
+</code></pre></div>
+<p>Supports streaming iterables and conditional learning:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp.evaluate</span><span class="w"> </span><span class="kn">import</span> <span class="n">iter_progressive_val</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># Stream from any iterable of (x, y) pairs</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">stream</span> <span class="o">=</span> <span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">data_source</span><span class="p">)</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">for</span> <span class="n">snapshot</span> <span class="ow">in</span> <span class="n">iter_progressive_val</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">stream</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="mi">50</span><span class="p">):</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">snapshot</span><span class="p">)</span>  <span class="c1"># periodic metric checkpoints</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># Conditional learning: only learn from some examples</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">progressive_val</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">learn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">i</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="weak-lazy-teachers-delayed-and-sparse-feedback">Weak &amp; Lazy Teachers (delayed and sparse feedback)<a class="headerlink" href="#weak-lazy-teachers-delayed-and-sparse-feedback" title="Permanent link">&para;</a></h4>
+<p>To model real-world label latency, pass a <code>delay</code> (in steps) to any
+progressive-validation function. Labels are scheduled in a min-heap and
+applied when they arrive; all outstanding labels are flushed at the end of
+the stream:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Fixed lag: label for step i arrives at step i+5</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">progressive_val</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">X_test</span><span class="p">,</span> <span class="n">y_test</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Dynamic latency: callable (step_index, x, y) → int</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">progressive_val</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">stream</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="k">lambda</span> <span class="n">i</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">10</span><span class="p">)</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Lazy Teacher: pass y=None for steps with no feedback</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="n">sparse_stream</span> <span class="o">=</span> <span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="k">if</span> <span class="n">oracle_available</span> <span class="k">else</span> <span class="kc">None</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">stream</span><span class="p">)</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">iter_progressive_val</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">sparse_stream</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>
+</code></pre></div>
+<p>Asymptotic validity is retained for invariant conformal predictors
+(ALRW2, §3.3, Thm 3.7–3.11). A fixed lag <code>delay=l</code> gives equally-spaced
+feedback (<span class="arithmatex">\(n_k = O(k)\)</span>) and enjoys the strongest (LIL) guarantee;
+a lazy teacher is valid as long as feedback arrives at more than a
+logarithmic fraction of trials.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp.plotting</span><span class="w"> </span><span class="kn">import</span> <span class="n">plot_coverage</span><span class="p">,</span> <span class="n">plot_martingale</span><span class="p">,</span> <span class="n">plot_intervals</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">plot_coverage</span><span class="p">(</span><span class="n">error_rate_metric</span><span class="p">,</span> <span class="n">nominal</span><span class="o">=</span><span class="mf">0.9</span><span class="p">)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">plot_martingale</span><span class="p">(</span><span class="n">martingale</span><span class="p">)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">plot_intervals</span><span class="p">(</span><span class="n">y_true</span><span class="p">,</span> <span class="n">intervals</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="conformal-test-martingales">Conformal test martingales<a class="headerlink" href="#conformal-test-martingales" title="Permanent link">&para;</a></h3>
+<p>Test the exchangeability assumption online:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">PluginMartingale</span><span class="p">,</span> <span class="n">GaussianKDE</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">martingale</span> <span class="o">=</span> <span class="n">PluginMartingale</span><span class="p">(</span><span class="n">betting_strategy</span><span class="o">=</span><span class="n">GaussianKDE</span><span class="p">())</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_train</span><span class="p">,</span> <span class="n">N</span><span class="p">):</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">p</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">compute_p_value</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">martingale</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">cp</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c1"># If martingale grows large → evidence against exchangeability</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Martingale: </span><span class="si">{</span><span class="n">martingale</span><span class="o">.</span><span class="n">M</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Use <code>VilleWrapper</code> to turn any martingale into a statistical test with Ville's inequality (<span class="arithmatex">\(P(\exists n: M_n \geq c) \leq 1/c\)</span>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimpleJumper</span><span class="p">,</span> <span class="n">VilleWrapper</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">ville</span> <span class="o">=</span> <span class="n">VilleWrapper</span><span class="p">(</span><span class="n">SimpleJumper</span><span class="p">(),</span> <span class="n">threshold</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>  <span class="c1"># 5% significance</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">p_values</span><span class="p">:</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">ville</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="k">if</span> <span class="n">ville</span><span class="o">.</span><span class="n">rejected</span><span class="p">:</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Exchangeability rejected at observation </span><span class="si">{</span><span class="n">ville</span><span class="o">.</span><span class="n">martingale</span><span class="o">.</span><span class="n">n</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>        <span class="k">break</span>
+</code></pre></div>
+<h3 id="conformal-predictive-decision-making">Conformal predictive decision making<a class="headerlink" href="#conformal-predictive-decision-making" title="Permanent link">&para;</a></h3>
+<p>Make optimal decisions under uncertainty using conformal predictive distributions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">UtilityFunction</span><span class="p">,</span> <span class="n">ConformalPredictiveDecisionMaker</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="c1"># Define a utility: U(x, y, decision) -&gt; payoff</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="n">U</span> <span class="o">=</span> <span class="n">UtilityFunction</span><span class="p">(</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">d</span><span class="p">:</span> <span class="o">-</span><span class="nb">abs</span><span class="p">(</span><span class="n">y</span> <span class="o">-</span> <span class="n">d</span><span class="p">),</span>  <span class="c1"># penalise distance from decision to outcome</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="n">decisions</span><span class="o">=</span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">],</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="p">)</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="n">cdm</span> <span class="o">=</span> <span class="n">ConformalPredictiveDecisionMaker</span><span class="p">(</span><span class="n">U</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="n">cdm</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">X_test</span><span class="p">)):</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>    <span class="n">decision</span> <span class="o">=</span> <span class="n">cdm</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">X_test</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>       <span class="c1"># maximises expected utility</span>
+<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>    <span class="n">cdm</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">X_test</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">y_test</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+</code></pre></div>
+<h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Regressors</strong></td>
+<td><code>ConformalRidgeRegressor</code>, <code>KernelConformalRidgeRegressor</code>, <code>ConformalNearestNeighboursRegressor</code>, <code>ConformalLassoRegressor</code></td>
+</tr>
+<tr>
+<td><strong>Classifiers</strong></td>
+<td><code>ConformalNearestNeighboursClassifier</code>, <code>ConformalSupportVectorMachine</code></td>
+</tr>
+<tr>
+<td><strong>Venn Predictors</strong></td>
+<td><code>VennAbersPredictor</code> (ridge, k-NN, SVM scoring), <code>NearestNeighboursVennPredictor</code> (binary &amp; multiclass), <code>log_loss_point</code>, <code>brier_point</code></td>
+</tr>
+<tr>
+<td><strong>Mondrian CP</strong></td>
+<td><code>MondrianConformalRegressor</code>, <code>MondrianConformalClassifier</code> — group-conditional coverage</td>
+</tr>
+<tr>
+<td><strong>Predictive Systems</strong></td>
+<td><code>RidgePredictionMachine</code>, <code>KernelRidgePredictionMachine</code>, <code>NearestNeighboursPredictionMachine</code>, <code>DempsterHillConformalPredictiveSystem</code></td>
+</tr>
+<tr>
+<td><strong>Decision Making</strong></td>
+<td><code>ConformalPredictiveDecisionMaker</code>, <code>UtilityFunction</code>, <code>cps_decision</code>, <code>venn_decision</code></td>
+</tr>
+<tr>
+<td><strong>Metrics</strong></td>
+<td><code>ErrorRate</code>, <code>ObservedExcess</code>, <code>ObservedFuzziness</code>, <code>SetSize</code>, <code>IntervalWidth</code>, <code>WinklerScore</code>, <code>CRPS</code></td>
+</tr>
+<tr>
+<td><strong>Evaluation</strong></td>
+<td><code>progressive_val()</code>, <code>iter_progressive_val()</code> — streaming test-then-train</td>
+</tr>
+<tr>
+<td><strong>Plotting</strong></td>
+<td><code>plot_coverage</code>, <code>plot_martingale</code>, <code>plot_detector</code>, <code>plot_intervals</code>, <code>plot_set_sizes</code></td>
+</tr>
+<tr>
+<td><strong>Martingales</strong></td>
+<td><code>PluginMartingale</code>, <code>SimpleMixtureMartingale</code>, <code>SimpleJumper</code>, <code>CompositeJumper</code>, <code>SleeperStayer</code>, <code>SleeperDrifter</code></td>
+</tr>
+<tr>
+<td><strong>Detection Wrappers</strong></td>
+<td><code>VilleWrapper</code>, <code>CUSUMWrapper</code>, <code>ShiryaevRobertsWrapper</code></td>
+</tr>
+<tr>
+<td><strong>Kernels</strong></td>
+<td><code>GaussianKernel</code>, <code>LinearKernel</code>, <code>PolynomialKernel</code>, <code>PeriodicKernel</code>, <code>LinearCombinationKernel</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="api-pattern">API pattern<a class="headerlink" href="#api-pattern" title="Permanent link">&para;</a></h2>
+<p>All models follow the same interface:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">model</span> <span class="o">=</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1"># Learn</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">model</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>  <span class="c1"># batch</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">model</span><span class="o">.</span><span class="n">learn_one</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>                                <span class="c1"># online</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="c1"># Predict</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="n">Gamma</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>      <span class="c1"># single level</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="n">result</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="p">[</span><span class="o">...</span><span class="p">])</span>   <span class="c1"># multi-level</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="c1"># P-value</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="n">p</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">compute_p_value</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="saving-and-loading-models">Saving and Loading Models<a class="headerlink" href="#saving-and-loading-models" title="Permanent link">&para;</a></h2>
+<p>All model classes support <code>save</code> / <code>load</code> round-trips — regressors, classifiers, CPS, Venn predictors, Mondrian tree/forest models, Mondrian wrappers, <code>ConformalPredictiveDecisionMaker</code>, and <code>Pipeline</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConformalRidgeRegressor</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">cp</span> <span class="o">=</span> <span class="n">ConformalRidgeRegressor</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">rnd_state</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">cp</span><span class="o">.</span><span class="n">learn_initial_training_set</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="c1"># Save to disk</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="n">cp</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">&quot;my_model.joblib&quot;</span><span class="p">)</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="c1"># Load from disk — predictions are identical to the original</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="n">loaded</span> <span class="o">=</span> <span class="n">ConformalRidgeRegressor</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;my_model.joblib&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>Exact reproducibility</strong>: The RNG position is saved via <code>bit_generator.state</code>, so <code>loaded.compute_p_value(x, y)</code> returns the same value the original model would have, even after many online updates.</p>
+<p><strong>Callable arguments</strong> (<code>kernel</code>, <code>distance_func</code>, <code>category_fn</code>, …): module-level named functions and <code>Kernel</code> objects round-trip automatically. Lambdas and closures cannot be serialized — wrap them in a named function or use <code>@register_callable</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">online_cp</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_callable</span><span class="p">,</span> <span class="n">ConformalNearestNeighboursRegressor</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="nd">@register_callable</span><span class="p">(</span><span class="s2">&quot;my_dist&quot;</span><span class="p">)</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">my_dist</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">cp</span> <span class="o">=</span> <span class="n">ConformalNearestNeighboursRegressor</span><span class="p">(</span><span class="n">distance_func</span><span class="o">=</span><span class="n">my_dist</span><span class="p">)</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="n">cp</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">&quot;model.joblib&quot;</span><span class="p">)</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="n">loaded</span> <span class="o">=</span> <span class="n">ConformalNearestNeighboursRegressor</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;model.joblib&quot;</span><span class="p">)</span>  <span class="c1"># works</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Security</strong>: Model files use Python pickle internally. <strong>Only load files from trusted sources.</strong></p>
+</blockquote>
+<h2 id="tutorial">Tutorial<a class="headerlink" href="#tutorial" title="Permanent link">&para;</a></h2>
+<p>Start with <a href="https://github.com/egonmedhatten/online-cp/blob/main/notebooks/quickstart.ipynb"><code>notebooks/quickstart.ipynb</code></a> for a 5-minute introduction (<a href="https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb">run on Binder</a>), then see <a href="https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb"><code>notebooks/tutorial.ipynb</code></a> for a comprehensive walkthrough covering regression, classification, Mondrian CP, conformal predictive systems, martingales, and evaluation.</p>
+<h2 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://egonmedhatten.github.io/online-cp/">Documentation</a></li>
+<li><a href="https://github.com/egonmedhatten/online-cp">online-cp on GitHub</a></li>
+<li><a href="https://pypi.org/project/online-cp/">online-cp on PyPI</a></li>
+<li><a href="https://github.com/egonmedhatten/online-cp/blob/main/CHANGELOG.md">Changelog</a></li>
+</ul>
+<h2 id="looking-for-inductive-split-conformal-prediction">Looking for Inductive (Split) Conformal Prediction?<a class="headerlink" href="#looking-for-inductive-split-conformal-prediction" title="Permanent link">&para;</a></h2>
+<p>This package focuses on <strong>online</strong> (transductive) conformal prediction, where models are updated one example at a time and predictions are valid without a separate calibration set.</p>
+<p>For <strong>inductive</strong> (split) conformal prediction — where you have a fixed pre-trained model and a held-out calibration set — we recommend the excellent <a href="https://github.com/henrikbostrom/crepes"><code>crepes</code></a> package.</p>
+<h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
+<p>Vladimir Vovk, Alexander Gammerman, and Glenn Shafer. <em>Algorithmic Learning in a Random World</em> (2nd ed). Springer Nature, 2022.</p>
+<p>Jing Lei. Fast exact conformalization of the Lasso using piecewise linear homotopy. <em>Biometrika</em>, 106(4):751–767, 2019.</p>
+<p>Vladimir Vovk and Claus Bendtsen. Conformal predictive decision making. <em>Proceedings of Machine Learning Research</em>, 91:52–62, 2018.</p>
+<h2 id="citing-online-cp">📄 Citing <code>online-cp</code><a class="headerlink" href="#citing-online-cp" title="Permanent link">&para;</a></h2>
+<p>If you use <code>online-cp</code> in your work, please cite the following paper. It helps support the ongoing development of this package.</p>
+<h3 id="bibtex">BibTeX<a class="headerlink" href="#bibtex" title="Permanent link">&para;</a></h3>
+<p>For users of LaTeX and bibliography managers, please use this BibTeX entry:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nc">@InProceedings</span><span class="p">{</span><span class="nl">pmlr-v266-hallberg-szabadvary25a</span><span class="p">,</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="na">title</span><span class="w"> </span><span class="p">=</span><span class="w">    </span><span class="s">{online-cp: a Python Package for Online Conformal Prediction, Conformal Predictive Systems and Conformal Test Martingales}</span><span class="p">,</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span><span class="na">author</span><span class="w"> </span><span class="p">=</span><span class="w">       </span><span class="s">{Hallberg Szabadv\&#39;{a}ry, Johan and L\&quot;{o}fstr\&quot;{o}m, Tuwe and Matela, Rudy}</span><span class="p">,</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span><span class="na">booktitle</span><span class="w"> </span><span class="p">=</span><span class="w">    </span><span class="s">{Proceedings of the Fourteenth Symposium on Conformal and Probabilistic Prediction with Applications}</span><span class="p">,</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span><span class="na">pages</span><span class="w"> </span><span class="p">=</span><span class="w">    </span><span class="s">{595--614}</span><span class="p">,</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">  </span><span class="na">year</span><span class="w"> </span><span class="p">=</span><span class="w">     </span><span class="s">{2025}</span><span class="p">,</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">  </span><span class="na">editor</span><span class="w"> </span><span class="p">=</span><span class="w">   </span><span class="s">{Nguyen, Khuong An and Luo, Zhiyuan and Papadopoulos, Harris and L\&quot;ofstr\&quot;om, Tuwe and Carlsson, Lars and Bostr\&quot;om, Henrik}</span><span class="p">,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">  </span><span class="na">volume</span><span class="w"> </span><span class="p">=</span><span class="w">   </span><span class="s">{266}</span><span class="p">,</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">  </span><span class="na">series</span><span class="w"> </span><span class="p">=</span><span class="w">   </span><span class="s">{Proceedings of Machine Learning Research}</span><span class="p">,</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="w">  </span><span class="na">month</span><span class="w"> </span><span class="p">=</span><span class="w">    </span><span class="s">{10--12 Sep}</span><span class="p">,</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="w">  </span><span class="na">publisher</span><span class="w"> </span><span class="p">=</span><span class="w">    </span><span class="s">{PMLR}</span><span class="p">,</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="w">  </span><span class="na">pdf</span><span class="w"> </span><span class="p">=</span><span class="w">      </span><span class="s">{[https://raw.githubusercontent.com/mlresearch/v266/main/assets/hallberg-szabadvary25a/hallberg-szabadvary25a.pdf](https://raw.githubusercontent.com/mlresearch/v266/main/assets/hallberg-szabadvary25a/hallberg-szabadvary25a.pdf)}</span><span class="p">,</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="w">  </span><span class="na">url</span><span class="w"> </span><span class="p">=</span><span class="w">      </span><span class="s">{[https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html](https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html)}</span>
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="formatted-citation-apa-style">Formatted Citation (APA Style)<a class="headerlink" href="#formatted-citation-apa-style" title="Permanent link">&para;</a></h3>
+<p>Hallberg Szabadváry, J., Löfström, T., &amp; Matela, R. (2025). online-cp: a Python Package for Online Conformal Prediction, Conformal Predictive Systems and Conformal Test Martingales. In K. A. Nguyen, Z. Luo, H. Papadopoulos, T. Löfström, L. Carlsson, &amp; H. Boström (Eds.), <em>Proceedings of the Fourteenth Symposium on Conformal and Probabilistic Prediction with Applications</em> (Vol. 266, pp. 595–614). PMLR. https://proceedings.mlr.press/v266/hallberg-szabadvary25a.html</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.sections", "navigation.expand", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

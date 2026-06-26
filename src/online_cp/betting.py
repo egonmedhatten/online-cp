@@ -205,11 +205,7 @@ def _reflected_kde_cdf_numba(x, data, h):
         z1 = (x - d) * inv_h
         z2 = (x + d) * inv_h
         z3 = (x - (2.0 - d)) * inv_h
-        total += (
-            0.5 * math.erfc(-z1 * inv_sqrt2)
-            + 0.5 * math.erfc(-z2 * inv_sqrt2)
-            + 0.5 * math.erfc(-z3 * inv_sqrt2)
-        )
+        total += 0.5 * math.erfc(-z1 * inv_sqrt2) + 0.5 * math.erfc(-z2 * inv_sqrt2) + 0.5 * math.erfc(-z3 * inv_sqrt2)
     return total / n - 1.0  # subtract 1 for the reflection normalization
 
 
@@ -306,8 +302,7 @@ class GaussianKDE(BettingStrategy):
 
         if n < 50 or self._current_bw is None:
             result = minimize_scalar(
-                objective_func, bounds=(self.bw_min, self.bw_max),
-                method="bounded", options={"maxiter": self.max_iter}
+                objective_func, bounds=(self.bw_min, self.bw_max), method="bounded", options={"maxiter": self.max_iter}
             )
         else:
             search_bounds = (
@@ -315,8 +310,7 @@ class GaussianKDE(BettingStrategy):
                 min(self._current_bw * 1.2, self.bw_max),
             )
             result = minimize_scalar(
-                objective_func, bounds=search_bounds,
-                method="bounded", options={"maxiter": self.max_iter}
+                objective_func, bounds=search_bounds, method="bounded", options={"maxiter": self.max_iter}
             )
         return result
 
@@ -330,10 +324,7 @@ class GaussianKDE(BettingStrategy):
             else:
                 h = self.bw_min  # fallback for zero variance
         elif self.bandwidth == "lcv":
-            should_recalculate = (
-                (self._current_bw is None)
-                or (n >= self._n_last_update * self.growth_factor)
-            )
+            should_recalculate = (self._current_bw is None) or (n >= self._n_last_update * self.growth_factor)
             if should_recalculate and n > 1:
                 result = self._likelihood_lcv_bw(data)
                 h = result.x
@@ -474,11 +465,7 @@ class BetaMLE(BettingStrategy):
                     return np.inf
                 return -((a - 1) * ls_x + (b - 1) * ls_1mx - n * betaln(a, b))
 
-            result = minimize(
-                neg_ll, [self._ahat, self._bhat],
-                bounds=[(1e-5, 1e5), (1e-5, 1e5)],
-                method='L-BFGS-B'
-            )
+            result = minimize(neg_ll, [self._ahat, self._bhat], bounds=[(1e-5, 1e5), (1e-5, 1e5)], method="L-BFGS-B")
             if result.success and np.all(np.isfinite(result.x)):
                 self._ahat, self._bhat = result.x
 
@@ -497,8 +484,8 @@ class ParticleFilterStrategy(BettingStrategy):
         Standard deviation of the random walk noise. "auto" learns volatility.
     vol_noise_std : float
         Noise on the log-volatility process (when process_noise_std="auto").
-    seed : int or None
-        Random seed for reproducibility.
+    seed : int, np.random.Generator, or None
+        Random seed or Generator for reproducibility.
 
     Examples
     --------
@@ -512,7 +499,10 @@ class ParticleFilterStrategy(BettingStrategy):
     def __init__(self, num_particles=1000, process_noise_std=0.05, vol_noise_std=0.01, seed=None):
         self.N = num_particles
         self.adaptive_noise = process_noise_std == "auto"
-        self.rng = np.random.default_rng(seed)
+        if isinstance(seed, np.random.Generator):
+            self.rng = seed
+        else:
+            self.rng = np.random.default_rng(seed)
 
         if self.adaptive_noise:
             self.dim_x = 3
@@ -678,10 +668,12 @@ class FixedStrategy(BettingStrategy):
             if cdf is not None:
                 self._cdf = cdf
             else:
+
                 def numerical_cdf(x):
                     if np.ndim(x) == 0:
                         return quad(self._pdf, 0, x, limit=50)[0]
                     return np.array([quad(self._pdf, 0, val, limit=50)[0] for val in x])
+
                 self._cdf = numerical_cdf
         elif distribution is not None:
             self._pdf = distribution.pdf

@@ -182,7 +182,7 @@ class ConformalClassifier(SerializableMixin):
             return float(p)
 
     def _compute_Gamma(self, p_values, epsilon):
-        if hasattr(epsilon, '__iter__'):
+        if hasattr(epsilon, "__iter__"):
             predictions = {}
             for eps in epsilon:
                 Gamma = []
@@ -231,11 +231,23 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
     """
 
     _SAVE_PARAMS: tuple = (
-        "k", "label_space", "distance", "distance_func", "aggregation",
-        "verbose", "rnd_state", "n_jobs", "epsilon",
+        "k",
+        "label_space",
+        "distance",
+        "distance_func",
+        "aggregation",
+        "verbose",
+        "rnd_state",
+        "n_jobs",
+        "epsilon",
     )
     _SAVE_STATE: tuple = (
-        "X", "y", "D", "_label_indices", "_label_space_fixed", "label_space",
+        "X",
+        "y",
+        "D",
+        "_label_indices",
+        "_label_space_fixed",
+        "label_space",
     )
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
@@ -270,8 +282,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             How to aggregate the k nearest same/different-class distances.
         verbose : int, default 0
             Verbosity level.
-        rnd_state : int or None, default None
-            Seed for the smoothing-variable generator.
+        rnd_state : int, np.random.Generator, or None, default None
+            Seed or Generator for the smoothing-variable generator.
         n_jobs : int or None, default None
             Number of parallel jobs for per-label p-value computation in
             :meth:`predict`.
@@ -305,7 +317,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         self.verbose = verbose
         self.rnd_state = rnd_state
         self._distance_func_arg = distance_func
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
 
@@ -344,15 +359,12 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 unknown = set(np.unique(y)) - set(self.label_space)
                 if unknown:
                     raise ValueError(
-                        f"Labels {sorted(unknown)} not in declared label_space "
-                        f"{self.label_space.tolist()}"
+                        f"Labels {sorted(unknown)} not in declared label_space {self.label_space.tolist()}"
                     )
             elif self.label_space is None:
                 self.label_space = np.unique(y)
             else:
-                self.label_space = np.sort(
-                    np.unique(np.concatenate([self.label_space, np.unique(y)]))
-                )
+                self.label_space = np.sort(np.unique(np.concatenate([self.label_space, np.unique(y)])))
 
     @staticmethod
     def update_distance_matrix(D, d):
@@ -422,7 +434,9 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
         return same_label_distances, different_label_distances
 
-    def learn_one(self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None) -> None:
+    def learn_one(
+        self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None
+    ) -> None:
         """Update the classifier with a single new example.
 
         Appends ``(x, y)`` to the stored data, extends the distance matrix and
@@ -443,10 +457,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         # Enforce label-space policy
         if self._label_space_fixed:
             if y not in self.label_space:
-                raise ValueError(
-                    f"Label {y} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
+                raise ValueError(f"Label {y} not in declared label_space {self.label_space.tolist()}")
         elif self.label_space is None:
             self.label_space = np.array([y])
         elif y not in self.label_space:
@@ -470,7 +481,9 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.D = precomputed
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
-    def compute_p_value(self, x: NDArray[np.floating[Any]], y: Any, return_update: bool = False) -> float | tuple[float, NDArray[np.floating[Any]] | None]:
+    def compute_p_value(
+        self, x: NDArray[np.floating[Any]], y: Any, return_update: bool = False
+    ) -> float | tuple[float, NDArray[np.floating[Any]] | None]:
         """Compute conformal p-value for a single (x, y) pair.
 
         Only tests the given label y (not the full label space),
@@ -498,7 +511,9 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             d = self.distance_func(self.X, x)
             D = self.update_distance_matrix(self.D, d)
             label_indices = self._extend_label_indices(self._label_indices, y, D.shape[0] - 1)
-            same_label_distances, different_label_distances = self._find_nearest_distances(D, label_indices=label_indices)
+            same_label_distances, different_label_distances = self._find_nearest_distances(
+                D, label_indices=label_indices
+            )
             Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
             p_value = self._compute_p_value(Alpha, tau, "nonconformity")
         else:
@@ -509,7 +524,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             return p_value, D
         return p_value
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        return_p_values: bool = False,
+        return_update: bool = False,
+        verbose: int = 0,
+    ) -> ConformalPredictionSet | MultiLevelPredictionSet:
         """Compute the conformal prediction set for object ``x``.
 
         For every candidate label the nonconformity ratio is evaluated as if
@@ -543,8 +565,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             epsilon = self.epsilon
 
         if self.label_space is None:
-            Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, '__iter__') else epsilon[0])
-            if hasattr(epsilon, '__iter__'):
+            Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0])
+            if hasattr(epsilon, "__iter__"):
                 Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
             if return_update:
                 return (Gamma, {}, None) if return_p_values else (Gamma, None)
@@ -661,7 +683,16 @@ class ConformalClassifierWrapper(ConformalClassifier):
         }
     )
 
-    def __init__(self, learner, label_space=None, epsilon=default_epsilon, verbose=0, rnd_state=None, n_jobs=None, warm_start="auto"):
+    def __init__(
+        self,
+        learner,
+        label_space=None,
+        epsilon=default_epsilon,
+        verbose=0,
+        rnd_state=None,
+        n_jobs=None,
+        warm_start="auto",
+    ):
         super().__init__(epsilon)
 
         warnings.warn(
@@ -683,7 +714,10 @@ class ConformalClassifierWrapper(ConformalClassifier):
         self.X = None
 
         self.verbose = verbose
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
 
@@ -705,8 +739,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
             return
         if estimator_name in self._CAUTION_ESTIMATORS:
             warnings.warn(
-                f"Wrapped estimator '{estimator_name}' is supported with caution; "
-                "results can be unstable or slow.",
+                f"Wrapped estimator '{estimator_name}' is supported with caution; results can be unstable or slow.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -726,10 +759,7 @@ class ConformalClassifierWrapper(ConformalClassifier):
         # Enforce label-space policy
         if self._label_space_fixed:
             if y not in self.label_space:
-                raise ValueError(
-                    f"Label {y} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
+                raise ValueError(f"Label {y} not in declared label_space {self.label_space.tolist()}")
         elif self.label_space is None:
             self.label_space = np.array([y])
         elif y not in self.label_space:
@@ -755,15 +785,12 @@ class ConformalClassifierWrapper(ConformalClassifier):
                 unknown = set(np.unique(y)) - set(self.label_space)
                 if unknown:
                     raise ValueError(
-                        f"Labels {sorted(unknown)} not in declared label_space "
-                        f"{self.label_space.tolist()}"
+                        f"Labels {sorted(unknown)} not in declared label_space {self.label_space.tolist()}"
                     )
             elif self.label_space is None:
                 self.label_space = np.unique(y)
             else:
-                self.label_space = np.sort(
-                    np.unique(np.concatenate([self.label_space, np.unique(y)]))
-                )
+                self.label_space = np.sort(np.unique(np.concatenate([self.label_space, np.unique(y)])))
 
     def _align_scores(self, S, classes):
         """Align predict_proba score columns to self.label_space order."""
@@ -845,7 +872,14 @@ class ConformalClassifierWrapper(ConformalClassifier):
         p_value = self._compute_p_value(Alpha, tau, "conformity")
         return (y_candidate, p_value)
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False, return_update: bool = False, verbose: int = 0) -> ConformalPredictionSet | MultiLevelPredictionSet:
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        return_p_values: bool = False,
+        return_update: bool = False,
+        verbose: int = 0,
+    ) -> ConformalPredictionSet | MultiLevelPredictionSet:
         p_values = {}
         tau = self.rnd_gen.uniform(0, 1)
 
@@ -854,8 +888,10 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         if self.label_space is None or self.X is None or self.y.shape[0] == 0:
             if self.label_space is None:
-                Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, '__iter__') else epsilon[0])
-                if hasattr(epsilon, '__iter__'):
+                Gamma = ConformalPredictionSet(
+                    np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
+                )
+                if hasattr(epsilon, "__iter__"):
                     Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
                 p_values = {}
             else:
@@ -886,7 +922,9 @@ class ConformalClassifierWrapper(ConformalClassifier):
         if self.n_jobs is not None and self.n_jobs != 1:
 
             def process_label(y_candidate):
-                learner_copy = copy.deepcopy(self._base_learner) if self._base_learner is not None else copy.deepcopy(self.learner)
+                learner_copy = (
+                    copy.deepcopy(self._base_learner) if self._base_learner is not None else copy.deepcopy(self.learner)
+                )
                 if self._warm_start and hasattr(learner_copy, "warm_start"):
                     learner_copy.warm_start = True
                 return self._fit_label(learner_copy, X, self.y, label_to_idx, tau, y_candidate)
@@ -991,8 +1029,8 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         Maximum SMO iterations. Default 5000.
     epsilon : float
         Significance level. Default 0.1.
-    rnd_state : int or None
-        Random seed.
+    rnd_state : int, np.random.Generator, or None
+        Random seed or Generator.
 
     Examples
     --------
@@ -1008,8 +1046,17 @@ class ConformalSupportVectorMachine(ConformalClassifier):
     """
 
     _SAVE_PARAMS: tuple = (
-        "kernel", "C", "nonconformity", "label_space", "sigma", "degree", "coef0",
-        "smo_tol", "smo_max_iter", "epsilon", "rnd_state",
+        "kernel",
+        "C",
+        "nonconformity",
+        "label_space",
+        "sigma",
+        "degree",
+        "coef0",
+        "smo_tol",
+        "smo_max_iter",
+        "epsilon",
+        "rnd_state",
     )
     _SAVE_STATE: tuple = ("X", "y", "K", "label_space", "_label_space_fixed")
     _SAVE_CALLABLES: tuple = ("kernel",)
@@ -1042,7 +1089,10 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         self.smo_tol = smo_tol
         self.smo_max_iter = smo_max_iter
         self.rnd_state = rnd_state
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.X = None
         self.y = np.empty(0)
@@ -1088,16 +1138,11 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         if self._label_space_fixed:
             unknown = set(np.unique(y)) - set(self.label_space)
             if unknown:
-                raise ValueError(
-                    f"Labels {sorted(unknown)} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
+                raise ValueError(f"Labels {sorted(unknown)} not in declared label_space {self.label_space.tolist()}")
         elif self.label_space is None:
             self.label_space = np.unique(y)
         else:
-            self.label_space = np.sort(
-                np.unique(np.concatenate([self.label_space, np.unique(y)]))
-            )
+            self.label_space = np.sort(np.unique(np.concatenate([self.label_space, np.unique(y)])))
         self.X = X.copy()
         self.y = y.copy().astype(float)
         self.K = self._compute_gram(X)
@@ -1109,10 +1154,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         # Enforce label-space policy
         if self._label_space_fixed:
             if y not in self.label_space:
-                raise ValueError(
-                    f"Label {y} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
+                raise ValueError(f"Label {y} not in declared label_space {self.label_space.tolist()}")
         elif self.label_space is None:
             self.label_space = np.array([y])
         elif y not in self.label_space:
@@ -1139,7 +1181,12 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, float(y))
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> ConformalPredictionSet | MultiLevelPredictionSet:
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        return_p_values: bool = False,
+    ) -> ConformalPredictionSet | MultiLevelPredictionSet:
         r"""Compute the conformal prediction set for object ``x``.
 
         For each candidate label the training set is augmented with
@@ -1172,8 +1219,10 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         if self.label_space is None or self.X is None or self.y.shape[0] == 0:
             # No training data — predict all labels (or empty if no label_space)
             if self.label_space is None:
-                Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, '__iter__') else epsilon[0])
-                if hasattr(epsilon, '__iter__'):
+                Gamma = ConformalPredictionSet(
+                    np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
+                )
+                if hasattr(epsilon, "__iter__"):
                     Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
                 if return_p_values:
                     return Gamma, {}
@@ -1215,8 +1264,8 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             # problems all entries are exchangeable and the full vector is used.
             multiclass = len(self.label_space) > 2
             if self.nonconformity == "margin":
-                f = K_aug @ (alpha * y_binary) + b   # decision function
-                ncm = -(y_binary * f)                # large => nonconforming
+                f = K_aug @ (alpha * y_binary) + b  # decision function
+                ncm = -(y_binary * f)  # large => nonconforming
                 scores = ncm[y_binary == 1.0] if multiclass else ncm
             else:  # 'alpha'
                 scores = alpha[y_binary == 1.0] if multiclass else alpha
@@ -1292,7 +1341,7 @@ def _smo_loop(K, y, C, tol, max_iter, alpha, G, Q_diag):
         m_val = -np.inf
         i = -1
         for k in range(n):
-            if ((alpha[k] < C and y[k] > 0) or (alpha[k] > 0 and y[k] < 0)):
+            if (alpha[k] < C and y[k] > 0) or (alpha[k] > 0 and y[k] < 0):
                 val = -y[k] * G[k]
                 if val > m_val:
                     m_val = val
@@ -1305,7 +1354,7 @@ def _smo_loop(K, y, C, tol, max_iter, alpha, G, Q_diag):
         j = -1
         K_ii = Q_diag[i]
         for k in range(n):
-            if ((alpha[k] < C and y[k] < 0) or (alpha[k] > 0 and y[k] > 0)):
+            if (alpha[k] < C and y[k] < 0) or (alpha[k] > 0 and y[k] > 0):
                 yG_k = -y[k] * G[k]
                 if yG_k < m_val:
                     a_ij = K_ii + Q_diag[k] - 2.0 * K[i, k]
@@ -1431,6 +1480,3 @@ def _smo_solve(K, y, C, tol=1e-3, max_iter=5000, warm_start=None):
         b = 0.0
 
     return alpha, b
-
-
-

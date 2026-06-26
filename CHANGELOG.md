@@ -8,7 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased] — targeting 0.3.1
-
+ 
+### Added
+ 
+- **Random Number Generation** — expanded `seed` and `rnd_state` arguments in regressors, classifiers, and betting strategies to accept `np.random.Generator` objects in addition to integer seeds.
+ 
 ---
 
 ## [0.3.0] — 2026-06-18

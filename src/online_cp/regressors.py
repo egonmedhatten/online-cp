@@ -55,6 +55,7 @@ except ImportError:
             return args[0]
         return lambda f: f
 
+
 __all__ = [
     "ConformalRidgeRegressor",
     "ConformalNearestNeighboursRegressor",
@@ -268,6 +269,7 @@ class ConformalRegressor(SerializableMixin):
             else:
                 return int(np.ceil(1 / epsilon.min()))
 
+
 class ConformalRidgeRegressor(ConformalRegressor):
     r"""Conformal ridge regression ([ALRW2 §2.3], Algorithm 2.4).
 
@@ -319,13 +321,27 @@ class ConformalRidgeRegressor(ConformalRegressor):
     """
 
     _SAVE_PARAMS: tuple = (
-        "a", "warnings", "autotune", "verbose", "studentised",
-        "epsilon", "recompute_every", "rnd_state",
+        "a",
+        "warnings",
+        "autotune",
+        "verbose",
+        "studentised",
+        "epsilon",
+        "recompute_every",
+        "rnd_state",
     )
     _SAVE_STATE: tuple = ("X", "y", "p", "Id", "XTXinv", "_n_sm_updates")
 
     def __init__(
-        self, a=0, warnings=True, autotune=False, verbose=0, rnd_state=None, studentised=False, epsilon=default_epsilon, recompute_every: int | None = None
+        self,
+        a=0,
+        warnings=True,
+        autotune=False,
+        verbose=0,
+        rnd_state=None,
+        studentised=False,
+        epsilon=default_epsilon,
+        recompute_every: int | None = None,
     ) -> None:
         r"""Create a conformal ridge regressor.
 
@@ -342,8 +358,8 @@ class ConformalRidgeRegressor(ConformalRegressor):
             :meth:`learn_initial_training_set` is called.
         verbose : int, default 0
             Verbosity level.
-        rnd_state : int or None, default None
-            Seed for the random number generator used to draw the smoothing
+        rnd_state : int, np.random.Generator, or None, default None
+            Seed or Generator for the random number generator used to draw the smoothing
             variable $\tau$ for smoothed p-values.
         studentised : bool, default False
             If True, use studentised residuals $|y - \hat y| / \sqrt{1 - h_{ii}}$
@@ -370,7 +386,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
         self.verbose = verbose
         self.rnd_state = rnd_state
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
         # Do we use the studentised residuals
         self.studentised = studentised
@@ -418,7 +437,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
         >>> import numpy as np
         >>> cp = ConformalRidgeRegressor(a=1)
-        >>> cp.learn_initial_training_set(np.eye(3), np.array([1., 2., 3.]))
+        >>> cp.learn_initial_training_set(np.eye(3), np.array([1.0, 2.0, 3.0]))
         >>> cp.recompute_inverse()
         >>> np.allclose(cp.XTXinv, np.linalg.inv(cp.X.T @ cp.X + cp.a * cp.Id))
         True
@@ -571,7 +590,11 @@ class ConformalRidgeRegressor(ConformalRegressor):
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         bounds: str = "both",
         return_update: bool = False,
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
+    ) -> (
+        ConformalPredictionInterval
+        | MultiLevelPredictionInterval
+        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+    ):
         """
         This function makes a prediction.
 
@@ -604,16 +627,16 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
             # For multi-level: only bail out if even the largest epsilon is too small
-            eps_check = max(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+            eps_check = max(epsilon) if hasattr(epsilon, "__iter__") else epsilon
             if bounds == "both":
                 if not (eps_check >= 2 / n):
                     if self.warnings:
-                        eps_warn = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+                        eps_warn = min(epsilon) if hasattr(epsilon, "__iter__") else epsilon
                         warnings.warn(
                             f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / eps_warn))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
-                    if hasattr(epsilon, '__iter__'):
+                    if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                         result = MultiLevelPredictionInterval(predictions)
                     else:
@@ -625,12 +648,12 @@ class ConformalRidgeRegressor(ConformalRegressor):
             else:
                 if not (eps_check >= 1 / n):
                     if self.warnings:
-                        eps_warn = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+                        eps_warn = min(epsilon) if hasattr(epsilon, "__iter__") else epsilon
                         warnings.warn(
                             f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / eps_warn))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
-                    if hasattr(epsilon, '__iter__'):
+                    if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                         result = MultiLevelPredictionInterval(predictions)
                     else:
@@ -656,7 +679,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 l_dic, u_dic = self._vectorised_l_and_u(A, B)
 
             if bounds == "both":
-                if hasattr(epsilon, '__iter__'):
+                if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
@@ -668,7 +691,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
                     result = self._construct_Gamma(lower, upper, epsilon)
             elif bounds == "lower":
-                if hasattr(epsilon, '__iter__'):
+                if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
@@ -678,7 +701,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
                     result = self._construct_Gamma(lower, np.inf, epsilon)
             elif bounds == "upper":
-                if hasattr(epsilon, '__iter__'):
+                if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
@@ -696,7 +719,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
             A = None
             B = None
 
-            if hasattr(epsilon, '__iter__'):
+            if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                 result = MultiLevelPredictionInterval(predictions)
             else:
@@ -766,7 +789,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                 Alpha = A + y * B
                 c_type = "nonconformity"
             else:
-                raise ValueError('bounds must be \"both\", \"lower\", or \"upper\"')
+                raise ValueError('bounds must be "both", "lower", or "upper"')
 
             if smoothed:
                 p = self._compute_p_value(Alpha, tau, c_type=c_type)
@@ -854,8 +877,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
     """
 
     _SAVE_PARAMS: tuple = (
-        "k", "distance", "distance_func", "aggregation",
-        "verbose", "rnd_state", "epsilon",
+        "k",
+        "distance",
+        "distance_func",
+        "aggregation",
+        "verbose",
+        "rnd_state",
+        "epsilon",
     )
     _SAVE_STATE: tuple = ("X", "y", "D")
     _SAVE_CALLABLES: tuple = ("distance_func",)
@@ -884,6 +912,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             (m, d) or None. Returns (n, n) if y is None, else (n, m).
         aggregation : {'mean', 'median'}
             How to aggregate k nearest neighbour labels.
+        verbose : int, default 0
+            Verbosity level.
+        rnd_state : int, np.random.Generator, or None, default None
+            Seed or Generator for the random number generator.
         epsilon : float
             Default significance level.
         """
@@ -904,7 +936,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.verbose = verbose
         self.rnd_state = rnd_state
         self._distance_func_arg = distance_func
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
     def _standard_distance_func(self, X, y=None):
         X = np.atleast_2d(X)
@@ -961,9 +996,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # distance are broken canonically by y rather than by insertion order.
         # This makes the result invariant to the order in which training points
         # were added (np.argpartition is unstable on ties).
-        knn_idx = np.array(
-            [np.lexsort((y, D_work[i]))[:k] for i in range(n)]
-        )
+        knn_idx = np.array([np.lexsort((y, D_work[i]))[:k] for i in range(n)])
 
         # Gather neighbour labels and aggregate
         y_neighbours = y[knn_idx]  # shape (n, k)
@@ -1017,7 +1050,11 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         bounds: str = "both",
         return_update: bool = False,
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
+    ) -> (
+        ConformalPredictionInterval
+        | MultiLevelPredictionInterval
+        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+    ):
         """Predict a conformal prediction interval for test object x.
 
         Parameters
@@ -1046,7 +1083,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
         if n == 0:
             # No training data
-            if hasattr(epsilon, '__iter__'):
+            if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                 result = MultiLevelPredictionInterval(predictions)
             else:
@@ -1061,10 +1098,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         n_aug = n + 1  # augmented size
 
         # Check significance level is feasible
-        eps_check = max(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+        eps_check = max(epsilon) if hasattr(epsilon, "__iter__") else epsilon
         min_needed = 2 if bounds == "both" else 1
         if not (eps_check >= min_needed / n_aug):
-            if hasattr(epsilon, '__iter__'):
+            if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                 result = MultiLevelPredictionInterval(predictions)
             else:
@@ -1136,7 +1173,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         alpha_sorted = np.sort(alpha_train)
 
         # Build the interval
-        if hasattr(epsilon, '__iter__'):
+        if hasattr(epsilon, "__iter__"):
             predictions = {}
             for eps in epsilon:
                 lo, up = self._compute_interval(alpha_sorted, y_hat_test, eps, n_aug, bounds)
@@ -1194,7 +1231,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         else:
             raise ValueError(f"bounds must be 'both', 'lower', or 'upper', got '{bounds}'")
 
-    def compute_p_value(self, x: NDArray[np.floating[Any]], y: float, tau: float | None = None, smoothed: bool = True) -> float:
+    def compute_p_value(
+        self, x: NDArray[np.floating[Any]], y: float, tau: float | None = None, smoothed: bool = True
+    ) -> float:
         """Compute conformal p-value for a test pair (x, y).
 
         Parameters
@@ -1259,13 +1298,29 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
     """
 
     _SAVE_PARAMS: tuple = (
-        "kernel", "a", "warnings", "verbose", "rnd_state",
-        "epsilon", "recompute_every", "studentised",
+        "kernel",
+        "a",
+        "warnings",
+        "verbose",
+        "rnd_state",
+        "epsilon",
+        "recompute_every",
+        "studentised",
     )
     _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "_n_sm_updates")
     _SAVE_CALLABLES: tuple = ("kernel",)
 
-    def __init__(self, kernel: Any, a: float = 0, warnings: bool = True, verbose: int = 0, rnd_state: int | None = None, epsilon: float = default_epsilon, recompute_every: int | None = None, studentised: bool = False) -> None:
+    def __init__(
+        self,
+        kernel: Any,
+        a: float = 0,
+        warnings: bool = True,
+        verbose: int = 0,
+        rnd_state: int | None = None,
+        epsilon: float = default_epsilon,
+        recompute_every: int | None = None,
+        studentised: bool = False,
+    ) -> None:
         """
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is
         also compatible with (most) kernels from e.g. scikit-learn.
@@ -1281,6 +1336,8 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         studentised : bool
             If True, use the studentised conformity measure (ALRW2 §7.4).
             Default False.
+        rnd_state : int, np.random.Generator, or None, default None
+            Seed or Generator for the random number generator.
         """
         super().__init__(epsilon=epsilon)
 
@@ -1299,7 +1356,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
         self.verbose = verbose
         self.rnd_state = rnd_state
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
         # Do we use the studentised residuals
         self.studentised = studentised
@@ -1317,9 +1377,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         try:
             self.Kinv = np.linalg.inv(self.K + self.a * Id)
         except np.linalg.LinAlgError:
-            raise ValueError(
-                "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
-            ) from None
+            raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
         self._n_sm_updates = 0
 
     def recompute_inverse(self) -> None:
@@ -1340,9 +1398,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         try:
             self.Kinv = np.linalg.inv(self.K + self.a * Id)
         except np.linalg.LinAlgError:
-            raise ValueError(
-                "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
-            ) from None
+            raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
         self._n_sm_updates = 0
 
     @staticmethod
@@ -1382,9 +1438,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 try:
                     self.Kinv = np.linalg.inv(self.K + self.a * Id)
                 except np.linalg.LinAlgError:
-                    raise ValueError(
-                        "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
-                    ) from None
+                    raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
 
         else:
             # Learn object x
@@ -1395,9 +1449,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 try:
                     self.Kinv = np.linalg.inv(self.K + self.a * Id)
                 except np.linalg.LinAlgError:
-                    raise ValueError(
-                        "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
-                    ) from None
+                    raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
             elif self.X.shape[0] == 1:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
                 Id = np.identity(self.X.shape[0])
@@ -1405,9 +1457,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 try:
                     self.Kinv = np.linalg.inv(self.K + self.a * Id)
                 except np.linalg.LinAlgError:
-                    raise ValueError(
-                        "K + aI is singular. Set a > 0 (ridge parameter) to regularise."
-                    ) from None
+                    raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
             else:
                 k = self.kernel(self.X, x).reshape(-1, 1)
                 kappa = self.kernel(x, x)
@@ -1453,7 +1503,11 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         bounds: str = "both",
         return_update: bool = False,
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
+    ) -> (
+        ConformalPredictionInterval
+        | MultiLevelPredictionInterval
+        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+    ):
         """
         This function makes a prediction.
 
@@ -1486,16 +1540,16 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
             # Check that the significance level is not too small. If it is, return infinite prediction interval
             # For multi-level: only bail out if even the largest epsilon is too small
-            eps_check = max(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+            eps_check = max(epsilon) if hasattr(epsilon, "__iter__") else epsilon
             if bounds == "both":
                 if not (eps_check >= 2 / n):
                     if self.warnings:
-                        eps_warn = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+                        eps_warn = min(epsilon) if hasattr(epsilon, "__iter__") else epsilon
                         warnings.warn(
                             f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(2 / eps_warn))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
-                    if hasattr(epsilon, '__iter__'):
+                    if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                         result = MultiLevelPredictionInterval(predictions)
                     else:
@@ -1505,20 +1559,18 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                         kappa = self.kernel(x, x)
                         K = self._update_K(self.K, k, kappa)
                         Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
-                        return result, build_precomputed(
-                            X, K, Kinv, None, None
-                        )
+                        return result, build_precomputed(X, K, Kinv, None, None)
                     else:
                         return result
             else:
                 if not (eps_check >= 1 / n):
                     if self.warnings:
-                        eps_warn = min(epsilon) if hasattr(epsilon, '__iter__') else epsilon
+                        eps_warn = min(epsilon) if hasattr(epsilon, "__iter__") else epsilon
                         warnings.warn(
                             f"Significance level epsilon is too small for training set. Need at least {int(np.ceil(1 / eps_warn))} examples. Increase or add more examples",
                             stacklevel=2,
                         )
-                    if hasattr(epsilon, '__iter__'):
+                    if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                         result = MultiLevelPredictionInterval(predictions)
                     else:
@@ -1528,9 +1580,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                         kappa = self.kernel(x, x)
                         K = self._update_K(self.K, k, kappa)
                         Kinv = self._update_Kinv(self.Kinv, k, kappa + self.a)
-                        return result, build_precomputed(
-                            X, K, Kinv, None, None
-                        )
+                        return result, build_precomputed(X, K, Kinv, None, None)
                     else:
                         return result
 
@@ -1553,7 +1603,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                 l_dic, u_dic = self._vectorised_l_and_u(A, B)
 
             if bounds == "both":
-                if hasattr(epsilon, '__iter__'):
+                if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
@@ -1565,7 +1615,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
                     result = self._construct_Gamma(lower, upper, epsilon)
             elif bounds == "lower":
-                if hasattr(epsilon, '__iter__'):
+                if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
@@ -1575,7 +1625,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
                     result = self._construct_Gamma(lower, np.inf, epsilon)
             elif bounds == "upper":
-                if hasattr(epsilon, '__iter__'):
+                if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
@@ -1594,7 +1644,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             A = None
             B = None
 
-            if hasattr(epsilon, '__iter__'):
+            if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
                 result = MultiLevelPredictionInterval(predictions)
             else:
@@ -1783,8 +1833,8 @@ class ConformalLassoRegressor(ConformalRegressor):
         Verbosity level.
     warnings : bool
         Whether to emit warnings.
-    rnd_state : int or None
-        Random seed.
+    rnd_state : int, np.random.Generator, or None
+        Random seed or Generator.
 
     Examples
     --------
@@ -1802,9 +1852,16 @@ class ConformalLassoRegressor(ConformalRegressor):
     """
 
     _SAVE_PARAMS: tuple = (
-        "lam", "rho", "epsilon", "autotune", "n_folds",
-        "search_range_factor", "max_homotopy_steps", "verbose",
-        "warnings", "rnd_state",
+        "lam",
+        "rho",
+        "epsilon",
+        "autotune",
+        "n_folds",
+        "search_range_factor",
+        "max_homotopy_steps",
+        "verbose",
+        "warnings",
+        "rnd_state",
     )
     _SAVE_STATE: tuple = ("X", "y", "beta")
 
@@ -1831,7 +1888,10 @@ class ConformalLassoRegressor(ConformalRegressor):
         self.verbose = verbose
         self.warnings = warnings
         self.rnd_state = rnd_state
-        self.rnd_gen = np.random.default_rng(rnd_state)
+        if isinstance(rnd_state, np.random.Generator):
+            self.rnd_gen = rnd_state
+        else:
+            self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.X = None
         self.y = None
@@ -1907,7 +1967,11 @@ class ConformalLassoRegressor(ConformalRegressor):
         x: NDArray[np.floating[Any]],
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         return_update: bool = False,
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]:
+    ) -> (
+        ConformalPredictionInterval
+        | MultiLevelPredictionInterval
+        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+    ):
         """
         Compute the conformal prediction set at x using the homotopy algorithm.
 
@@ -1917,7 +1981,7 @@ class ConformalLassoRegressor(ConformalRegressor):
             epsilon = self.epsilon
 
         # Handle multi-level epsilon
-        if hasattr(epsilon, '__iter__'):
+        if hasattr(epsilon, "__iter__"):
             predictions = {}
             for eps in epsilon:
                 result = self.predict(x, epsilon=eps, return_update=False)
@@ -1980,7 +2044,9 @@ class ConformalLassoRegressor(ConformalRegressor):
             return result, precomputed_dict
         return result
 
-    def compute_p_value(self, x: NDArray[np.floating[Any]], y: float, tau: float | None = None, smoothed: bool = True) -> float:
+    def compute_p_value(
+        self, x: NDArray[np.floating[Any]], y: float, tau: float | None = None, smoothed: bool = True
+    ) -> float:
         """
         Compute the conformal p-value for (x, y) given current training set.
         """
@@ -2331,6 +2397,3 @@ class ConformalLassoRegressor(ConformalRegressor):
             else:
                 merged.append((a, b))
         return merged
-
-
-

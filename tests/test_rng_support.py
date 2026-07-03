@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from online_cp import ConformalNearestNeighboursClassifier, ConformalRidgeRegressor
 from online_cp.betting import ParticleFilterStrategy

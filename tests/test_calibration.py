@@ -151,6 +151,7 @@ class TestCalibrationError:
 class TestPlotReliabilityDiagram:
     def test_from_arrays(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_reliability_diagram
 
@@ -163,6 +164,7 @@ class TestPlotReliabilityDiagram:
 
     def test_from_metric(self, binary_predictions_spread):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_reliability_diagram
 
@@ -183,6 +185,7 @@ class TestPlotReliabilityDiagram:
 class TestPlotReliabilityDiagramVenn:
     def test_which_point(self, binary_predictions_spread):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_reliability_diagram_venn
 
@@ -192,6 +195,7 @@ class TestPlotReliabilityDiagramVenn:
 
     def test_which_hypothesis(self, binary_predictions_spread):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_reliability_diagram_venn
 
@@ -201,6 +205,7 @@ class TestPlotReliabilityDiagramVenn:
 
     def test_which_both(self, binary_predictions_spread):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_reliability_diagram_venn
 
@@ -214,6 +219,7 @@ class TestPlotReliabilityDiagramVenn:
 class TestPlotSharpness:
     def test_smoke(self, binary_predictions_spread):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_sharpness
 
@@ -225,6 +231,7 @@ class TestPlotSharpness:
 class TestPlotPitHistogram:
     def test_uniform_pit(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_pit_histogram
 
@@ -235,6 +242,7 @@ class TestPlotPitHistogram:
 
     def test_nonuniform_pit(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_pit_histogram
 
@@ -247,6 +255,7 @@ class TestPlotPitHistogram:
 class TestPlotCalibrationConditional:
     def test_smoke(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_calibration_conditional
 

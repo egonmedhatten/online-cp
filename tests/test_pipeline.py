@@ -200,7 +200,6 @@ def test_progressive_val_regressor_pipeline_coverage(linear_dataset):
     )
     pipe.learn_initial_training_set(X[:n_train], y[:n_train])
 
-
     metric = IntervalWidth()
     progressive_val(pipe, X[n_train:], y[n_train:], metric=metric)
     # Just check it runs and metric is positive
@@ -238,9 +237,7 @@ def test_progressive_val_classifier_pipeline_with_p_values(classification_datase
 
     pipe = Pipeline(
         FuncTransformer(lambda arr: arr * 2.0),
-        ConformalNearestNeighboursClassifier(
-            k=3, label_space=[0, 1], epsilon=epsilon
-        ),
+        ConformalNearestNeighboursClassifier(k=3, label_space=[0, 1], epsilon=epsilon),
     )
     pipe.learn_initial_training_set(X[:n_train], y[:n_train])
 
@@ -353,8 +350,9 @@ def test_learn_one_updates_estimator(linear_dataset):
     interval_after = pipe.predict(x_test, epsilon=0.1)
     # After learning a new point the interval should change (model has more data)
     # We can't guarantee direction, just that the estimator was updated
-    assert interval_before.lower != pytest.approx(interval_after.lower) or \
-           interval_before.upper != pytest.approx(interval_after.upper)
+    assert interval_before.lower != pytest.approx(interval_after.lower) or interval_before.upper != pytest.approx(
+        interval_after.upper
+    )
 
 
 def test_learn_one_precomputed_dropped_gracefully(linear_dataset):
@@ -391,6 +389,7 @@ def test_pipeline_repr():
 
 class _IncrementalTransformer(Transformer):
     """Stub transformer with a non-sound mode for guard tests."""
+
     mode = "incremental"
 
     def transform(self, X):
@@ -419,11 +418,13 @@ class TestValidityGuard:
 
     def test_frozen_mode_is_always_allowed(self):
         from online_cp import StandardScaler
+
         pipe = Pipeline(StandardScaler(), ConformalRidgeRegressor(a=1.0))
         assert not pipe._unsafe_incremental
 
     def test_mixed_sound_modes_allowed(self):
         from online_cp import StandardScaler
+
         pipe = Pipeline(
             FuncTransformer(np.abs),
             StandardScaler(),
@@ -433,6 +434,7 @@ class TestValidityGuard:
 
     def test_unsound_mode_in_chain_raises(self):
         from online_cp import StandardScaler
+
         with pytest.raises(ValueError, match="mode="):
             Pipeline(
                 StandardScaler(),
@@ -499,9 +501,8 @@ class TestPipelineSummary:
 
     def test_n_steps(self):
         from online_cp import StandardScaler
-        pipe = Pipeline(
-            FuncTransformer(np.abs), StandardScaler(), ConformalRidgeRegressor(a=1.0)
-        )
+
+        pipe = Pipeline(FuncTransformer(np.abs), StandardScaler(), ConformalRidgeRegressor(a=1.0))
         assert pipe.summary()["n_steps"] == 3
 
     def test_estimator_type(self):
@@ -510,6 +511,7 @@ class TestPipelineSummary:
 
     def test_transformer_mode_reported(self):
         from online_cp import StandardScaler
+
         pipe = Pipeline(FuncTransformer(np.abs), StandardScaler(), ConformalRidgeRegressor(a=1.0))
         s = pipe.summary()
         assert s["transformers"][0]["mode"] == "fixed"
@@ -517,11 +519,13 @@ class TestPipelineSummary:
 
     def test_fitted_false_before_fit(self):
         from online_cp import StandardScaler
+
         pipe = Pipeline(StandardScaler(), ConformalRidgeRegressor(a=1.0))
         assert pipe.summary()["transformers"][0]["fitted"] is False
 
     def test_fitted_true_after_fit(self, linear_dataset):
         from online_cp import StandardScaler
+
         X, y = linear_dataset
         pipe = Pipeline(StandardScaler(), ConformalRidgeRegressor(a=1.0))
         pipe.learn_initial_training_set(X, y)
@@ -567,10 +571,11 @@ class TestBagMode:
 
     def test_frozen_bag_mixing_raises(self):
         from online_cp import MinMaxScaler as MMS
+
         with pytest.raises(ValueError, match="not supported"):
             Pipeline(
-                StandardScaler(),           # frozen
-                MMS(mode="bag"),            # bag
+                StandardScaler(),  # frozen
+                MMS(mode="bag"),  # bag
                 ConformalRidgeRegressor(a=1.0),
             )
 
@@ -638,9 +643,7 @@ class TestBagMode:
         pipe_perm.learn_initial_training_set(X_tr[perm], y_tr[perm])
         p_perm = pipe_perm.compute_p_value(x_test, y_test, tau=0.5)
 
-        assert np.isclose(p_ref, p_perm), (
-            f"p-value changed under permutation: {p_ref} vs {p_perm}"
-        )
+        assert np.isclose(p_ref, p_perm), f"p-value changed under permutation: {p_ref} vs {p_perm}"
 
     # --- Optional learn_initial_training_set ---
 
@@ -694,6 +697,7 @@ class TestBagMode:
 
     def test_bag_pipeline_in_progressive_val(self, poorly_scaled_dataset):
         from online_cp import ErrorRate
+
         X, y = poorly_scaled_dataset
         pipe = StandardScaler(mode="bag") | ConformalRidgeRegressor(a=1.0, warnings=False)
         pipe.learn_initial_training_set(X[:30], y[:30])
@@ -753,6 +757,7 @@ class TestBagMode:
 
     def test_bag_with_knn_regressor(self, poorly_scaled_dataset):
         from online_cp import ConformalNearestNeighboursRegressor
+
         X, y = poorly_scaled_dataset
         pipe = StandardScaler(mode="bag") | ConformalNearestNeighboursRegressor()
         for i in range(30):

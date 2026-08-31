@@ -299,11 +299,13 @@ class TestWidth:
         assert np.isclose(result, 0.7)
 
     def test_multiclass(self):
-        probs = np.array([
-            [0.5, 0.3, 0.2],
-            [0.1, 0.6, 0.3],
-            [0.2, 0.2, 0.6],
-        ])
+        probs = np.array(
+            [
+                [0.5, 0.3, 0.2],
+                [0.1, 0.6, 0.3],
+                [0.2, 0.2, 0.6],
+            ]
+        )
         venn = VennPrediction(probs, np.array([0, 1, 2]))
         m = Width()
         result = m.update(y=0, venn=venn)

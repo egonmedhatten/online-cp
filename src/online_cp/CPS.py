@@ -516,7 +516,6 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
 
 
 class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
-
     _SAVE_PARAMS: tuple = ("k", "distance", "distance_func", "epsilon")
     _SAVE_STATE: tuple = ("X", "y", "D")
     _SAVE_CALLABLES: tuple = ("distance_func",)
@@ -677,9 +676,7 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
         neighbours = full_neighbours | single_neighbours
         full_or_semi = full_neighbours | semi_neighbours
-        idx_all_neighbours_and_semi_neighbours = np.array(
-            sorted(full_neighbours | single_neighbours | semi_neighbours)
-        )
+        idx_all_neighbours_and_semi_neighbours = np.array(sorted(full_neighbours | single_neighbours | semi_neighbours))
 
         # Line 1
         Kprime = len(idx_all_neighbours_and_semi_neighbours)
@@ -828,8 +825,8 @@ class ConformalPredictiveDistributionFunction:
             return 1.0, 1.0
         Y_trimmed = self.Y[:-1]
         n = len(Y_trimmed)
-        left = np.searchsorted(Y_trimmed, y, side='left')
-        right = np.searchsorted(Y_trimmed, y, side='right')
+        left = np.searchsorted(Y_trimmed, y, side="left")
+        right = np.searchsorted(Y_trimmed, y, side="right")
         if left < right:
             # y matches one or more breakpoints
             return (left - 1) / n, right / n
@@ -861,8 +858,9 @@ class ConformalPredictiveDistributionFunction:
             epsilon = self.epsilon
 
         # Handle multi-level epsilon
-        if hasattr(epsilon, '__iter__'):
+        if hasattr(epsilon, "__iter__"):
             from .regressors import MultiLevelPredictionInterval
+
             predictions = {}
             for eps in epsilon:
                 predictions[eps] = self.predict_set(tau, epsilon=eps, bounds=bounds, minimise_width=minimise_width)
@@ -895,9 +893,7 @@ class ConformalPredictiveDistributionFunction:
             # Candidates: CDF levels AND (CDF levels - target)
             shifted = all_cdf_levels - target_coverage
             candidate_levels = np.unique(np.concatenate([all_cdf_levels, shifted]))
-            candidate_levels = candidate_levels[
-                (candidate_levels >= 0) & (candidate_levels + target_coverage <= 1.0)
-            ]
+            candidate_levels = candidate_levels[(candidate_levels >= 0) & (candidate_levels + target_coverage <= 1.0)]
 
             best_width = np.inf
             best_lower = -np.inf
@@ -1036,6 +1032,7 @@ class RidgePredictiveDistributionFunction(ConformalPredictiveDistributionFunctio
         else:
             return np.inf
 
+
 class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
     def __init__(self, L, U, Y, epsilon=default_epsilon):
         super().__init__(epsilon=epsilon)
@@ -1050,8 +1047,8 @@ class NearestNeighboursPredictiveDistributionFunction(ConformalPredictiveDistrib
         if y == self.Y[-1]:
             return 1.0, 1.0
         Y_trimmed = self.Y[:-1]
-        left = np.searchsorted(Y_trimmed, y, side='left')
-        right = np.searchsorted(Y_trimmed, y, side='right')
+        left = np.searchsorted(Y_trimmed, y, side="left")
+        right = np.searchsorted(Y_trimmed, y, side="right")
         if left < right:
             # y matches breakpoint(s): Pi = [L[left-1], U[right-1]]
             return self.L[left - 1], self.U[right - 1]
@@ -1126,8 +1123,8 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
         # For interior values, handle ties using searchsorted (vectorized)
         trimmed = Y[:-1]
         interior = Y[1:-1]
-        left = np.searchsorted(trimmed, interior, side='left')
-        right = np.searchsorted(trimmed, interior, side='right') - 1
+        left = np.searchsorted(trimmed, interior, side="left")
+        right = np.searchsorted(trimmed, interior, side="right") - 1
         self.L[1:-1] = (left - 1) / n
         self.U[1:-1] = (right + 1) / n
 

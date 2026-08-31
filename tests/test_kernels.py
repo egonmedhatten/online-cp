@@ -322,16 +322,13 @@ class TestKernelDistanceIntegration:
         from online_cp import ConformalNearestNeighboursClassifier
 
         rng = np.random.default_rng(42)
-        X = np.vstack([rng.normal(loc=[2, 0], size=(30, 2)),
-                       rng.normal(loc=[-2, 0], size=(30, 2))])
+        X = np.vstack([rng.normal(loc=[2, 0], size=(30, 2)), rng.normal(loc=[-2, 0], size=(30, 2))])
         y = np.array([0] * 30 + [1] * 30)
         idx = rng.permutation(60)
         X, y = X[idx], y[idx]
 
         dist_fn = kernel_induced_distance(GaussianKernel(sigma=1.0))
-        clf = ConformalNearestNeighboursClassifier(
-            k=5, label_space=np.array([0, 1]), distance_func=dist_fn
-        )
+        clf = ConformalNearestNeighboursClassifier(k=5, label_space=np.array([0, 1]), distance_func=dist_fn)
         clf.learn_initial_training_set(X[:40], y[:40])
 
         errors = 0
@@ -353,9 +350,7 @@ class TestKernelDistanceIntegration:
         y = (X[:, 0] > 0).astype(int)
 
         dist_fn = kernel_induced_distance(GaussianKernel(sigma=1.5))
-        cps = NearestNeighboursPredictionMachine(
-            k=3, distance_func=dist_fn
-        )
+        cps = NearestNeighboursPredictionMachine(k=3, distance_func=dist_fn)
         cps.learn_initial_training_set(X[:25], y[:25])
 
         for i in range(25, 40):
@@ -373,9 +368,7 @@ class TestKernelDistanceIntegration:
         y = np.sin(2 * np.pi * X[:, 0]) + 0.1 * rng.normal(size=60)
 
         dist_fn = kernel_induced_distance(GaussianKernel(sigma=1.0))
-        cp = ConformalNearestNeighboursRegressor(
-            k=5, distance_func=dist_fn, rnd_state=0, epsilon=0.1
-        )
+        cp = ConformalNearestNeighboursRegressor(k=5, distance_func=dist_fn, rnd_state=0, epsilon=0.1)
         cp.learn_initial_training_set(X[:40], y[:40])
 
         covered = 0

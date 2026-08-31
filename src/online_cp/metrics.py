@@ -155,8 +155,7 @@ class Metrics:
         dupes = [n for n in names if names.count(n) > 1]
         if dupes:
             raise ValueError(
-                f"Duplicate metric names: {sorted(set(dupes))}. "
-                "Subclass and override .name to disambiguate."
+                f"Duplicate metric names: {sorted(set(dupes))}. Subclass and override .name to disambiguate."
             )
 
     def update(self, y: Any = None, Gamma: Any = None, **kw: Any) -> None:
@@ -401,6 +400,7 @@ class CRPS(Metric):
 
     def _score(self, y, Gamma=None, *, cpd=None, **kw):
         import warnings
+
         warnings.warn(
             "CRPS is deprecated. Use TruncatedCRPS or ConformalCRPS instead.",
             DeprecationWarning,
@@ -535,9 +535,7 @@ class BrierScore(Metric):
         point = venn.point  # shape (|Y|,), sums to 1
         label_idx = int(np.searchsorted(venn.label_space, y))
         if label_idx >= len(venn.label_space) or venn.label_space[label_idx] != y:
-            raise ValueError(
-                f"y={y!r} not found in label_space={venn.label_space.tolist()}"
-            )
+            raise ValueError(f"y={y!r} not found in label_space={venn.label_space.tolist()}")
         indicator = np.zeros(len(venn.label_space))
         indicator[label_idx] = 1.0
         return float(np.sum((point - indicator) ** 2))
@@ -570,9 +568,7 @@ class LogLoss(Metric):
         point = venn.point
         label_idx = int(np.searchsorted(venn.label_space, y))
         if label_idx >= len(venn.label_space) or venn.label_space[label_idx] != y:
-            raise ValueError(
-                f"y={y!r} not found in label_space={venn.label_space.tolist()}"
-            )
+            raise ValueError(f"y={y!r} not found in label_space={venn.label_space.tolist()}")
         prob_y = np.clip(point[label_idx], self._EPS, None)
         return float(-np.log(prob_y))
 
@@ -686,25 +682,19 @@ class CalibrationError(Metric):
 
         label_idx = int(np.searchsorted(venn.label_space, y))
         if label_idx >= len(venn.label_space) or venn.label_space[label_idx] != y:
-            raise ValueError(
-                f"y={y!r} not found in label_space={venn.label_space.tolist()}"
-            )
+            raise ValueError(f"y={y!r} not found in label_space={venn.label_space.tolist()}")
 
         # Determine target class index
         if self.target_class is not None:
             pos_idx = int(np.searchsorted(venn.label_space, self.target_class))
             if pos_idx >= len(venn.label_space) or venn.label_space[pos_idx] != self.target_class:
-                raise ValueError(
-                    f"target_class={self.target_class!r} not in "
-                    f"label_space={venn.label_space.tolist()}"
-                )
+                raise ValueError(f"target_class={self.target_class!r} not in label_space={venn.label_space.tolist()}")
         elif len(venn.label_space) <= 2:
             # Binary: default to label_space[1] (positive class)
             pos_idx = min(1, len(venn.label_space) - 1)
         else:
             raise ValueError(
-                "For multiclass (|Y| > 2), target_class must be specified. "
-                f"label_space={venn.label_space.tolist()}"
+                f"For multiclass (|Y| > 2), target_class must be specified. label_space={venn.label_space.tolist()}"
             )
 
         if self.use_hypothesis:

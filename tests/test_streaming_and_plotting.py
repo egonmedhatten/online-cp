@@ -68,10 +68,7 @@ class TestStreamingEval:
 
         n_before = model.X.shape[0]
         # Learn only on even steps
-        progressive_val(
-            model, X[50:60], y[50:60], epsilon=0.1,
-            learn=lambda i, x, y: i % 2 == 0
-        )
+        progressive_val(model, X[50:60], y[50:60], epsilon=0.1, learn=lambda i, x, y: i % 2 == 0)
         # Should have learned 5 times (i=0,2,4,6,8)
         assert model.X.shape[0] == n_before + 5
 
@@ -91,9 +88,7 @@ class TestStreamingEval:
     def test_iter_step(self, ridge_model):
         """iter_progressive_val yields every `step` samples."""
         model, X_test, y_test = ridge_model
-        snapshots = list(
-            iter_progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, step=10)
-        )
+        snapshots = list(iter_progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, step=10))
         assert len(snapshots) == 2
         assert snapshots[0]["step"] == 10
         assert snapshots[1]["step"] == 20
@@ -114,7 +109,11 @@ class TestStreamingEval:
         model.learn_initial_training_set(X[:50], y[:50])
         metric = ErrorRate()
         progressive_val(
-            model, X[50:80], y[50:80], epsilon=0.1, metric=metric,
+            model,
+            X[50:80],
+            y[50:80],
+            epsilon=0.1,
+            metric=metric,
             delay=lambda i, x, y: 0,
         )
         assert len(metric.values) == 30
@@ -139,17 +138,13 @@ class TestStreamingEval:
         # delay=0: 20 samples, step=10 -> exactly 2 snapshots, no teardown.
         model1 = ConformalRidgeRegressor(a=1.0)
         model1.learn_initial_training_set(X[:50], y[:50])
-        snaps_no_delay = list(
-            iter_progressive_val(model1, X[50:70], y[50:70], epsilon=0.1, step=10, delay=0)
-        )
+        snaps_no_delay = list(iter_progressive_val(model1, X[50:70], y[50:70], epsilon=0.1, step=10, delay=0))
         assert len(snaps_no_delay) == 2
 
         # delay=5: items 15-19 have arrival steps 20-24, resolved in teardown.
         model2 = ConformalRidgeRegressor(a=1.0)
         model2.learn_initial_training_set(X[:50], y[:50])
-        snaps_delayed = list(
-            iter_progressive_val(model2, X[50:70], y[50:70], epsilon=0.1, step=10, delay=5)
-        )
+        snaps_delayed = list(iter_progressive_val(model2, X[50:70], y[50:70], epsilon=0.1, step=10, delay=5))
         # step=10 snapshot, step=20 snapshot, teardown snapshot.
         assert len(snaps_delayed) == 3
         assert snaps_delayed[-1]["step"] == 20
@@ -163,15 +158,12 @@ class TestStreamingEval:
 
         model, X_test, y_test = ridge_model
         metric = ErrorRate() + IntervalWidth()
-        result = progressive_val(
-            model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric, progress=True
-        )
+        result = progressive_val(model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric, progress=True)
         assert result is metric
         # Verify metrics were updated (check via get() dict).
         metric_dict = metric.get()
         assert "ErrorRate" in metric_dict
         assert "IntervalWidth" in metric_dict
-
 
 
 class TestVennEval:
@@ -180,9 +172,9 @@ class TestVennEval:
     @pytest.fixture
     def venn_model(self):
         from online_cp import VennAbersPredictor
+
         rng = np.random.default_rng(42)
-        X = np.vstack([rng.normal(loc=[2, 0], size=(30, 2)),
-                       rng.normal(loc=[-2, 0], size=(30, 2))])
+        X = np.vstack([rng.normal(loc=[2, 0], size=(30, 2)), rng.normal(loc=[-2, 0], size=(30, 2))])
         y = np.array([0] * 30 + [1] * 30)
         idx = rng.permutation(60)
         X, y = X[idx], y[idx]
@@ -213,9 +205,7 @@ class TestVennEval:
 
     def test_iter_progressive_val_venn(self, venn_model):
         model, X_test, y_test = venn_model
-        snapshots = list(
-            iter_progressive_val_venn(model, X_test, y_test, step=5)
-        )
+        snapshots = list(iter_progressive_val_venn(model, X_test, y_test, step=5))
         assert len(snapshots) == len(X_test) // 5
         assert snapshots[0]["step"] == 5
         assert "brier_score" in snapshots[0] or "BrierScore" in str(snapshots[0])
@@ -247,9 +237,7 @@ class TestVennEval:
         """iter_progressive_val_venn emits a teardown snapshot when delay > 0."""
         model, X_test, y_test = venn_model
         n = len(X_test)  # 20
-        snaps = list(
-            iter_progressive_val_venn(model, X_test, y_test, step=5, delay=3)
-        )
+        snaps = list(iter_progressive_val_venn(model, X_test, y_test, step=5, delay=3))
         # n//step regular snapshots + 1 teardown (delay=3 leaves last 3 unresolved).
         assert len(snaps) == n // 5 + 1
         assert snaps[-1]["step"] == n
@@ -260,6 +248,7 @@ class TestPlotting:
 
     def test_plot_coverage(self, ridge_model):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_coverage
 
@@ -273,6 +262,7 @@ class TestPlotting:
 
     def test_plot_intervals(self, linear_dataset):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_intervals
 
@@ -291,6 +281,7 @@ class TestPlotting:
 
     def test_plot_set_sizes(self, ridge_model):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp.plotting import plot_set_sizes
 
@@ -304,6 +295,7 @@ class TestPlotting:
 
     def test_plot_martingale(self, uniform_p_values):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import FixedStrategy, PluginMartingale
         from online_cp.plotting import plot_martingale
@@ -319,6 +311,7 @@ class TestPlotting:
 
     def test_plot_detector_ville(self, uniform_p_values):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import SimpleJumper, VilleWrapper
         from online_cp.plotting import plot_detector
@@ -334,6 +327,7 @@ class TestPlotting:
 
     def test_plot_detector_ville_with_alarm(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import SimpleJumper, VilleWrapper
         from online_cp.plotting import plot_detector
@@ -351,6 +345,7 @@ class TestPlotting:
 
     def test_plot_detector_cusum(self, uniform_p_values):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import CUSUMWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
@@ -366,6 +361,7 @@ class TestPlotting:
 
     def test_plot_detector_cusum_with_barrier(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import CUSUMWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
@@ -380,6 +376,7 @@ class TestPlotting:
 
     def test_plot_detector_sr(self, uniform_p_values):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import ShiryaevRobertsWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
@@ -395,6 +392,7 @@ class TestPlotting:
 
     def test_plot_detector_sr_with_alarm(self):
         import matplotlib
+
         matplotlib.use("Agg")
         from online_cp import ShiryaevRobertsWrapper, SimpleJumper
         from online_cp.plotting import plot_detector
@@ -410,6 +408,7 @@ class TestPlotting:
 
     def test_plot_detector_invalid_type(self):
         from online_cp.plotting import plot_detector
+
         with pytest.raises(TypeError, match="Expected VilleWrapper"):
             plot_detector("not a wrapper")
 

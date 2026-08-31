@@ -172,6 +172,7 @@ class TestConformalNearestNeighboursRegressor:
 
         def manhattan(X, y=None):
             from scipy.spatial.distance import cdist, pdist, squareform
+
             X = np.atleast_2d(X)
             if y is None:
                 return squareform(pdist(X, metric="cityblock"))
@@ -185,7 +186,7 @@ class TestConformalNearestNeighboursRegressor:
 
         covered = 0
         n_test = 50
-        for obj, lab in zip(X[30:30 + n_test], y[30:30 + n_test]):
+        for obj, lab in zip(X[30 : 30 + n_test], y[30 : 30 + n_test]):
             Gamma = cp.predict(obj)
             covered += int(lab in Gamma)
             cp.learn_one(obj, lab)

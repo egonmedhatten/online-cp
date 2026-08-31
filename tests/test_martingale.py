@@ -598,9 +598,7 @@ class TestSleeperDrifterOrdering:
         rng = np.random.default_rng(42)
         for i in range(M - 1):
             m.update(rng.uniform())
-            assert np.isclose(np.exp(m.logM), 1.0), (
-                f"Expected S_{i+1}=1 (no experts active), got {np.exp(m.logM)}"
-            )
+            assert np.isclose(np.exp(m.logM), 1.0), f"Expected S_{i + 1}=1 (no experts active), got {np.exp(m.logM)}"
 
 
 class TestSimpleJumperConfigurable:
@@ -649,7 +647,4 @@ class TestShiryaevRobertsRecursive:
         n = len(pvals)
         logM_n = log_history[n]
         naive_R = sum(np.exp(logM_n - log_history[i]) for i in range(n))
-        assert np.isclose(sr.R, naive_R, rtol=1e-10), (
-            f"Recursive R={sr.R} != naive R={naive_R}"
-        )
-
+        assert np.isclose(sr.R, naive_R, rtol=1e-10), f"Recursive R={sr.R} != naive R={naive_R}"

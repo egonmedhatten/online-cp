@@ -81,7 +81,14 @@ def plot_coverage(metric: Metric, *, nominal: float | None = None, ax: Axes | No
     return ax
 
 
-def plot_martingale(martingale: ConformalTestMartingale, *, log_scale: bool = True, threshold: float | None = 100, ax: Axes | None = None, **kwargs: Any) -> Axes:
+def plot_martingale(
+    martingale: ConformalTestMartingale,
+    *,
+    log_scale: bool = True,
+    threshold: float | None = 100,
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
     """Plot a martingale trajectory.
 
     Parameters
@@ -107,10 +114,7 @@ def plot_martingale(martingale: ConformalTestMartingale, *, log_scale: bool = Tr
         values = np.array(martingale.log_martingale_values) / np.log(10)
         ylabel = r"$\log_{10} M_n$"
         if threshold is not None:
-            ax.axhline(
-                np.log10(threshold), color="red", linestyle="--", alpha=0.7,
-                label=f"Threshold ({threshold})"
-            )
+            ax.axhline(np.log10(threshold), color="red", linestyle="--", alpha=0.7, label=f"Threshold ({threshold})")
     else:
         values = np.array(martingale.martingale_values)
         ylabel = r"$M_n$"
@@ -128,7 +132,15 @@ def plot_martingale(martingale: ConformalTestMartingale, *, log_scale: bool = Tr
     return ax
 
 
-def plot_detector(wrapper: VilleWrapper | CUSUMWrapper | ShiryaevRobertsWrapper, *, threshold: float | None = None, log_scale: bool = True, change_point: int | None = None, ax: Axes | None = None, **kwargs: Any) -> Axes:
+def plot_detector(
+    wrapper: VilleWrapper | CUSUMWrapper | ShiryaevRobertsWrapper,
+    *,
+    threshold: float | None = None,
+    log_scale: bool = True,
+    change_point: int | None = None,
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
     """Plot a detection wrapper's statistic trajectory with alarm markers.
 
     Accepts a VilleWrapper, CUSUMWrapper, or ShiryaevRobertsWrapper and
@@ -166,14 +178,17 @@ def plot_detector(wrapper: VilleWrapper | CUSUMWrapper | ShiryaevRobertsWrapper,
     elif isinstance(wrapper, ShiryaevRobertsWrapper):
         _plot_sr(wrapper, threshold=threshold, log_scale=log_scale, ax=ax, **kwargs)
     else:
-        raise TypeError(
-            f"Expected VilleWrapper, CUSUMWrapper, or ShiryaevRobertsWrapper, "
-            f"got {type(wrapper).__name__}"
-        )
+        raise TypeError(f"Expected VilleWrapper, CUSUMWrapper, or ShiryaevRobertsWrapper, got {type(wrapper).__name__}")
 
     if change_point is not None:
-        ax.axvline(change_point, color="black", linestyle=":", linewidth=1.5,
-                   alpha=0.7, label=f"Change-point (t={change_point})")
+        ax.axvline(
+            change_point,
+            color="black",
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"Change-point (t={change_point})",
+        )
 
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -203,15 +218,19 @@ def _plot_ville(wrapper, *, threshold, log_scale, ax, **kwargs):
 
     kwargs.setdefault("label", "Martingale")
     ax.plot(steps, trajectory, **kwargs)
-    ax.plot(steps, envelope, color="tab:purple", alpha=0.6, linestyle="--",
-            linewidth=1, label="Running max")
-    ax.axhline(thresh_val, color="red", linestyle="--", alpha=0.7,
-               label=f"Threshold ({thresh})")
+    ax.plot(steps, envelope, color="tab:purple", alpha=0.6, linestyle="--", linewidth=1, label="Running max")
+    ax.axhline(thresh_val, color="red", linestyle="--", alpha=0.7, label=f"Threshold ({thresh})")
 
     # Mark rejection time
     if wrapper.rejection_time is not None:
-        ax.axvline(wrapper.rejection_time, color="red", linestyle="-", alpha=0.5,
-                   linewidth=1.5, label=f"Alarm (t={wrapper.rejection_time})")
+        ax.axvline(
+            wrapper.rejection_time,
+            color="red",
+            linestyle="-",
+            alpha=0.5,
+            linewidth=1.5,
+            label=f"Alarm (t={wrapper.rejection_time})",
+        )
 
     ax.set_xlabel("Step")
     ax.set_ylabel(ylabel)
@@ -244,15 +263,20 @@ def _plot_cusum(wrapper, *, threshold, log_scale, ax, **kwargs):
                 thresh_line = np.log10(np.maximum(effective, 1e-300))
             else:
                 thresh_line = effective
-            ax.plot(steps, thresh_line, color="red", linestyle="--", alpha=0.7,
-                    label=f"Barrier (slope={wrapper.barrier_slope})")
+            ax.plot(
+                steps,
+                thresh_line,
+                color="red",
+                linestyle="--",
+                alpha=0.7,
+                label=f"Barrier (slope={wrapper.barrier_slope})",
+            )
         else:
             if log_scale:
                 thresh_val = np.log10(threshold)
             else:
                 thresh_val = threshold
-            ax.axhline(thresh_val, color="red", linestyle="--", alpha=0.7,
-                       label=f"Threshold ({threshold})")
+            ax.axhline(thresh_val, color="red", linestyle="--", alpha=0.7, label=f"Threshold ({threshold})")
 
         # Mark alarm times (threshold crossings)
         alarm_times = _find_alarm_times_cusum(log_values, threshold, wrapper.barrier_slope)
@@ -287,8 +311,7 @@ def _plot_sr(wrapper, *, threshold, log_scale, ax, **kwargs):
             thresh_val = np.log10(threshold)
         else:
             thresh_val = threshold
-        ax.axhline(thresh_val, color="red", linestyle="--", alpha=0.7,
-                   label=f"Threshold ({threshold})")
+        ax.axhline(thresh_val, color="red", linestyle="--", alpha=0.7, label=f"Threshold ({threshold})")
 
         # Mark alarm times
         alarm_times = _find_alarm_times_sr(sr_values, threshold)
@@ -334,7 +357,14 @@ def _find_alarm_times_sr(sr_values, threshold):
     return alarm_times
 
 
-def plot_intervals(y_true: NDArray[np.floating[Any]] | Sequence[float], intervals: Sequence[Any], *, ax: Axes | None = None, point_kwargs: dict[str, Any] | None = None, interval_kwargs: dict[str, Any] | None = None) -> Axes:
+def plot_intervals(
+    y_true: NDArray[np.floating[Any]] | Sequence[float],
+    intervals: Sequence[Any],
+    *,
+    ax: Axes | None = None,
+    point_kwargs: dict[str, Any] | None = None,
+    interval_kwargs: dict[str, Any] | None = None,
+) -> Axes:
     """Plot prediction intervals with true values overlaid.
 
     Parameters
@@ -359,9 +389,7 @@ def plot_intervals(y_true: NDArray[np.floating[Any]] | Sequence[float], interval
     y_true = np.asarray(y_true)
     n = len(y_true)
     if len(intervals) != n:
-        raise ValueError(
-            f"Length mismatch: y_true has {n} elements but intervals has {len(intervals)}"
-        )
+        raise ValueError(f"Length mismatch: y_true has {n} elements but intervals has {len(intervals)}")
     steps = np.arange(n)
 
     # Extract lower/upper bounds
@@ -565,9 +593,7 @@ def plot_reliability_diagram_venn(
     ax : matplotlib.axes.Axes
     """
     if which not in ("point", "hypothesis", "both"):
-        raise ValueError(
-            f"which must be 'point', 'hypothesis', or 'both', got {which!r}"
-        )
+        raise ValueError(f"which must be 'point', 'hypothesis', or 'both', got {which!r}")
 
     ax = _get_ax(ax)
     labels = np.asarray(labels)
@@ -579,16 +605,11 @@ def plot_reliability_diagram_venn(
     for pred, y in zip(predictions, labels):
         label_idx = int(np.searchsorted(pred.label_space, y))
         if label_idx >= len(pred.label_space) or pred.label_space[label_idx] != y:
-            raise ValueError(
-                f"y={y!r} not found in label_space={pred.label_space.tolist()}"
-            )
+            raise ValueError(f"y={y!r} not found in label_space={pred.label_space.tolist()}")
         if target_label is not None:
             target_idx = int(np.searchsorted(pred.label_space, target_label))
             if target_idx >= len(pred.label_space) or pred.label_space[target_idx] != target_label:
-                raise ValueError(
-                    f"target_label={target_label!r} not in "
-                    f"label_space={pred.label_space.tolist()}"
-                )
+                raise ValueError(f"target_label={target_label!r} not in label_space={pred.label_space.tolist()}")
         else:
             target_idx = min(1, len(pred.label_space) - 1)
 
@@ -682,8 +703,7 @@ def plot_sharpness(
     kwargs.setdefault("alpha", 0.7)
     ax.hist(widths, bins=n_bins, **kwargs)
 
-    ax.axvline(widths.mean(), color="red", linestyle="--", alpha=0.7,
-               label=f"Mean = {widths.mean():.3f}")
+    ax.axvline(widths.mean(), color="red", linestyle="--", alpha=0.7, label=f"Mean = {widths.mean():.3f}")
 
     ax.set_xlabel("Multiprobability width")
     ax.set_ylabel("Count")
@@ -742,13 +762,11 @@ def plot_pit_histogram(
 
     # Uniform reference
     uniform_level = 1.0 / n_bins
-    ax.axhline(uniform_level, color="red", linestyle="--", alpha=0.7,
-               label=f"Uniform (1/{n_bins})")
+    ax.axhline(uniform_level, color="red", linestyle="--", alpha=0.7, label=f"Uniform (1/{n_bins})")
 
     # 95% confidence band (Binomial)
     se = np.sqrt(uniform_level * (1 - uniform_level) / n_total)
-    ax.axhspan(uniform_level - 1.96 * se, uniform_level + 1.96 * se,
-               alpha=0.1, color="red", label="95% band")
+    ax.axhspan(uniform_level - 1.96 * se, uniform_level + 1.96 * se, alpha=0.1, color="red", label="95% band")
 
     ax.set_xlabel("PIT value")
     ax.set_ylabel("Relative frequency")

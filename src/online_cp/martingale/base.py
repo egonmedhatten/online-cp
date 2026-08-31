@@ -1,4 +1,5 @@
 """ConformalTestMartingale base class."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -133,5 +134,3 @@ class ConformalTestMartingale:
     def update(self, p: float) -> None:
         """Incorporate a new p-value. Subclasses must implement this."""
         raise NotImplementedError
-
-

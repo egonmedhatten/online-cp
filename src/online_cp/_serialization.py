@@ -50,6 +50,7 @@ def register_callable(name: str) -> Callable:
     ... def my_distance(X, y=None):
     ...     import numpy as np
     ...     from scipy.spatial.distance import cdist, pdist, squareform
+    ...
     ...     if y is None:
     ...         return squareform(pdist(X))
     ...     return cdist(X, y)
@@ -65,6 +66,7 @@ def register_callable(name: str) -> Callable:
 # ---------------------------------------------------------------------------
 # Token helpers
 # ---------------------------------------------------------------------------
+
 
 def to_token(fn: Any) -> Any:
     """Convert a callable *fn* to a serialisable token.
@@ -134,6 +136,7 @@ def from_token(token: Any) -> Any:
 # ---------------------------------------------------------------------------
 # Serializable mixin
 # ---------------------------------------------------------------------------
+
 
 class SerializableMixin:
     """Mixin that adds :meth:`save` / :meth:`load` to online-cp model classes.
@@ -244,9 +247,7 @@ class SerializableMixin:
         except SerializationError:
             raise
         except Exception as exc:
-            raise SerializationError(
-                f"Failed to save model to {filepath!r}: {exc}"
-            ) from exc
+            raise SerializationError(f"Failed to save model to {filepath!r}: {exc}") from exc
 
     # ------------------------------------------------------------------ load
 
@@ -278,16 +279,11 @@ class SerializableMixin:
         try:
             envelope = joblib.load(filepath)
         except Exception as exc:
-            raise SerializationError(
-                f"Failed to read model file {filepath!r}: {exc}"
-            ) from exc
+            raise SerializationError(f"Failed to read model file {filepath!r}: {exc}") from exc
 
         fmt_ver = envelope.get("format_version", 0)
         if fmt_ver > 1:
-            raise SerializationError(
-                f"Unsupported format_version {fmt_ver}. "
-                "Update online-cp to load this file."
-            )
+            raise SerializationError(f"Unsupported format_version {fmt_ver}. Update online-cp to load this file.")
 
         lib_ver = envelope.get("library_version", "unknown")
         if lib_ver != _lib_version:
@@ -303,8 +299,7 @@ class SerializableMixin:
         saved = envelope.get("class", "")
         if saved != expected:
             raise SerializationError(
-                f"Class mismatch: file contains '{saved}', "
-                f"expected '{expected}'. Use the correct class to load."
+                f"Class mismatch: file contains '{saved}', expected '{expected}'. Use the correct class to load."
             )
 
         # Decode params (restore callables from tokens)

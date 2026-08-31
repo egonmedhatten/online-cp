@@ -24,7 +24,7 @@ from online_cp.venn import VennPrediction
 def squared_error_utility():
     """Squared error utility: U(x, y, d) = -(y - d)^2."""
     decisions = np.linspace(-3, 3, 13).tolist()
-    return UtilityFunction(lambda x, y, d: -(y - d) ** 2, decisions)
+    return UtilityFunction(lambda x, y, d: -((y - d) ** 2), decisions)
 
 
 @pytest.fixture
@@ -56,11 +56,13 @@ def binary_venn_pred():
 @pytest.fixture
 def multiclass_venn_pred():
     """A 3-class VennPrediction."""
-    probs = np.array([
-        [0.7, 0.2, 0.1],  # hypothesis y=0
-        [0.1, 0.8, 0.1],  # hypothesis y=1
-        [0.2, 0.1, 0.7],  # hypothesis y=2
-    ])
+    probs = np.array(
+        [
+            [0.7, 0.2, 0.1],  # hypothesis y=0
+            [0.1, 0.8, 0.1],  # hypothesis y=1
+            [0.2, 0.1, 0.7],  # hypothesis y=2
+        ]
+    )
     return VennPrediction(probs, np.array([0, 1, 2]))
 
 
@@ -109,6 +111,7 @@ class TestCPSExpectedUtilities:
     def test_finite_mass_less_than_one(self, ridge_cpd):
         """Mass on finite critical points should be n/(n+1) < 1."""
         from online_cp.decision import _cpd_masses
+
         masses = _cpd_masses(ridge_cpd, tau=0.5)
         finite_mask = np.isfinite(ridge_cpd.Y)
         finite_total = masses[finite_mask].sum()
@@ -329,10 +332,7 @@ class TestConformalPredictiveDecisionMaker:
         d_after = cdm.predict_expected_utilities(X[41])
 
         # At least one utility should change
-        assert any(
-            abs(d_before[d] - d_after[d]) > 1e-10
-            for d in [0, 1, 2]
-        )
+        assert any(abs(d_before[d] - d_after[d]) > 1e-10 for d in [0, 1, 2])
 
     def test_online_loop_reasonable_utility(self, binary_utility, binary_data):
         """Run a short online loop and verify cumulative utility is positive."""
@@ -390,7 +390,7 @@ class TestParameterValidation:
     def test_cpdm_predict_tau_out_of_range(self):
         from online_cp.decision import ConformalPredictiveDecisionMaker
 
-        utility = UtilityFunction(lambda x, y, d: -(y - d) ** 2, decisions=[0, 1])
+        utility = UtilityFunction(lambda x, y, d: -((y - d) ** 2), decisions=[0, 1])
         cdm = ConformalPredictiveDecisionMaker(utility, a=1.0)
         X = np.random.default_rng(0).normal(size=(20, 2))
         y = X[:, 0]

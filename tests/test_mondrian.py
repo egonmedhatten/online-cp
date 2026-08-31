@@ -82,7 +82,7 @@ class TestMondrianConformalRegressorRidge:
             cov = np.mean(coverage[cat])
             # Allow some slack for finite-sample effects
             assert cov >= 1 - epsilon - 0.1, (
-                f"Category '{cat}' coverage {cov:.3f} too low (expected >= {1-epsilon-0.1:.3f})"
+                f"Category '{cat}' coverage {cov:.3f} too low (expected >= {1 - epsilon - 0.1:.3f})"
             )
 
     def test_learn_one_updates_pooled(self, ridge_data):
@@ -175,9 +175,7 @@ class TestMondrianConformalClassifier:
         for cat in ["pos", "neg"]:
             if len(coverage[cat]) > 10:
                 cov = np.mean(coverage[cat])
-                assert cov >= 1 - epsilon - 0.2, (
-                    f"KNN category '{cat}' coverage {cov:.3f} too low"
-                )
+                assert cov >= 1 - epsilon - 0.2, f"KNN category '{cat}' coverage {cov:.3f} too low"
 
     def test_pooled_model_all_data(self):
         from online_cp import ConformalNearestNeighboursClassifier
@@ -263,9 +261,7 @@ class TestMondrianConformalRegressorLasso:
         for cat in ["pos", "neg"]:
             if len(coverage[cat]) > 5:
                 cov = np.mean(coverage[cat])
-                assert cov >= 1 - epsilon - 0.15, (
-                    f"Lasso category '{cat}' coverage {cov:.3f} too low"
-                )
+                assert cov >= 1 - epsilon - 0.15, f"Lasso category '{cat}' coverage {cov:.3f} too low"
 
     def test_compute_p_value(self, lasso_data):
         X_train, y_train, X_test, y_test = lasso_data
@@ -302,18 +298,20 @@ class TestMondrianConformalRegressorLasso:
         result = wrapper.predict(X_test[0], epsilon=epsilon_vals)
 
         # Should return MultiLevelPredictionInterval
-        assert hasattr(result, '__getitem__'), "Multi-epsilon should return dict-like object"
+        assert hasattr(result, "__getitem__"), "Multi-epsilon should return dict-like object"
 
         # Verify nesting property: smaller epsilon should have wider bounds
         for i in range(len(epsilon_vals) - 1):
-            eps1, eps2 = epsilon_vals[i], epsilon_vals[i+1]
+            eps1, eps2 = epsilon_vals[i], epsilon_vals[i + 1]
             pred1 = result[eps1]
             pred2 = result[eps2]
             # Smaller epsilon (eps1 < eps2) should have wider or equal bounds
-            assert pred1.lower <= pred2.lower or np.isclose(pred1.lower, pred2.lower), \
+            assert pred1.lower <= pred2.lower or np.isclose(pred1.lower, pred2.lower), (
                 f"Nesting violated: lower({eps1})={pred1.lower} > lower({eps2})={pred2.lower}"
-            assert pred2.upper <= pred1.upper or np.isclose(pred2.upper, pred1.upper), \
+            )
+            assert pred2.upper <= pred1.upper or np.isclose(pred2.upper, pred1.upper), (
                 f"Nesting violated: upper({eps1})={pred1.upper} < upper({eps2})={pred2.upper}"
+            )
 
     def test_mondrian_lasso_p_value_unsmoothed(self, lasso_data):
         """Test Lasso unsmoothed p-values."""
@@ -364,8 +362,7 @@ class TestMondrianConformalRegressorLasso:
             # Coverage should be roughly 1 - epsilon (with some tolerance for small samples)
             expected_coverage = 1 - eps
             tolerance = 0.25  # Conservative tolerance for small test set
-            assert coverage >= expected_coverage - tolerance, \
-                f"Lasso coverage {coverage:.3f} too low for epsilon={eps}"
+            assert coverage >= expected_coverage - tolerance, f"Lasso coverage {coverage:.3f} too low for epsilon={eps}"
 
     def test_mondrian_lasso_sparse_solution(self):
         """Test Lasso with sparse solution (small n, high p)."""
@@ -417,9 +414,7 @@ class TestMondrianConformalClassifierSVM:
     def test_predict_returns_set(self, svm_data):
         X_train, y_train, X_test, _ = svm_data
         wrapper = MondrianConformalClassifier(
-            base_model=ConformalSupportVectorMachine(
-                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
-            ),
+            base_model=ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])),
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
@@ -431,9 +426,7 @@ class TestMondrianConformalClassifierSVM:
         X_train, y_train, X_test, y_test = svm_data
         epsilon = 0.2
         wrapper = MondrianConformalClassifier(
-            base_model=ConformalSupportVectorMachine(
-                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
-            ),
+            base_model=ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])),
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
@@ -451,9 +444,7 @@ class TestMondrianConformalClassifierSVM:
     def test_learn_one_incremental(self, svm_data):
         X_train, y_train, X_test, y_test = svm_data
         wrapper = MondrianConformalClassifier(
-            base_model=ConformalSupportVectorMachine(
-                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
-            ),
+            base_model=ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])),
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
@@ -627,9 +618,7 @@ class TestMondrianClassifierReturnPValues:
     def test_return_p_values_svm(self, svm_data):
         X_train, y_train, X_test, _ = svm_data
         wrapper = MondrianConformalClassifier(
-            base_model=ConformalSupportVectorMachine(
-                kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])
-            ),
+            base_model=ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, label_space=np.array([-1, 1])),
             category_fn=_category_fn,
         )
         wrapper.learn_initial_training_set(X_train, y_train)
@@ -661,6 +650,7 @@ class TestMondrianEdgeCases:
     def test_many_categories(self, ridge_data):
         """Many small categories should produce valid (possibly wide) intervals."""
         X_train, y_train, X_test, _ = ridge_data
+
         # Category per quartile of first two features
         def fine_cat(x):
             return f"{'p' if x[0] > 0 else 'n'}{'p' if x[1] > 0 else 'n'}"
@@ -715,7 +705,7 @@ class TestLabelConditionalMondrianClassifier:
         rng = np.random.default_rng(123)
         N = 400
         X = rng.standard_normal((N, 3))
-        y = (X[:, 0] + X[:, 1] + 0.5 * rng.standard_normal(N))
+        y = X[:, 0] + X[:, 1] + 0.5 * rng.standard_normal(N)
         y = np.digitize(y, bins=[-1, 1])  # 3 classes: 0, 1, 2
         return X, y
 
@@ -772,9 +762,7 @@ class TestLabelConditionalMondrianClassifier:
         for c, errs in errors.items():
             if len(errs) >= 30:  # only check classes with enough samples
                 rate = np.mean(errs)
-                assert rate <= epsilon + 0.07, (
-                    f"Class {c} error rate {rate:.3f} exceeds {epsilon} + tolerance"
-                )
+                assert rate <= epsilon + 0.07, f"Class {c} error rate {rate:.3f} exceeds {epsilon} + tolerance"
 
     def test_label_conditional_returns_p_values(self, multiclass_data):
         """return_p_values=True works with label-conditional."""

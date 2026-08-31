@@ -229,8 +229,7 @@ class Pipeline:
     def __init__(self, *steps: Any, unsafe_incremental: bool = False) -> None:
         if len(steps) < 2:
             raise ValueError(
-                "Pipeline requires at least two steps: one or more transformers "
-                "followed by a conformal predictor."
+                "Pipeline requires at least two steps: one or more transformers followed by a conformal predictor."
             )
         # Auto-wrap bare callables; reject non-callable non-Transformers.
         transformer_steps = []
@@ -260,23 +259,20 @@ class Pipeline:
                     )
         self.transformers: list[Transformer] = transformer_steps
         self.estimator: Any = steps[-1]
-        self.steps: tuple[Any, ...] = (tuple(transformer_steps) + (steps[-1],))
+        self.steps: tuple[Any, ...] = tuple(transformer_steps) + (steps[-1],)
         self._unsafe_incremental = unsafe_incremental
 
         # Bag-mode support.
         self._bag_mode: bool = any(t.mode == "bag" for t in transformer_steps)
         if self._bag_mode:
-            frozen_names = [
-                repr(t) for t in transformer_steps if t.mode == "frozen"
-            ]
+            frozen_names = [repr(t) for t in transformer_steps if t.mode == "frozen"]
             if frozen_names:
                 raise ValueError(
                     "Mixing mode='frozen' and mode='bag' transformers in a Pipeline "
                     "is not supported (v1).  Frozen transformers are fitted once on the "
                     "training set while bag transformers refit on the augmented object "
                     "bag at each prediction.  Use only fixed + bag transformers, or "
-                    "only fixed + frozen transformers.  Offending frozen transformers: "
-                    + ", ".join(frozen_names)
+                    "only fixed + frozen transformers.  Offending frozen transformers: " + ", ".join(frozen_names)
                 )
             # Pristine template — never trained; deep-copied on each predict so
             # predict() is read-only and does not mutate persistent estimator state.
@@ -528,6 +524,7 @@ class Pipeline:
         >>> pipe.summary()["n_steps"]
         2
         """
+
         def _is_fitted(t: Transformer) -> bool:
             # A transformer is fitted if the base fit() set _fitted,
             # OR if it has frozen-scaler attributes (mean_, data_min_).
@@ -554,8 +551,7 @@ class Pipeline:
 
     def __or__(self, other: Any) -> Pipeline:
         """Append a step to this pipeline via the ``|`` operator."""
-        return Pipeline(*self.steps, other,
-                        unsafe_incremental=self._unsafe_incremental)
+        return Pipeline(*self.steps, other, unsafe_incremental=self._unsafe_incremental)
 
     def save(self, filepath: str | os.PathLike, *, compress: int = 3) -> None:
         """Save this pipeline to *filepath*.
@@ -614,15 +610,11 @@ class Pipeline:
         try:
             envelope = joblib.load(filepath)
         except Exception as exc:
-            raise SerializationError(
-                f"Failed to read pipeline file {filepath!r}: {exc}"
-            ) from exc
+            raise SerializationError(f"Failed to read pipeline file {filepath!r}: {exc}") from exc
 
         fmt_ver = envelope.get("format_version", 0)
         if fmt_ver > 1:
-            raise SerializationError(
-                f"Unsupported format_version {fmt_ver}. Update online-cp to load this file."
-            )
+            raise SerializationError(f"Unsupported format_version {fmt_ver}. Update online-cp to load this file.")
         lib_ver = envelope.get("library_version", "unknown")
         if lib_ver != _lib_version:
             _warnings.warn(
@@ -633,10 +625,7 @@ class Pipeline:
             )
         expected = f"{cls.__module__}.{cls.__qualname__}"
         if envelope.get("class", "") != expected:
-            raise SerializationError(
-                f"Class mismatch: file contains '{envelope.get('class')}', "
-                f"expected '{expected}'."
-            )
+            raise SerializationError(f"Class mismatch: file contains '{envelope.get('class')}', expected '{expected}'.")
 
         steps = list(envelope["transformers"]) + [envelope["estimator"]]
         pipe = cls(*steps, unsafe_incremental=envelope["unsafe_incremental"])
@@ -679,7 +668,7 @@ class TransformerUnion(Transformer):
     >>> import numpy as np
     >>> from online_cp import FuncTransformer, Select, TransformerUnion
     >>> # Build polynomial-like features: [x, x**2]
-    >>> union = FuncTransformer(lambda x: x) + FuncTransformer(lambda x: x ** 2)
+    >>> union = FuncTransformer(lambda x: x) + FuncTransformer(lambda x: x**2)
     >>> X = np.arange(6, dtype=float).reshape(3, 2)
     >>> union.fit(X)
     >>> union.transform(X).shape

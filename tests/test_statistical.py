@@ -61,8 +61,7 @@ def test_ridge_regressor_coverage_validity():
         total_preds += int(metric.values.size)
     result = binomtest(total_errors, total_preds, eps, alternative="greater")
     assert result.pvalue > BINOM_ALPHA, (
-        f"error rate {total_errors / total_preds:.4f} significantly exceeds eps={eps} "
-        f"(binom p={result.pvalue:.2e})"
+        f"error rate {total_errors / total_preds:.4f} significantly exceeds eps={eps} (binom p={result.pvalue:.2e})"
     )
 
 
@@ -84,8 +83,7 @@ def test_knn_classifier_coverage_validity():
         total_preds += int(metric.values.size)
     result = binomtest(total_errors, total_preds, eps, alternative="greater")
     assert result.pvalue > BINOM_ALPHA, (
-        f"error rate {total_errors / total_preds:.4f} significantly exceeds eps={eps} "
-        f"(binom p={result.pvalue:.2e})"
+        f"error rate {total_errors / total_preds:.4f} significantly exceeds eps={eps} (binom p={result.pvalue:.2e})"
     )
 
 
@@ -181,6 +179,5 @@ def test_ville_detects_distribution_shift():
     floor = 0.8
     result = binomtest(detections, n_runs, floor, alternative="less")
     assert result.pvalue > BINOM_ALPHA, (
-        f"detection power {detections / n_runs:.2f} significantly below {floor} "
-        f"(binom p={result.pvalue:.2e})"
+        f"detection power {detections / n_runs:.2f} significantly below {floor} (binom p={result.pvalue:.2e})"
     )

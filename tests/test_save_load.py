@@ -43,10 +43,12 @@ D_FEATURES = 2
 X_REG = RNG.standard_normal((N_TRAIN, D_FEATURES))
 Y_REG = X_REG[:, 0] + RNG.standard_normal(N_TRAIN) * 0.15
 
-X_CLF = np.vstack([
-    RNG.standard_normal((20, 2)) + np.array([-2, 0]),
-    RNG.standard_normal((20, 2)) + np.array([2, 0]),
-])
+X_CLF = np.vstack(
+    [
+        RNG.standard_normal((20, 2)) + np.array([-2, 0]),
+        RNG.standard_normal((20, 2)) + np.array([2, 0]),
+    ]
+)
 Y_CLF = np.array([-1] * 20 + [1] * 20)
 
 X_TEST_REG = np.array([0.5, -0.3])
@@ -68,6 +70,7 @@ def _train_classifier(cls, **kwargs):
 # ---------------------------------------------------------------------------
 # Functional round-trip — regressors
 # ---------------------------------------------------------------------------
+
 
 class TestRidgeRegressorRoundTrip:
     def test_predict_interval_equality(self, tmp_path):
@@ -104,8 +107,7 @@ class TestRidgeRegressorRoundTrip:
         assert np.array_equal(cp.y, loaded.y)
 
     def test_params_preserved(self, tmp_path):
-        cp = _train_regressor(ConformalRidgeRegressor, a=0.5, studentised=True,
-                              recompute_every=10, rnd_state=7)
+        cp = _train_regressor(ConformalRidgeRegressor, a=0.5, studentised=True, recompute_every=10, rnd_state=7)
         path = tmp_path / "ridge_params.joblib"
         cp.save(str(path))
         loaded = ConformalRidgeRegressor.load(str(path))
@@ -157,13 +159,13 @@ class TestKNNRegressorRoundTrip:
         @register_callable("test_custom_dist_reg")
         def my_dist(X, y=None):
             from scipy.spatial.distance import cdist, pdist, squareform
+
             X = np.atleast_2d(X)
             if y is None:
                 return squareform(pdist(X, "euclidean"))
             return cdist(X, np.atleast_2d(y), "euclidean")
 
-        cp = _train_regressor(ConformalNearestNeighboursRegressor,
-                              distance_func=my_dist, rnd_state=5)
+        cp = _train_regressor(ConformalNearestNeighboursRegressor, distance_func=my_dist, rnd_state=5)
         path = tmp_path / "knn_custom_dist.joblib"
         cp.save(str(path))
         loaded = ConformalNearestNeighboursRegressor.load(str(path))
@@ -172,8 +174,12 @@ class TestKNNRegressorRoundTrip:
         assert abs(orig.lower - back.lower) < 1e-10
 
     def test_lambda_raises_serialization_error(self, tmp_path):
-        cp = _train_regressor(ConformalNearestNeighboursRegressor,
-                              distance_func=lambda X, y=None: np.zeros((X.shape[0], X.shape[0]) if y is None else (X.shape[0], np.atleast_2d(y).shape[0])))
+        cp = _train_regressor(
+            ConformalNearestNeighboursRegressor,
+            distance_func=lambda X, y=None: np.zeros(
+                (X.shape[0], X.shape[0]) if y is None else (X.shape[0], np.atleast_2d(y).shape[0])
+            ),
+        )
         path = tmp_path / "knn_lambda.joblib"
         with pytest.raises(SerializationError, match="lambda|closure|Cannot serialize"):
             cp.save(str(path))
@@ -212,8 +218,7 @@ class TestLassoRegressorRoundTrip:
 class TestKernelRidgeRegressorRoundTrip:
     def test_predict_equality(self, tmp_path):
         kernel = GaussianKernel(sigma=1.0)
-        cp = _train_regressor(KernelConformalRidgeRegressor, kernel=kernel,
-                              a=1e-3, rnd_state=77)
+        cp = _train_regressor(KernelConformalRidgeRegressor, kernel=kernel, a=1e-3, rnd_state=77)
         path = tmp_path / "kridge.joblib"
         cp.save(str(path))
         loaded = KernelConformalRidgeRegressor.load(str(path))
@@ -233,8 +238,7 @@ class TestKernelRidgeRegressorRoundTrip:
 
     def test_rng_reproducibility(self, tmp_path):
         kernel = GaussianKernel(sigma=1.0)
-        cp = _train_regressor(KernelConformalRidgeRegressor, kernel=kernel,
-                              a=1e-3, rnd_state=55)
+        cp = _train_regressor(KernelConformalRidgeRegressor, kernel=kernel, a=1e-3, rnd_state=55)
         for xi in X_REG[:5]:
             cp.compute_p_value(xi, 1.0)
         path = tmp_path / "kridge_rng.joblib"
@@ -248,6 +252,7 @@ class TestKernelRidgeRegressorRoundTrip:
 # ---------------------------------------------------------------------------
 # Functional round-trip — CPS
 # ---------------------------------------------------------------------------
+
 
 class TestRidgePredictionMachineRoundTrip:
     def test_cpd_equality(self, tmp_path):
@@ -295,10 +300,10 @@ class TestKernelRidgePredictionMachineRoundTrip:
 # Functional round-trip — classifiers
 # ---------------------------------------------------------------------------
 
+
 class TestKNNClassifierRoundTrip:
     def test_predict_set_equality(self, tmp_path):
-        cp = _train_classifier(ConformalNearestNeighboursClassifier,
-                               k=3, label_space=[-1, 1], rnd_state=0)
+        cp = _train_classifier(ConformalNearestNeighboursClassifier, k=3, label_space=[-1, 1], rnd_state=0)
         path = tmp_path / "knn_clf.joblib"
         cp.save(str(path))
         loaded = ConformalNearestNeighboursClassifier.load(str(path))
@@ -322,8 +327,7 @@ class TestKNNClassifierRoundTrip:
             assert np.array_equal(cp._label_indices[lbl], loaded._label_indices[lbl])
 
     def test_rng_reproducibility(self, tmp_path):
-        cp = _train_classifier(ConformalNearestNeighboursClassifier,
-                               k=1, label_space=[-1, 1], rnd_state=77)
+        cp = _train_classifier(ConformalNearestNeighboursClassifier, k=1, label_space=[-1, 1], rnd_state=77)
         # Advance RNG
         for xi in X_CLF[:5]:
             cp.predict(xi)
@@ -339,13 +343,13 @@ class TestKNNClassifierRoundTrip:
         @register_callable("test_clf_custom_dist")
         def clf_dist(X, y=None):
             from scipy.spatial.distance import cdist, pdist, squareform
+
             X = np.atleast_2d(X)
             if y is None:
                 return squareform(pdist(X))
             return cdist(X, np.atleast_2d(y))
 
-        cp = _train_classifier(ConformalNearestNeighboursClassifier,
-                               k=2, distance_func=clf_dist, rnd_state=9)
+        cp = _train_classifier(ConformalNearestNeighboursClassifier, k=2, distance_func=clf_dist, rnd_state=9)
         path = tmp_path / "knn_clf_custom.joblib"
         cp.save(str(path))
         loaded = ConformalNearestNeighboursClassifier.load(str(path))
@@ -356,8 +360,7 @@ class TestKNNClassifierRoundTrip:
 
 class TestSVMClassifierRoundTrip:
     def test_predict_set_equality(self, tmp_path):
-        cp = _train_classifier(ConformalSupportVectorMachine,
-                               kernel="rbf", sigma=1.0, C=10.0, rnd_state=0)
+        cp = _train_classifier(ConformalSupportVectorMachine, kernel="rbf", sigma=1.0, C=10.0, rnd_state=0)
         path = tmp_path / "svm.joblib"
         cp.save(str(path))
         loaded = ConformalSupportVectorMachine.load(str(path))
@@ -374,8 +377,7 @@ class TestSVMClassifierRoundTrip:
 
     def test_kernel_object_round_trip(self, tmp_path):
         kernel = GaussianKernel(sigma=1.5)
-        cp = _train_classifier(ConformalSupportVectorMachine,
-                               kernel=kernel, C=5.0, rnd_state=3)
+        cp = _train_classifier(ConformalSupportVectorMachine, kernel=kernel, C=5.0, rnd_state=3)
         path = tmp_path / "svm_kernel_obj.joblib"
         cp.save(str(path))
         loaded = ConformalSupportVectorMachine.load(str(path))
@@ -384,8 +386,7 @@ class TestSVMClassifierRoundTrip:
         assert set(orig.elements.tolist()) == set(back.elements.tolist())
 
     def test_rng_reproducibility(self, tmp_path):
-        cp = _train_classifier(ConformalSupportVectorMachine,
-                               kernel="rbf", sigma=1.0, C=10.0, rnd_state=42)
+        cp = _train_classifier(ConformalSupportVectorMachine, kernel="rbf", sigma=1.0, C=10.0, rnd_state=42)
         for xi in X_CLF[:5]:
             cp.predict(xi)
         path = tmp_path / "svm_rng.joblib"
@@ -401,6 +402,7 @@ class TestSVMClassifierRoundTrip:
 # Error / safety cases
 # ---------------------------------------------------------------------------
 
+
 class TestVersionAndClassChecks:
     def test_class_mismatch_raises(self, tmp_path):
         cp = _train_regressor(ConformalRidgeRegressor, a=0.1)
@@ -411,6 +413,7 @@ class TestVersionAndClassChecks:
 
     def test_format_version_too_new_raises(self, tmp_path):
         import joblib
+
         cp = _train_regressor(ConformalRidgeRegressor)
         path = tmp_path / "future.joblib"
         cp.save(str(path))
@@ -422,6 +425,7 @@ class TestVersionAndClassChecks:
 
     def test_library_version_mismatch_warns(self, tmp_path):
         import joblib
+
         cp = _train_regressor(ConformalRidgeRegressor)
         path = tmp_path / "old_lib.joblib"
         cp.save(str(path))
@@ -438,8 +442,7 @@ class TestVersionAndClassChecks:
             ConformalRidgeRegressor.load(str(path))
 
     def test_lambda_kernel_raises(self, tmp_path):
-        cp = _train_regressor(KernelConformalRidgeRegressor,
-                              kernel=lambda X, Y=None: X @ X.T if Y is None else X @ Y.T)
+        cp = _train_regressor(KernelConformalRidgeRegressor, kernel=lambda X, Y=None: X @ X.T if Y is None else X @ Y.T)
         path = tmp_path / "lambda_kernel.joblib"
         with pytest.raises(SerializationError):
             cp.save(str(path))
@@ -447,15 +450,16 @@ class TestVersionAndClassChecks:
     def test_unregistered_callable_raises_helpful_message(self, tmp_path):
         def _unregistered(X, y=None):
             from scipy.spatial.distance import pdist, squareform
+
             return squareform(pdist(X)) if y is None else np.zeros((X.shape[0], 1))
+
         # Make it non-picklable by wrapping in a closure
         outer = _unregistered
 
         def inner(X, y=None):
             return outer(X, y)  # closure over outer
 
-        cp = _train_regressor(ConformalNearestNeighboursRegressor,
-                              distance_func=inner)
+        cp = _train_regressor(ConformalNearestNeighboursRegressor, distance_func=inner)
         path = tmp_path / "closure.joblib"
         with pytest.raises(SerializationError) as exc_info:
             cp.save(str(path))
@@ -465,6 +469,7 @@ class TestVersionAndClassChecks:
 # ---------------------------------------------------------------------------
 # Registry round-trip
 # ---------------------------------------------------------------------------
+
 
 class TestCallableRegistry:
     def test_registered_callable_round_trips(self, tmp_path):
@@ -485,6 +490,7 @@ class TestCallableRegistry:
 
     def test_unregistered_lookup_raises(self, tmp_path):
         import joblib
+
         cp = _train_regressor(ConformalRidgeRegressor)
         path = tmp_path / "missing_reg.joblib"
         cp.save(str(path))
@@ -494,6 +500,7 @@ class TestCallableRegistry:
         # We can't test via load() directly without modifying the class, but we can
         # test from_token directly
         from online_cp._serialization import from_token
+
         with pytest.raises(SerializationError, match="not found in the registry"):
             from_token({"__type__": "registry", "name": "__nonexistent__"})
 
@@ -501,6 +508,7 @@ class TestCallableRegistry:
 # ---------------------------------------------------------------------------
 # Symmetry: loaded model is still order-invariant
 # ---------------------------------------------------------------------------
+
 
 class TestSymmetryAfterLoad:
     def test_ridge_permutation_invariant(self, tmp_path):
@@ -531,6 +539,7 @@ class TestSymmetryAfterLoad:
 # Untrained model save/load
 # ---------------------------------------------------------------------------
 
+
 class TestUntrainedRoundTrip:
     def test_untrained_ridge_saves_and_loads(self, tmp_path):
         cp = ConformalRidgeRegressor(a=0.5, rnd_state=1)
@@ -547,9 +556,11 @@ class TestUntrainedRoundTrip:
 # Phase B — Venn predictors
 # ---------------------------------------------------------------------------
 
+
 class TestVennAbersRoundTrip:
     def test_ridge_scorer_round_trip(self, tmp_path):
         from online_cp.venn import VennAbersPredictor
+
         va = VennAbersPredictor(scorer="ridge", a=1e-3, label_space=[-1, 1])
         va.learn_initial_training_set(X_CLF, Y_CLF)
         path = tmp_path / "va_ridge.joblib"
@@ -562,6 +573,7 @@ class TestVennAbersRoundTrip:
 
     def test_knn_scorer_round_trip(self, tmp_path):
         from online_cp.venn import VennAbersPredictor
+
         va = VennAbersPredictor(scorer="knn", k=5, label_space=[-1, 1])
         va.learn_initial_training_set(X_CLF, Y_CLF)
         path = tmp_path / "va_knn.joblib"
@@ -574,6 +586,7 @@ class TestVennAbersRoundTrip:
 
     def test_svm_scorer_round_trip(self, tmp_path):
         from online_cp.venn import VennAbersPredictor
+
         va = VennAbersPredictor(scorer="svm", C=1.0, label_space=[-1, 1])
         va.learn_initial_training_set(X_CLF, Y_CLF)
         path = tmp_path / "va_svm.joblib"
@@ -588,6 +601,7 @@ class TestVennAbersRoundTrip:
 class TestNearestNeighboursVennRoundTrip:
     def test_round_trip(self, tmp_path):
         from online_cp.venn import NearestNeighboursVennPredictor
+
         va = NearestNeighboursVennPredictor(k=5, label_space=[-1, 1])
         va.learn_initial_training_set(X_CLF, Y_CLF)
         path = tmp_path / "nn_venn.joblib"
@@ -603,9 +617,11 @@ class TestNearestNeighboursVennRoundTrip:
 # Phase B — remaining CPS classes
 # ---------------------------------------------------------------------------
 
+
 class TestNearestNeighboursPredictionMachineRoundTrip:
     def test_round_trip(self, tmp_path):
         from online_cp.CPS import NearestNeighboursPredictionMachine
+
         m = NearestNeighboursPredictionMachine(k=5)
         m.learn_initial_training_set(X_REG, Y_REG)
         path = tmp_path / "nn_cps.joblib"
@@ -621,6 +637,7 @@ class TestNearestNeighboursPredictionMachineRoundTrip:
 class TestDempsterHillRoundTrip:
     def test_round_trip(self, tmp_path):
         from online_cp.CPS import DempsterHillConformalPredictiveSystem
+
         m = DempsterHillConformalPredictiveSystem()
         m.learn_initial_training_set(Y_REG)
         path = tmp_path / "dempster.joblib"
@@ -636,6 +653,7 @@ class TestDempsterHillRoundTrip:
 # ---------------------------------------------------------------------------
 # Phase B — Mondrian conformal wrappers
 # ---------------------------------------------------------------------------
+
 
 def _make_category_fn(n_bins: int = 2):
     """Module-level function (not lambda) needed for pickling."""
@@ -656,6 +674,7 @@ def _mondrian_cat_clf(x):
 class TestMondrianConformalRegressorRoundTrip:
     def test_round_trip(self, tmp_path):
         from online_cp.mondrian import MondrianConformalRegressor
+
         base = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         m = MondrianConformalRegressor(base, _mondrian_cat_reg)
         m.learn_initial_training_set(X_REG, Y_REG)
@@ -672,6 +691,7 @@ class TestMondrianConformalClassifierRoundTrip:
     def test_label_category_fn(self, tmp_path):
         from online_cp.classifiers import ConformalNearestNeighboursClassifier
         from online_cp.mondrian import MondrianConformalClassifier
+
         base = ConformalNearestNeighboursClassifier(k=5, label_space=[-1, 1])
         m = MondrianConformalClassifier(base, category_fn="label")
         m.learn_initial_training_set(X_CLF, Y_CLF)
@@ -685,6 +705,7 @@ class TestMondrianConformalClassifierRoundTrip:
     def test_callable_category_fn(self, tmp_path):
         from online_cp.classifiers import ConformalNearestNeighboursClassifier
         from online_cp.mondrian import MondrianConformalClassifier
+
         base = ConformalNearestNeighboursClassifier(k=5, label_space=[-1, 1])
         m = MondrianConformalClassifier(base, category_fn=_mondrian_cat_clf)
         m.learn_initial_training_set(X_CLF, Y_CLF)
@@ -700,6 +721,7 @@ class TestMondrianConformalClassifierRoundTrip:
 # Phase B — ConformalPredictiveDecisionMaker
 # ---------------------------------------------------------------------------
 
+
 @register_callable("_test_decision_utility")
 def _test_utility_fn(x, y, d):
     """Simple utility: reward correct side."""
@@ -710,6 +732,7 @@ class TestDecisionMakerRoundTrip:
     def test_round_trip(self, tmp_path):
         from online_cp.CPS import RidgePredictionMachine
         from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
+
         utility = UtilityFunction(fn=_test_utility_fn, decisions=[-1.0, 1.0])
         dm = ConformalPredictiveDecisionMaker(utility, RidgePredictionMachine)
         dm.learn_initial_training_set(X_REG, Y_REG)
@@ -723,6 +746,7 @@ class TestDecisionMakerRoundTrip:
     def test_utility_fn_preserved(self, tmp_path):
         from online_cp.CPS import RidgePredictionMachine
         from online_cp.decision import ConformalPredictiveDecisionMaker, UtilityFunction
+
         utility = UtilityFunction(fn=_test_utility_fn, decisions=[-1.0, 1.0])
         dm = ConformalPredictiveDecisionMaker(utility, RidgePredictionMachine)
         path = tmp_path / "decision_fn.joblib"
@@ -735,10 +759,12 @@ class TestDecisionMakerRoundTrip:
 # Phase B — Pipeline
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineRoundTrip:
     def test_standard_scaler_round_trip(self, tmp_path):
         from online_cp import Pipeline
         from online_cp.preprocessing import StandardScaler
+
         scaler = StandardScaler(mode="frozen")
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(scaler, regressor)
@@ -754,6 +780,7 @@ class TestPipelineRoundTrip:
     def test_estimator_state_preserved(self, tmp_path):
         from online_cp import Pipeline
         from online_cp.preprocessing import StandardScaler
+
         scaler = StandardScaler(mode="frozen")
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(scaler, regressor)
@@ -771,6 +798,7 @@ class TestPipelineRoundTrip:
     def test_bag_mode_raw_data_preserved(self, tmp_path):
         from online_cp import Pipeline
         from online_cp.preprocessing import StandardScaler
+
         scaler = StandardScaler(mode="bag")
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(scaler, regressor)
@@ -789,6 +817,7 @@ class TestPipelineRoundTrip:
     def test_class_mismatch_raises(self, tmp_path):
         from online_cp import Pipeline
         from online_cp.preprocessing import StandardScaler
+
         scaler = StandardScaler(mode="frozen")
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(scaler, regressor)
@@ -803,6 +832,7 @@ class TestPipelineRoundTrip:
 # Phase B — FuncTransformer inside a Pipeline
 # ---------------------------------------------------------------------------
 
+
 def _shift_features(x):
     """Module-level (picklable) transform: x -> x + 1.0."""
     return x + 1.0
@@ -811,6 +841,7 @@ def _shift_features(x):
 class TestFuncTransformerRoundTrip:
     def test_numpy_ufunc_round_trip(self, tmp_path):
         from online_cp import FuncTransformer, Pipeline
+
         # log1p requires non-negative inputs.
         X = np.abs(X_REG) + 0.1
         ft = FuncTransformer(np.log1p)
@@ -828,6 +859,7 @@ class TestFuncTransformerRoundTrip:
 
     def test_named_function_round_trip(self, tmp_path):
         from online_cp import FuncTransformer, Pipeline
+
         ft = FuncTransformer(_shift_features)
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(ft, regressor)
@@ -844,6 +876,7 @@ class TestFuncTransformerRoundTrip:
 
     def test_lambda_raises_serialization_error(self, tmp_path):
         from online_cp import FuncTransformer, Pipeline
+
         ft = FuncTransformer(lambda x: x + 1.0)
         regressor = ConformalRidgeRegressor(a=1e-3, rnd_state=42)
         pipe = Pipeline(ft, regressor)
@@ -866,9 +899,7 @@ class TestPCARoundTrip:
         path = tmp_path / "pca.joblib"
         pca.save(str(path))
         loaded = PCA.load(str(path))
-        np.testing.assert_allclose(
-            pca.transform(X_REG), loaded.transform(X_REG), atol=1e-10
-        )
+        np.testing.assert_allclose(pca.transform(X_REG), loaded.transform(X_REG), atol=1e-10)
 
     def test_state_preserved(self, tmp_path):
         """components_, singular_values_, mean_, n_ all survive round-trip."""
@@ -894,6 +925,7 @@ class TestPCARoundTrip:
     def test_pipeline_pca_ridge_round_trip(self, tmp_path):
         """Full Pipeline(PCA, ConformalRidgeRegressor) save/load round-trip."""
         from online_cp import Pipeline
+
         pipe = Pipeline(PCA(n_components=1), ConformalRidgeRegressor(a=1e-3, rnd_state=7))
         pipe.learn_initial_training_set(X_REG, Y_REG)
         path = tmp_path / "pipeline_pca_ridge.joblib"
@@ -912,9 +944,7 @@ class TestSVDRoundTrip:
         path = tmp_path / "svd_center.joblib"
         svd.save(str(path))
         loaded = SVD.load(str(path))
-        np.testing.assert_allclose(
-            svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10
-        )
+        np.testing.assert_allclose(svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10)
 
     def test_round_trip_transforms_equal_center_false(self, tmp_path):
         svd = SVD(n_components=1, center=False)
@@ -922,9 +952,7 @@ class TestSVDRoundTrip:
         path = tmp_path / "svd_nocenter.joblib"
         svd.save(str(path))
         loaded = SVD.load(str(path))
-        np.testing.assert_allclose(
-            svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10
-        )
+        np.testing.assert_allclose(svd.transform(X_REG), loaded.transform(X_REG), atol=1e-10)
         assert loaded.mean_ is None
 
     def test_state_preserved(self, tmp_path):
@@ -947,4 +975,3 @@ class TestSVDRoundTrip:
         assert loaded.n_components == 1
         assert loaded.mode == "frozen"
         assert loaded.center is False
-

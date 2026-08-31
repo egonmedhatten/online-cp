@@ -152,9 +152,7 @@ class TestSimpleLegendreJumper:
             slj.update(p)
             plj.update(p)
 
-        assert np.isclose(slj.logM, plj.logM, atol=1e-10), (
-            f"SLJ logM={slj.logM}, PLJ logM={plj.logM}"
-        )
+        assert np.isclose(slj.logM, plj.logM, atol=1e-10), f"SLJ logM={slj.logM}, PLJ logM={plj.logM}"
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +269,7 @@ class TestVLJEquivalences:
             slj.update(p)
             vlj.update(p)
 
-        assert np.isclose(slj.logM, vlj.logM, atol=1e-10), (
-            f"SLJ logM={slj.logM}, VLJ logM={vlj.logM}"
-        )
+        assert np.isclose(slj.logM, vlj.logM, atol=1e-10), f"SLJ logM={slj.logM}, VLJ logM={vlj.logM}"
 
     def test_two_orders_equals_product_of_sljs(self):
         """For |K|=2, VLJ factors into independent SLJs: S_n = prod_k C_k."""
@@ -290,9 +286,7 @@ class TestVLJEquivalences:
             vlj.update(p)
 
         expected_logM = slj1.logM + slj2.logM
-        assert np.isclose(vlj.logM, expected_logM, atol=1e-10), (
-            f"VLJ logM={vlj.logM}, prod SLJ logM={expected_logM}"
-        )
+        assert np.isclose(vlj.logM, expected_logM, atol=1e-10), f"VLJ logM={vlj.logM}, prod SLJ logM={expected_logM}"
 
     def test_two_orders_trajectory_matches_product(self):
         """Full trajectory for |K|=2 should match product of SLJ trajectories."""
@@ -479,16 +473,16 @@ class TestOptimisticFTRLBarrierLegendreMartingale:
         for _ in range(40):
             eps = rng.uniform(-0.95, 0.95, size=len(orders))
             Z_gaunt, _ = oftrl._compute_Z_and_gradient(eps)
+            
+            # Capture eps to avoid B023 loop variable binding issue
             def _integrand(u, eps=eps):
                 val = 1.0
                 for k, e in zip(orders, eps):
-                    val *= (1.0 + e * eval_legendre(k, 2.0 * u - 1.0))
+                    val *= 1.0 + e * eval_legendre(k, 2.0 * u - 1.0)
                 return val
 
             Z_ref, _ = quad(_integrand, 0.0, 1.0, limit=200)
-            assert np.isclose(Z_gaunt, Z_ref, rtol=1e-10, atol=1e-12), (
-                f"Z mismatch: gaunt={Z_gaunt}, ref={Z_ref}"
-            )
+            assert np.isclose(Z_gaunt, Z_ref, rtol=1e-10, atol=1e-12), f"Z mismatch: gaunt={Z_gaunt}, ref={Z_ref}"
 
     def test_high_degree_stream_stays_finite(self):
         """High-order OFTRL stream should keep finite wealth and positive Z."""
@@ -547,9 +541,7 @@ class TestCompositeLegendreJumper:
         rng = np.random.default_rng(42)
         p_values = rng.beta(0.3, 1.5, size=100)
 
-        clj = CompositeLegendreJumper(
-            base_class=ProductLegendreJumper, orders=[1, 2]
-        )
+        clj = CompositeLegendreJumper(base_class=ProductLegendreJumper, orders=[1, 2])
         for p in p_values:
             clj.update(p)
 
@@ -560,9 +552,7 @@ class TestCompositeLegendreJumper:
         rng = np.random.default_rng(42)
         p_values = rng.beta(0.3, 1.5, size=100)
 
-        clj = CompositeLegendreJumper(
-            base_class=VariationalLegendreJumper, orders=[1, 2]
-        )
+        clj = CompositeLegendreJumper(base_class=VariationalLegendreJumper, orders=[1, 2])
         for p in p_values:
             clj.update(p)
 

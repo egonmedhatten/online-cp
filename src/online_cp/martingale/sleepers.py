@@ -1,4 +1,5 @@
 """Sleeper/Stayer and Sleeper/Drifter martingale implementations."""
+
 from __future__ import annotations
 
 import math
@@ -115,14 +116,9 @@ class SleeperStayer(ConformalTestMartingale):
                 bets = np.where(u <= t, l, r)
                 return float(np.dot(w, bets))
 
-            def _B_n(u, w=weights, l=left_vals, r=right_vals, t=thresholds,
-                     grid=self._grid):
+            def _B_n(u, w=weights, l=left_vals, r=right_vals, t=thresholds, grid=self._grid):
                 # CDF of weighted mixture
-                cdfs = np.where(
-                    u <= t,
-                    l * u,
-                    np.array([b + r_i * (u - a) for (a, b), r_i in zip(grid, r)])
-                )
+                cdfs = np.where(u <= t, l * u, np.array([b + r_i * (u - a) for (a, b), r_i in zip(grid, r)]))
                 return float(np.dot(w, cdfs))
 
             self.b_n = _b_n
@@ -241,9 +237,7 @@ class SleeperDrifter(ConformalTestMartingale):
         if self._n % self._batch_interval == 0:
             batch_idx = self._n // self._batch_interval
             # log(transfer_per_expert) = log(R * M) + log_S_sleep - log(n_grid)
-            log_transfer = (math.log(self.R * self._batch_interval)
-                           + self._log_S_sleep
-                           - math.log(self._n_grid))
+            log_transfer = math.log(self.R * self._batch_interval) + self._log_S_sleep - math.log(self._n_grid)
             # S_sleep *= (1 - R*M), clamped to avoid negative
             rm = self.R * self._batch_interval
             if rm >= 1.0:
@@ -269,8 +263,9 @@ class SleeperDrifter(ConformalTestMartingale):
             log_total = log_total_active
             n_next = self._n + 1
 
-            def _b_n(u, _items=expert_items, _log_total=log_total, _n=n_next,
-                     _grid=self._grid, _M=self._batch_interval):
+            def _b_n(
+                u, _items=expert_items, _log_total=log_total, _n=n_next, _grid=self._grid, _M=self._batch_interval
+            ):
                 val = 0.0
                 for (bi, gi), log_cap in _items:
                     a, b = _grid[gi]
@@ -283,8 +278,9 @@ class SleeperDrifter(ConformalTestMartingale):
                     val += math.exp(log_cap - _log_total) * f
                 return val
 
-            def _B_n(u, _items=expert_items, _log_total=log_total, _n=n_next,
-                     _grid=self._grid, _M=self._batch_interval):
+            def _B_n(
+                u, _items=expert_items, _log_total=log_total, _n=n_next, _grid=self._grid, _M=self._batch_interval
+            ):
                 if u <= 0.0:
                     return 0.0
                 if u >= 1.0:

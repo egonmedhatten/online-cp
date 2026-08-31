@@ -49,8 +49,8 @@ from online_cp import (
 from online_cp.venn import log_loss_point
 
 _TESTS_SLOW = 360  # model-fitting or full streaming-pipeline properties
-_TESTS_MED  = 720  # sequence-loop / matrix-decomposition properties
-_TESTS_FAST = 3600 # pure-arithmetic / data-structure properties
+_TESTS_MED = 720  # sequence-loop / matrix-decomposition properties
+_TESTS_FAST = 3600  # pure-arithmetic / data-structure properties
 
 
 class UnitProb(float):
@@ -85,14 +85,14 @@ def _perm_from_keys(keys: list[int], n: int) -> list[int]:
 _TIE_N = 8
 _TIE_X = np.array(
     [
-        [ 1.0,  0.0],  # 0 – d=1.0 from origin, y=0
-        [-1.0,  0.0],  # 1 – d=1.0 from origin, y=25
-        [ 0.0,  1.0],  # 2 – d=1.0 from origin, y=50
-        [ 0.0, -1.0],  # 3 – d=1.0 from origin, y=75
-        [10.0,  0.0],  # 4 – far, y=37.5
+        [1.0, 0.0],  # 0 – d=1.0 from origin, y=0
+        [-1.0, 0.0],  # 1 – d=1.0 from origin, y=25
+        [0.0, 1.0],  # 2 – d=1.0 from origin, y=50
+        [0.0, -1.0],  # 3 – d=1.0 from origin, y=75
+        [10.0, 0.0],  # 4 – far, y=37.5
         [-10.0, 0.0],  # 5 – far, y=37.5
-        [ 0.0, 10.0],  # 6 – far, y=37.5
-        [ 0.0,-10.0],  # 7 – far, y=37.5
+        [0.0, 10.0],  # 6 – far, y=37.5
+        [0.0, -10.0],  # 7 – far, y=37.5
     ],
     dtype=float,
 )
@@ -120,9 +120,7 @@ def prop_knn_regressor_tie_order_invariant(keys: list[int]) -> bool:
     out = _fit_knn_reg_in_order(_perm_from_keys(keys, _TIE_N))
     iv_ref = ref.predict(_TIE_XQ, epsilon=_TIE_EPS, bounds="both")
     iv_out = out.predict(_TIE_XQ, epsilon=_TIE_EPS, bounds="both")
-    return bool(
-        np.isclose(iv_ref.lower, iv_out.lower) and np.isclose(iv_ref.upper, iv_out.upper)
-    )
+    return bool(np.isclose(iv_ref.lower, iv_out.lower) and np.isclose(iv_ref.upper, iv_out.upper))
 
 
 def test_knn_regressor_tie_order_invariant():
@@ -242,10 +240,12 @@ _BAG_ADV_N = 10
 _BAG_ADV_RNG = np.random.default_rng(99)
 # Column 0: constant (zero variance) → bag scaler std=0 guard fires
 # Column 1: tie-rich (very small spread, rounded to 2 dp)
-_BAG_ADV_X = np.column_stack([
-    np.ones(_BAG_ADV_N),
-    np.round(_BAG_ADV_RNG.normal(size=_BAG_ADV_N) * 0.01, 2),
-])
+_BAG_ADV_X = np.column_stack(
+    [
+        np.ones(_BAG_ADV_N),
+        np.round(_BAG_ADV_RNG.normal(size=_BAG_ADV_N) * 0.01, 2),
+    ]
+)
 _BAG_ADV_Y = _BAG_ADV_RNG.normal(size=_BAG_ADV_N)
 _BAG_ADV_XQ = np.array([1.0, 0.0])
 _BAG_ADV_YQ = float(_BAG_ADV_Y[0])
@@ -282,6 +282,7 @@ def test_bag_pipeline_degenerate_order_invariant():
 # Attack: feed any sequence of p-values (including near-boundary values)  #
 # and assert that b_n integrates to 1 and M stays positive and finite.    #
 # ======================================================================= #
+
 
 def prop_slj_betting_density_valid(pvs: list[PValue]) -> bool:
     """b_n must integrate to 1 and M must be positive and finite after any sequence."""

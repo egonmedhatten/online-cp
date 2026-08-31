@@ -93,6 +93,7 @@ class TestConformalRidgeRegressor:
         expected = np.linalg.inv(cp.X.T @ cp.X + 5.0 * np.identity(cp.p))
         assert np.allclose(cp.XTXinv, expected)
 
+
 class TestKernelConformalRidgeRegressor:
     def test_validity(self, linear_dataset):
         X, y = linear_dataset
@@ -176,6 +177,7 @@ class TestMultiLevelPredict:
         cp.learn_initial_training_set(X[:30], y[:30])
 
         from online_cp.regressors import ConformalPredictionInterval
+
         result = cp.predict(X[30], epsilon=0.1)
         assert isinstance(result, ConformalPredictionInterval)
 
@@ -310,8 +312,12 @@ class TestStudentised:
         epsilon = 0.1
         kernel = GaussianKernel(sigma=1.0)
         cp = KernelConformalRidgeRegressor(
-            kernel=kernel, a=0.1, warnings=False, rnd_state=0,
-            studentised=True, epsilon=epsilon,
+            kernel=kernel,
+            a=0.1,
+            warnings=False,
+            rnd_state=0,
+            studentised=True,
+            epsilon=epsilon,
         )
 
         n_init = 30
@@ -319,7 +325,7 @@ class TestStudentised:
 
         covered = 0
         n_test = min(20, len(y) - n_init)  # limit to keep test fast
-        for obj, lab in zip(X[n_init:n_init + n_test], y[n_init:n_init + n_test]):
+        for obj, lab in zip(X[n_init : n_init + n_test], y[n_init : n_init + n_test]):
             Gamma = cp.predict(obj)
             covered += int(lab in Gamma)
             cp.learn_one(obj, lab)
@@ -336,8 +342,8 @@ class TestStudentised:
         cp.learn_initial_training_set(X, y)
         # Should not crash even with near-degenerate data
         interval = cp.predict(np.array([4.0, 4.0001]))
-        assert hasattr(interval, 'lower')
-        assert hasattr(interval, 'upper')
+        assert hasattr(interval, "lower")
+        assert hasattr(interval, "upper")
 
 
 class TestLassoCrashGuard:
@@ -346,6 +352,7 @@ class TestLassoCrashGuard:
     def test_predict_before_training(self):
         """Lasso predict should return (-inf, inf) before training."""
         from online_cp.regressors import ConformalLassoRegressor
+
         cp = ConformalLassoRegressor(lam=0.5)
         result = cp.predict(np.array([1.0, 2.0, 3.0]))
         assert result.lower == -np.inf
@@ -354,6 +361,7 @@ class TestLassoCrashGuard:
     def test_predict_multi_epsilon_before_training(self):
         """Lasso predict with multiple epsilons before training."""
         from online_cp.regressors import ConformalLassoRegressor
+
         cp = ConformalLassoRegressor(lam=0.5)
         result = cp.predict(np.array([1.0, 2.0]), epsilon=[0.05, 0.1])
         assert isinstance(result, MultiLevelPredictionInterval)

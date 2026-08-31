@@ -101,8 +101,7 @@ def _wrap_progress(iterable, total=None, enabled=False, desc=None):
         from tqdm.auto import tqdm
     except ImportError as exc:
         raise ImportError(
-            "tqdm is required for progress bars. "
-            "Install it with: pip install online-cp[progress]"
+            "tqdm is required for progress bars. Install it with: pip install online-cp[progress]"
         ) from exc
     pbar = tqdm(iterable, total=total, desc=desc)
     return pbar, pbar
@@ -264,6 +263,7 @@ def progressive_val(
     """
     if metric is None:
         from online_cp.metrics import ErrorRate
+
         metric = ErrorRate()
 
     needs_p = _needs_p_values(metric)
@@ -361,6 +361,7 @@ def iter_progressive_val(
     """
     if metric is None:
         from online_cp.metrics import ErrorRate
+
         metric = ErrorRate()
 
     needs_p = _needs_p_values(metric)

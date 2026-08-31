@@ -170,12 +170,11 @@ class TestWrapperReturnUpdate:
     @pytest.fixture
     def trained_wrapper(self):
         from sklearn.linear_model import LogisticRegression
+
         rng = np.random.default_rng(42)
         X = rng.standard_normal((30, 2))
         y = (X[:, 0] > 0).astype(int)
-        wrapper = ConformalClassifierWrapper(
-            LogisticRegression(), label_space=np.array([0, 1]), rnd_state=7
-        )
+        wrapper = ConformalClassifierWrapper(LogisticRegression(), label_space=np.array([0, 1]), rnd_state=7)
         wrapper.learn_initial_training_set(X, y)
         return wrapper, X
 

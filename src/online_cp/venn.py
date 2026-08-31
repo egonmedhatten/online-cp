@@ -29,6 +29,7 @@ except ImportError:
             return args[0]
         return lambda f: f
 
+
 __all__ = [
     "VennPredictor",
     "VennAbersPredictor",
@@ -204,18 +205,14 @@ class VennPrediction:
     def p0(self):
         """P(y=1) under hypothesis y=0. Only valid for binary (|Y|=2)."""
         if len(self.label_space) != 2:
-            raise AttributeError(
-                "p0 is only defined for binary predictions (|Y|=2)"
-            )
+            raise AttributeError("p0 is only defined for binary predictions (|Y|=2)")
         return float(self.probs[0, 1])
 
     @property
     def p1(self):
         """P(y=1) under hypothesis y=1. Only valid for binary (|Y|=2)."""
         if len(self.label_space) != 2:
-            raise AttributeError(
-                "p1 is only defined for binary predictions (|Y|=2)"
-            )
+            raise AttributeError("p1 is only defined for binary predictions (|Y|=2)")
         return float(self.probs[1, 1])
 
     @property
@@ -346,11 +343,7 @@ class VennPredictor(SerializableMixin):
 
     def __init__(self, label_space=None) -> None:
         self._label_space_fixed: bool = label_space is not None
-        self.label_space = (
-            np.asarray(sorted(label_space), dtype=int)
-            if label_space is not None
-            else None
-        )
+        self.label_space = np.asarray(sorted(label_space), dtype=int) if label_space is not None else None
 
     # ------------------------------------------------------------------
     # Label-space policy helpers
@@ -361,25 +354,17 @@ class VennPredictor(SerializableMixin):
         if self._label_space_fixed:
             unknown = set(np.unique(y)) - set(self.label_space)
             if unknown:
-                raise ValueError(
-                    f"Labels {sorted(unknown)} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
+                raise ValueError(f"Labels {sorted(unknown)} not in declared label_space {self.label_space.tolist()}")
         elif self.label_space is None:
             self.label_space = np.unique(y)
         else:
-            self.label_space = np.sort(
-                np.unique(np.concatenate([self.label_space, np.unique(y)]))
-            )
+            self.label_space = np.sort(np.unique(np.concatenate([self.label_space, np.unique(y)])))
 
     def _update_label_space_one(self, y: int) -> None:
         """Update label space from a single label."""
         if self._label_space_fixed:
             if y not in self.label_space:
-                raise ValueError(
-                    f"Label {y} not in declared label_space "
-                    f"{self.label_space.tolist()}"
-                )
+                raise ValueError(f"Label {y} not in declared label_space {self.label_space.tolist()}")
         elif self.label_space is None:
             self.label_space = np.array([y], dtype=int)
         elif y not in self.label_space:
@@ -397,9 +382,7 @@ class VennPredictor(SerializableMixin):
             return VennPrediction(uniform, self.label_space)
         return VennPrediction.binary(0.5, 0.5)
 
-    def _categories_for_hypothesis(
-        self, taxonomy_data: Any, v: int
-    ) -> tuple:
+    def _categories_for_hypothesis(self, taxonomy_data: Any, v: int) -> tuple:
         """Return (categories, labels_aug, test_idx) for hypothesis y_test = v.
 
         Parameters
@@ -419,9 +402,7 @@ class VennPredictor(SerializableMixin):
         test_idx : int
             Index of the test point in the augmented arrays (always n).
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement _categories_for_hypothesis"
-        )
+        raise NotImplementedError(f"{type(self).__name__} must implement _categories_for_hypothesis")
 
     def _venn_predict_from_taxonomy(self, taxonomy_data: Any) -> VennPrediction:
         """Generic taxonomy → multiprobability prediction loop.
@@ -443,21 +424,13 @@ class VennPredictor(SerializableMixin):
         _is_binary = (
             self.label_space is not None
             and len(self.label_space) <= 2
-            and (
-                len(self.label_space) <= 1
-                or (
-                    int(self.label_space[0]) == 0
-                    and int(self.label_space[1]) == 1
-                )
-            )
+            and (len(self.label_space) <= 1 or (int(self.label_space[0]) == 0 and int(self.label_space[1]) == 1))
         )
 
         if _is_binary:
             results = []
             for v in (0, 1):
-                categories, labels_aug, test_idx = self._categories_for_hypothesis(
-                    taxonomy_data, v
-                )
+                categories, labels_aug, test_idx = self._categories_for_hypothesis(taxonomy_data, v)
                 tau_new = categories[test_idx]
                 mask = categories == tau_new
                 matching = labels_aug[mask]
@@ -467,9 +440,7 @@ class VennPredictor(SerializableMixin):
         n_labels = len(self.label_space)
         probs = np.empty((n_labels, n_labels), dtype=np.float64)
         for i, v in enumerate(self.label_space):
-            categories, labels_aug, test_idx = self._categories_for_hypothesis(
-                taxonomy_data, v
-            )
+            categories, labels_aug, test_idx = self._categories_for_hypothesis(taxonomy_data, v)
             tau_new = categories[test_idx]
             mask = categories == tau_new
             matching = labels_aug[mask]
@@ -529,13 +500,31 @@ class VennAbersPredictor(VennPredictor):
     """
 
     _SAVE_PARAMS: tuple = (
-        "scorer", "a", "k", "distance", "distance_func", "aggregation",
-        "kernel", "C", "sigma", "degree", "coef0",
-        "smo_tol", "smo_max_iter", "label_space",
+        "scorer",
+        "a",
+        "k",
+        "distance",
+        "distance_func",
+        "aggregation",
+        "kernel",
+        "C",
+        "sigma",
+        "degree",
+        "coef0",
+        "smo_tol",
+        "smo_max_iter",
+        "label_space",
     )
     _SAVE_STATE: tuple = (
-        "X", "y", "label_space", "_label_space_fixed",
-        "XTXinv", "D", "K", "Ka_inv", "_kernel",
+        "X",
+        "y",
+        "label_space",
+        "_label_space_fixed",
+        "XTXinv",
+        "D",
+        "K",
+        "Ka_inv",
+        "_kernel",
     )
     _SAVE_CALLABLES: tuple = ("distance_func", "kernel")
     _PARAM_MAP: dict = {
@@ -597,9 +586,7 @@ class VennAbersPredictor(VennPredictor):
             for backward compatibility unless multiclass labels appear.
         """
         if scorer not in ("ridge", "kernel_ridge", "knn", "svm"):
-            raise ValueError(
-                f"scorer must be 'ridge', 'kernel_ridge', 'knn', or 'svm', got '{scorer}'"
-            )
+            raise ValueError(f"scorer must be 'ridge', 'kernel_ridge', 'knn', or 'svm', got '{scorer}'")
         if aggregation not in ("mean", "median"):
             raise ValueError(f"aggregation must be 'mean' or 'median', got '{aggregation}'")
 
@@ -735,9 +722,7 @@ class VennAbersPredictor(VennPredictor):
             try:
                 self.XTXinv = np.linalg.inv(X.T @ X + self.a * Id)
             except np.linalg.LinAlgError:
-                raise ValueError(
-                    "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise."
-                ) from None
+                raise ValueError("X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
         elif self.scorer == "kernel_ridge":
             self.K = self._kernel(X)
             Ka = self.K + self.a * np.identity(self.K.shape[0])
@@ -778,9 +763,7 @@ class VennAbersPredictor(VennPredictor):
                 try:
                     self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * Id)
                 except np.linalg.LinAlgError:
-                    raise ValueError(
-                        "X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise."
-                    ) from None
+                    raise ValueError("X^T X + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
             elif self.scorer == "kernel_ridge":
                 self.K = self._kernel(self.X)
                 Ka = self.K + self.a * np.identity(1)
@@ -797,9 +780,7 @@ class VennAbersPredictor(VennPredictor):
                 if precomputed is not None and "XTXinv" in precomputed:
                     self.XTXinv = precomputed["XTXinv"]
                 else:
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (
-                        1 + x.T @ self.XTXinv @ x
-                    )
+                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
 
@@ -844,7 +825,9 @@ class VennAbersPredictor(VennPredictor):
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
 
-    def predict(self, x: NDArray[np.floating[Any]], return_update: bool = False) -> VennPrediction | tuple[VennPrediction, dict[str, Any]]:
+    def predict(
+        self, x: NDArray[np.floating[Any]], return_update: bool = False
+    ) -> VennPrediction | tuple[VennPrediction, dict[str, Any]]:
         """Produce a Venn-Abers multi-probability prediction.
 
         Parameters
@@ -904,9 +887,7 @@ class VennAbersPredictor(VennPredictor):
         X_aug = np.vstack([self.X, x.reshape(1, -1)])
 
         # Sherman-Morrison update for augmented XTXinv
-        XTXinv_aug = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (
-            1 + x.T @ self.XTXinv @ x
-        )
+        XTXinv_aug = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
 
         # Scores for hypothesis y=0:
         # beta_0 = XTXinv_aug @ X_aug^T @ [y_train; 0]
@@ -1044,9 +1025,7 @@ class VennAbersPredictor(VennPredictor):
         X_aug = np.vstack([self.X, x.reshape(1, -1)])
 
         # Sherman-Morrison update for augmented XTXinv
-        XTXinv_aug = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (
-            1 + x.T @ self.XTXinv @ x
-        )
+        XTXinv_aug = self.XTXinv - (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
 
         # Hat matrix last column (shared across all target classes)
         h_col = X_aug @ XTXinv_aug @ X_aug[-1]
@@ -1204,14 +1183,10 @@ class VennAbersPredictor(VennPredictor):
             y_bin_off = (2 * ind_off - 1).astype(np.float64)
             y_bin_on = (2 * ind_on - 1).astype(np.float64)
 
-            alpha_off, b_off = _smo_solve(
-                K_aug, y_bin_off, self.C, self.smo_tol, self.smo_max_iter
-            )
+            alpha_off, b_off = _smo_solve(K_aug, y_bin_off, self.C, self.smo_tol, self.smo_max_iter)
             scores_off = K_aug @ (alpha_off * y_bin_off) + b_off
 
-            alpha_on, b_on = _smo_solve(
-                K_aug, y_bin_on, self.C, self.smo_tol, self.smo_max_iter
-            )
+            alpha_on, b_on = _smo_solve(K_aug, y_bin_on, self.C, self.smo_tol, self.smo_max_iter)
             scores_on = K_aug @ (alpha_on * y_bin_on) + b_on
 
             p_off = _isotonic_calibrate(scores_off, ind_off, test_idx)
@@ -1515,9 +1490,7 @@ class NearestNeighboursVennPredictor(VennPredictor):
 
         return self._venn_predict_from_taxonomy((D_aug, k_eff, n))
 
-    def _categories_for_hypothesis(
-        self, taxonomy_data: Any, v: int
-    ) -> tuple:
+    def _categories_for_hypothesis(self, taxonomy_data: Any, v: int) -> tuple:
         """Return (taxonomies, labels_aug, test_idx) for hypothesis y_test = v.
 
         Uses the binary voting taxonomy (count of 1s among k NN) for binary
@@ -1544,13 +1517,7 @@ class NearestNeighboursVennPredictor(VennPredictor):
         _is_binary = (
             self.label_space is not None
             and len(self.label_space) <= 2
-            and (
-                len(self.label_space) <= 1
-                or (
-                    int(self.label_space[0]) == 0
-                    and int(self.label_space[1]) == 1
-                )
-            )
+            and (len(self.label_space) <= 1 or (int(self.label_space[0]) == 0 and int(self.label_space[1]) == 1))
         )
         if _is_binary:
             taxonomies = self._compute_taxonomies(D_aug, labels_aug, k_eff)
@@ -1637,4 +1604,3 @@ class NearestNeighboursVennPredictor(VennPredictor):
             taxonomies[i] = np.sum(labels[nn_idx] == labels[i])
 
         return taxonomies
-

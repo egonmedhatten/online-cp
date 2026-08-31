@@ -18,6 +18,7 @@ wrappers each accumulate the martingale's increments differently:
 
 See [ALRW2 §8.3] (Vovk, Gammerman & Shafer, 2022).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -293,5 +294,3 @@ class ShiryaevRobertsWrapper:
             True if R_n exceeds the threshold.
         """
         return self.R > threshold
-
-

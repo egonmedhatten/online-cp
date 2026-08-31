@@ -105,7 +105,9 @@ class MondrianConformalRegressor(SerializableMixin):
     _SAVE_STATE: tuple = ("categories_",)
     _SAVE_CALLABLES: tuple = ("category_fn",)
 
-    def __init__(self, base_model: ConformalRegressor, category_fn: Callable[[NDArray[np.floating[Any]]], Hashable]) -> None:
+    def __init__(
+        self, base_model: ConformalRegressor, category_fn: Callable[[NDArray[np.floating[Any]]], Hashable]
+    ) -> None:
         if not isinstance(
             base_model,
             (ConformalRidgeRegressor, KernelConformalRidgeRegressor, ConformalLassoRegressor),
@@ -154,7 +156,12 @@ class MondrianConformalRegressor(SerializableMixin):
         self.base_model.learn_one(x, y, **kwargs)
         self.categories_.append(self.category_fn(x))
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, bounds: str = "both") -> ConformalPredictionInterval | MultiLevelPredictionInterval:
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        bounds: str = "both",
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval:
         """Compute the Mondrian (group-conditional) prediction interval.
 
         Computes the pooled model's $A$/$B$ nonconformity decomposition for the
@@ -196,9 +203,7 @@ class MondrianConformalRegressor(SerializableMixin):
             return self._inf_interval(epsilon)
 
         X = np.append(model.X, x.reshape(1, -1), axis=0)
-        XTXinv = model.XTXinv - (
-            model.XTXinv @ np.outer(x, x) @ model.XTXinv
-        ) / (1 + x.T @ model.XTXinv @ x)
+        XTXinv = model.XTXinv - (model.XTXinv @ np.outer(x, x) @ model.XTXinv) / (1 + x.T @ model.XTXinv @ x)
         A, B = model.compute_A_and_B(X, XTXinv, model.y)
 
         cat_mask = np.array([c == cat for c in self.categories_] + [True])
@@ -333,8 +338,15 @@ class MondrianConformalRegressor(SerializableMixin):
                 dt_dual = np.where(dt_dual > 1e-12, dt_dual, np.inf)
                 dt_k = min(float(np.min(dt_dual)), t_bound_abs - t_accumulated)
                 sub = self._find_intervals_mondrian(
-                    r_train, r_test, np.zeros(n), sign * 1.0,
-                    dt_k, t_accumulated, sign, threshold, cat_mask_train,
+                    r_train,
+                    r_test,
+                    np.zeros(n),
+                    sign * 1.0,
+                    dt_k,
+                    t_accumulated,
+                    sign,
+                    threshold,
+                    cat_mask_train,
                 )
                 intervals_in_set.extend(sub)
                 t_accumulated += dt_k
@@ -390,8 +402,15 @@ class MondrianConformalRegressor(SerializableMixin):
             if dt_k <= 0 or not np.isfinite(dt_k):
                 break
             sub = self._find_intervals_mondrian(
-                r_train, r_test, slopes_train, slope_test,
-                dt_k, t_accumulated, sign, threshold, cat_mask_train,
+                r_train,
+                r_test,
+                slopes_train,
+                slope_test,
+                dt_k,
+                t_accumulated,
+                sign,
+                threshold,
+                cat_mask_train,
             )
             intervals_in_set.extend(sub)
             beta_k[J_k] += eta_k * dt_k
@@ -419,8 +438,15 @@ class MondrianConformalRegressor(SerializableMixin):
 
     @staticmethod
     def _find_intervals_mondrian(
-        r_train, r_test, slopes_train, slope_test,
-        dt_k, t_accumulated, sign, threshold, cat_mask_train,
+        r_train,
+        r_test,
+        slopes_train,
+        slope_test,
+        dt_k,
+        t_accumulated,
+        sign,
+        threshold,
+        cat_mask_train,
     ):
         from online_cp.regressors import _compute_crossings
 
@@ -486,9 +512,7 @@ class MondrianConformalRegressor(SerializableMixin):
         if model.XTXinv is None:
             return tau if smoothed else 1
         X = np.append(model.X, x.reshape(1, -1), axis=0)
-        XTXinv = model.XTXinv - (
-            model.XTXinv @ np.outer(x, x) @ model.XTXinv
-        ) / (1 + x.T @ model.XTXinv @ x)
+        XTXinv = model.XTXinv - (model.XTXinv @ np.outer(x, x) @ model.XTXinv) / (1 + x.T @ model.XTXinv @ x)
         A, B = model.compute_A_and_B(X, XTXinv, model.y)
         cat_mask = np.array([c == cat for c in self.categories_] + [True])
         A_cat, B_cat = A[cat_mask], B[cat_mask]
@@ -650,11 +674,12 @@ class MondrianConformalClassifier(SerializableMixin):
             self._label_aware = True
         elif callable(category_fn):
             import inspect
+
             sig = inspect.signature(category_fn)
             n_params = sum(
-                1 for p in sig.parameters.values()
-                if p.default is inspect.Parameter.empty
-                and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                1
+                for p in sig.parameters.values()
+                if p.default is inspect.Parameter.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
             )
             if n_params >= 2:
                 self._category_fn = category_fn
@@ -663,9 +688,7 @@ class MondrianConformalClassifier(SerializableMixin):
                 self._category_fn = category_fn
                 self._label_aware = False
         else:
-            raise TypeError(
-                f"category_fn must be 'label' or a callable, got {type(category_fn).__name__}"
-            )
+            raise TypeError(f"category_fn must be 'label' or a callable, got {type(category_fn).__name__}")
 
         self.category_fn = category_fn
         self.categories_ = []
@@ -711,7 +734,12 @@ class MondrianConformalClassifier(SerializableMixin):
         else:
             self.categories_.append(self._category_fn(x))
 
-    def predict(self, x: NDArray[np.floating[Any]], epsilon: float | NDArray[np.floating[Any]] | None = None, return_p_values: bool = False) -> Any:
+    def predict(
+        self,
+        x: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        return_p_values: bool = False,
+    ) -> Any:
         r"""Compute the Mondrian (group-conditional) prediction set.
 
         For each candidate label the conformal p-value is computed from the
@@ -821,17 +849,13 @@ class MondrianConformalClassifier(SerializableMixin):
             cat_mask = cat_masks[label]
             y_aug = np.append(model.y, float(label))
             y_binary = np.where(y_aug == label, 1.0, -1.0)
-            alpha, _ = _smo_solve(
-                K_aug, y_binary, model.C, tol=model.smo_tol, max_iter=model.smo_max_iter
-            )
+            alpha, _ = _smo_solve(K_aug, y_binary, model.C, tol=model.smo_tol, max_iter=model.smo_max_iter)
             if len(model.label_space) > 2:
                 # Multiclass: filter to same-class first, then apply cat_mask
                 same_class_mask = y_binary == 1.0
                 alpha_class = alpha[same_class_mask]
                 cat_indices = np.where(same_class_mask)[0]
-                cat_mask_subset = np.array(
-                    [(cat_mask[i] if i < n else True) for i in cat_indices]
-                )
+                cat_mask_subset = np.array([(cat_mask[i] if i < n else True) for i in cat_indices])
                 Alpha_cat = alpha_class[cat_mask_subset]
             else:
                 Alpha_cat = alpha[np.append(cat_mask, True)]

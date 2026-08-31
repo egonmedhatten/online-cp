@@ -59,8 +59,7 @@ class UtilityFunction:
 
     Examples
     --------
-    >>> utility = UtilityFunction(lambda x, y, d: -(y - d)**2,
-    ...                           decisions=[0.0, 0.5, 1.0, 1.5, 2.0])
+    >>> utility = UtilityFunction(lambda x, y, d: -((y - d) ** 2), decisions=[0.0, 0.5, 1.0, 1.5, 2.0])
     >>> utility(None, 1.0, 0.5)
     -0.25
     """
@@ -381,8 +380,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
     --------
     >>> import numpy as np
     >>> from online_cp import UtilityFunction, ConformalPredictiveDecisionMaker
-    >>> U = UtilityFunction(lambda x, y, d: [[0, -10, 3], [-3, 5, 1]][int(y)][int(d)],
-    ...                     decisions=[0, 1, 2])
+    >>> U = UtilityFunction(lambda x, y, d: [[0, -10, 3], [-3, 5, 1]][int(y)][int(d)], decisions=[0, 1, 2])
     >>> cdm = ConformalPredictiveDecisionMaker(U, a=1.0)
     >>> X = np.random.default_rng(0).normal(size=(40, 5))
     >>> y = (X[:, 0] > 0).astype(float)
@@ -395,6 +393,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
     def __init__(self, utility: UtilityFunction, cps_class=None, **cps_kwargs) -> None:
         if cps_class is None:
             from online_cp.CPS import RidgePredictionMachine
+
             cps_class = RidgePredictionMachine
 
         self.utility = utility
@@ -405,9 +404,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
         for d in utility.decisions:
             self._models[d] = cps_class(**cps_kwargs)
 
-    def learn_initial_training_set(
-        self, X: NDArray, y: NDArray
-    ) -> None:
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
         """Train all |D| internal CPS models on utility-transformed labels.
 
         For each decision *d*, the training labels are
@@ -527,9 +524,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
         except SerializationError:
             raise
         except Exception as exc:
-            raise SerializationError(
-                f"Failed to save model to {filepath!r}: {exc}"
-            ) from exc
+            raise SerializationError(f"Failed to save model to {filepath!r}: {exc}") from exc
 
     @classmethod
     def load(cls, filepath: str | os.PathLike) -> ConformalPredictiveDecisionMaker:
@@ -551,15 +546,11 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
         try:
             envelope = joblib.load(filepath)
         except Exception as exc:
-            raise SerializationError(
-                f"Failed to read model file {filepath!r}: {exc}"
-            ) from exc
+            raise SerializationError(f"Failed to read model file {filepath!r}: {exc}") from exc
 
         fmt_ver = envelope.get("format_version", 0)
         if fmt_ver > 1:
-            raise SerializationError(
-                f"Unsupported format_version {fmt_ver}. Update online-cp to load this file."
-            )
+            raise SerializationError(f"Unsupported format_version {fmt_ver}. Update online-cp to load this file.")
         lib_ver = envelope.get("library_version", "unknown")
         if lib_ver != _lib_version:
             _warnings.warn(
@@ -570,10 +561,7 @@ class ConformalPredictiveDecisionMaker(SerializableMixin):
             )
         expected = f"{cls.__module__}.{cls.__qualname__}"
         if envelope.get("class", "") != expected:
-            raise SerializationError(
-                f"Class mismatch: file contains '{envelope.get('class')}', "
-                f"expected '{expected}'."
-            )
+            raise SerializationError(f"Class mismatch: file contains '{envelope.get('class')}', expected '{expected}'.")
 
         utility_fn = from_token(envelope["utility_fn_token"])
         utility = UtilityFunction(fn=utility_fn, decisions=envelope["utility_decisions"])
@@ -629,16 +617,11 @@ def _as_array(val) -> NDArray:
     return np.asarray(val)
 
 
-def _apply_criterion(
-    expectations: dict, criterion: str, alpha: float = 0.0
-) -> Any:
+def _apply_criterion(expectations: dict, criterion: str, alpha: float = 0.0) -> Any:
     """Dispatch to the appropriate decision criterion."""
     if criterion == "utility":
         return alpha_utility(expectations, alpha)
     elif criterion == "regret":
         return alpha_regret(expectations, alpha)
     else:
-        raise ValueError(
-            f"Unknown criterion {criterion!r}. "
-            f"Choose from: 'utility', 'regret'."
-        )
+        raise ValueError(f"Unknown criterion {criterion!r}. Choose from: 'utility', 'regret'.")

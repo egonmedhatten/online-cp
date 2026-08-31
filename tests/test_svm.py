@@ -403,8 +403,7 @@ class TestMultiClassSVM:
         label = y[60]
 
         svm = ConformalSupportVectorMachine(
-            kernel=GaussianKernel(sigma=1.0), C=10.0, nonconformity="alpha",
-            label_space=label_space, rnd_state=123
+            kernel=GaussianKernel(sigma=1.0), C=10.0, nonconformity="alpha", label_space=label_space, rnd_state=123
         )
         svm.learn_initial_training_set(X[:60], y[:60])
 
@@ -475,15 +474,17 @@ class TestNonconformityParameter:
         X, y = noisy_data
         epsilon = 0.2
         svm = ConformalSupportVectorMachine(
-            kernel="rbf", sigma=1.0, C=1.0, nonconformity="alpha",
-            label_space=np.array([-1, 1]), epsilon=epsilon, rnd_state=0,
+            kernel="rbf",
+            sigma=1.0,
+            C=1.0,
+            nonconformity="alpha",
+            label_space=np.array([-1, 1]),
+            epsilon=epsilon,
+            rnd_state=0,
         )
         n_train = 40
         svm.learn_initial_training_set(X[:n_train], y[:n_train])
-        correct = sum(
-            y[i] in svm.predict(X[i], epsilon=epsilon)
-            for i in range(n_train, len(X))
-        )
+        correct = sum(y[i] in svm.predict(X[i], epsilon=epsilon) for i in range(n_train, len(X)))
         coverage = correct / (len(X) - n_train)
         assert coverage >= 0.5, f"alpha NCM coverage too low: {coverage:.3f}"
 
@@ -492,15 +493,17 @@ class TestNonconformityParameter:
         X, y = noisy_data
         epsilon = 0.2
         svm = ConformalSupportVectorMachine(
-            kernel="rbf", sigma=1.0, C=1.0, nonconformity="margin",
-            label_space=np.array([-1, 1]), epsilon=epsilon, rnd_state=0,
+            kernel="rbf",
+            sigma=1.0,
+            C=1.0,
+            nonconformity="margin",
+            label_space=np.array([-1, 1]),
+            epsilon=epsilon,
+            rnd_state=0,
         )
         n_train = 40
         svm.learn_initial_training_set(X[:n_train], y[:n_train])
-        correct = sum(
-            y[i] in svm.predict(X[i], epsilon=epsilon)
-            for i in range(n_train, len(X))
-        )
+        correct = sum(y[i] in svm.predict(X[i], epsilon=epsilon) for i in range(n_train, len(X)))
         coverage = correct / (len(X) - n_train)
         assert coverage >= 0.5, f"margin NCM coverage too low: {coverage:.3f}"
 
@@ -513,8 +516,13 @@ class TestNonconformityParameter:
 
         def avg_size(ncm):
             svm = ConformalSupportVectorMachine(
-                kernel="rbf", sigma=1.0, C=1.0, nonconformity=ncm,
-                label_space=np.array([-1, 1]), epsilon=epsilon, rnd_state=42,
+                kernel="rbf",
+                sigma=1.0,
+                C=1.0,
+                nonconformity=ncm,
+                label_space=np.array([-1, 1]),
+                epsilon=epsilon,
+                rnd_state=42,
             )
             svm.learn_initial_training_set(X[:n_train], y[:n_train])
             total = sum(len(svm.predict(X[i], epsilon=epsilon)) for i in range(n_train, len(X)))
@@ -532,12 +540,20 @@ class TestNonconformityParameter:
         X, y = noisy_data
         n_train = 40
         svm_m = ConformalSupportVectorMachine(
-            kernel="rbf", sigma=1.0, C=1.0, nonconformity="margin",
-            label_space=np.array([-1, 1]), rnd_state=99,
+            kernel="rbf",
+            sigma=1.0,
+            C=1.0,
+            nonconformity="margin",
+            label_space=np.array([-1, 1]),
+            rnd_state=99,
         )
         svm_a = ConformalSupportVectorMachine(
-            kernel="rbf", sigma=1.0, C=1.0, nonconformity="alpha",
-            label_space=np.array([-1, 1]), rnd_state=99,
+            kernel="rbf",
+            sigma=1.0,
+            C=1.0,
+            nonconformity="alpha",
+            label_space=np.array([-1, 1]),
+            rnd_state=99,
         )
         svm_m.learn_initial_training_set(X[:n_train], y[:n_train])
         svm_a.learn_initial_training_set(X[:n_train], y[:n_train])

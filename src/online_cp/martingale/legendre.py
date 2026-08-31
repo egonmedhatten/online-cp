@@ -250,7 +250,7 @@ def product_betting_value(orders, epsilon_vec, p, Z=None):
     """
     val = 1.0
     for k, eps in zip(orders, epsilon_vec):
-        val *= (1.0 + eps * eval_legendre(k, 2.0 * p - 1.0))
+        val *= 1.0 + eps * eval_legendre(k, 2.0 * p - 1.0)
     if Z is None:
         Z = compute_normalization_Z(orders, epsilon_vec)
     return val / Z
@@ -285,8 +285,13 @@ class SimpleLegendreJumper(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, order: int = 1, J: float = 0.01, epsilon_grid: tuple[float, ...] = STANDARD_GRID,
-                 store_p_values: bool = True) -> None:
+    def __init__(
+        self,
+        order: int = 1,
+        J: float = 0.01,
+        epsilon_grid: tuple[float, ...] = STANDARD_GRID,
+        store_p_values: bool = True,
+    ) -> None:
         super().__init__(store_p_values)
         if order < 1:
             raise ValueError("order must be >= 1")
@@ -428,8 +433,13 @@ class ProductLegendreJumper(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, orders: list[int] | None = None, J: float = 0.01, epsilon_grid: tuple[float, ...] = STANDARD_GRID,
-                 store_p_values: bool = True) -> None:
+    def __init__(
+        self,
+        orders: list[int] | None = None,
+        J: float = 0.01,
+        epsilon_grid: tuple[float, ...] = STANDARD_GRID,
+        store_p_values: bool = True,
+    ) -> None:
         super().__init__(store_p_values)
         if orders is None:
             orders = [1, 2, 3]
@@ -451,6 +461,7 @@ class ProductLegendreJumper(ConformalTestMartingale):
 
         if self.N > 500:
             import warnings as _w
+
             _w.warn(
                 f"Product state space has {self.N} experts "
                 f"(orders={self.orders}, grid size={len(self.epsilon_grid)}). "
@@ -542,7 +553,7 @@ class ProductLegendreJumper(ConformalTestMartingale):
             for i, eps_vec in enumerate(_states):
                 prod = 1.0
                 for j, eps in enumerate(eps_vec):
-                    prod *= (1.0 + eps * Pk_vals[j])
+                    prod *= 1.0 + eps * Pk_vals[j]
                 total += _w[i] * prod / np.exp(_log_Z[i])
             return total
 
@@ -553,6 +564,7 @@ class ProductLegendreJumper(ConformalTestMartingale):
                 return 1.0
             # Numerical integration (the mixture doesn't simplify to a closed-form CDF)
             from scipy.integrate import quad
+
             val, _ = quad(_b_n, 1e-12, u, limit=50)
             return val
 
@@ -594,8 +606,13 @@ class VariationalLegendreJumper(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, orders: list[int] | None = None, J: float = 0.01, epsilon_grid: tuple[float, ...] = STANDARD_GRID,
-                 store_p_values: bool = True) -> None:
+    def __init__(
+        self,
+        orders: list[int] | None = None,
+        J: float = 0.01,
+        epsilon_grid: tuple[float, ...] = STANDARD_GRID,
+        store_p_values: bool = True,
+    ) -> None:
         super().__init__(store_p_values)
         if orders is None:
             orders = [1, 2, 3]
@@ -707,7 +724,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
             Z = _evaluate_Z_from_gaunt(_eps_bar, _gaunt)
             val = 1.0
             for j, eps in enumerate(_eps_bar):
-                val *= (1.0 + eps * Pk_vals[j])
+                val *= 1.0 + eps * Pk_vals[j]
             return val / Z
 
         def _B_n(u):
@@ -716,6 +733,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
             if u >= 1:
                 return 1.0
             from scipy.integrate import quad
+
             val, _ = quad(_b_n, 1e-12, u, limit=50)
             return val
 
@@ -757,8 +775,7 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
     True
     """
 
-    def __init__(self, orders: list[int] | None = None, eta: float = 0.25,
-                 store_p_values: bool = True) -> None:
+    def __init__(self, orders: list[int] | None = None, eta: float = 0.25, store_p_values: bool = True) -> None:
         super().__init__(store_p_values)
         if orders is None:
             orders = [1, 2, 3]
@@ -850,6 +867,7 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
             if u >= 1:
                 return 1.0
             from scipy.integrate import quad
+
             val, _ = quad(_b_n, 1e-12, u, limit=50)
             return val
 
@@ -890,17 +908,20 @@ class CompositeLegendreJumper(ConformalTestMartingale):
     True
 
     >>> from online_cp.martingale import VariationalLegendreJumper
-    >>> clj = CompositeLegendreJumper(
-    ...     base_class=VariationalLegendreJumper, orders=[1, 2]
-    ... )
+    >>> clj = CompositeLegendreJumper(base_class=VariationalLegendreJumper, orders=[1, 2])
     >>> for _ in range(5):
     ...     clj.update(0.01)
     >>> clj.M > 1.0
     True
     """
 
-    def __init__(self, base_class: type[ConformalTestMartingale] | None = None, J: list[float] | None = None,
-                 store_p_values: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        base_class: type[ConformalTestMartingale] | None = None,
+        J: list[float] | None = None,
+        store_p_values: bool = True,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(store_p_values)
         if base_class is None:
             base_class = SimpleLegendreJumper
@@ -909,10 +930,7 @@ class CompositeLegendreJumper(ConformalTestMartingale):
 
         self.J = list(J)
         self.base_class = base_class
-        self._jumpers = [
-            base_class(J=j, store_p_values=False, **kwargs)
-            for j in self.J
-        ]
+        self._jumpers = [base_class(J=j, store_p_values=False, **kwargs) for j in self.J]
         self._n_jumpers = len(self._jumpers)
         self._log_n = np.log(self._n_jumpers)
 

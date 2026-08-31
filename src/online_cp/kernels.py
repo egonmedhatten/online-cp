@@ -36,7 +36,9 @@ class Kernel:
       each row of X and the single point y.
     """
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         raise NotImplementedError("Subclasses should implement this!")
 
 
@@ -56,7 +58,9 @@ class GaussianKernel(Kernel):
     def __repr__(self) -> str:
         return f"GaussianKernel(sigma={self.sigma!r})"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             dists = pdist(X, metric="sqeuclidean")
@@ -82,7 +86,9 @@ class LinearKernel(Kernel):
     def __repr__(self) -> str:
         return "LinearKernel()"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             K = X @ X.T
@@ -114,7 +120,9 @@ class PolynomialKernel(Kernel):
     def __repr__(self) -> str:
         return f"PolynomialKernel(d={self.d!r}, c={self.c!r})"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             K = (X @ X.T + self.c) ** self.d
@@ -152,7 +160,9 @@ class PeriodicKernel(Kernel):
     def __repr__(self) -> str:
         return f"PeriodicKernel(p={self.p!r}, s={self.s!r})"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         X = np.atleast_2d(X)
         if y is None:
             dists = pdist(X, metric=self.distance)
@@ -198,7 +208,9 @@ class LinearCombinationKernel(Kernel):
     def __repr__(self) -> str:
         return f"LinearCombinationKernel({self.name})"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         return sum(weight * kernel(X, y) for weight, kernel in zip(self.weights, self.kernels))
 
 
@@ -222,7 +234,9 @@ class ProductKernel(Kernel):
     def __repr__(self) -> str:
         return f"ProductKernel({self.name})"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         result = self.kernels[0](X, y)
         for kernel in self.kernels[1:]:
             result = result * kernel(X, y)
@@ -258,11 +272,15 @@ class CustomKernel(Kernel):
     def __repr__(self) -> str:
         return f"CustomKernel(name={self.name!r})"
 
-    def __call__(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None) -> NDArray[np.floating[Any]]:
+    def __call__(
+        self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]] | None = None
+    ) -> NDArray[np.floating[Any]]:
         return self._func(X, y)
 
 
-def kernel_induced_distance(kernel: Kernel) -> Callable[[NDArray[np.floating[Any]], NDArray[np.floating[Any]] | None], NDArray[np.floating[Any]]]:
+def kernel_induced_distance(
+    kernel: Kernel,
+) -> Callable[[NDArray[np.floating[Any]], NDArray[np.floating[Any]] | None], NDArray[np.floating[Any]]]:
     """Create a distance function from a kernel, compatible with ``distance_func``.
 
     The kernel-induced distance is:

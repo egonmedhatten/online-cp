@@ -80,9 +80,7 @@ class StandardScaler(Transformer):
 
     def __init__(self, with_mean: bool = True, with_std: bool = True, mode: str = "frozen") -> None:
         if mode not in ("frozen", "bag"):
-            raise ValueError(
-                f"StandardScaler mode must be 'frozen' or 'bag', got {mode!r}."
-            )
+            raise ValueError(f"StandardScaler mode must be 'frozen' or 'bag', got {mode!r}.")
         self.mode = mode  # instance attribute
         self.with_mean = with_mean
         self.with_std = with_std
@@ -108,8 +106,7 @@ class StandardScaler(Transformer):
     def _check_fitted(self) -> None:
         if self.mean_ is None or self.scale_ is None:
             raise RuntimeError(
-                "StandardScaler has not been fitted yet. "
-                "Call Pipeline.learn_initial_training_set() before predict()."
+                "StandardScaler has not been fitted yet. Call Pipeline.learn_initial_training_set() before predict()."
             )
 
     def transform(self, X: NDArray) -> NDArray:
@@ -162,13 +159,9 @@ class MinMaxScaler(Transformer):
     def __init__(self, feature_range: tuple[float, float] = (0.0, 1.0), mode: str = "frozen") -> None:
         lo, hi = feature_range
         if lo >= hi:
-            raise ValueError(
-                f"feature_range must satisfy lo < hi, got ({lo}, {hi})."
-            )
+            raise ValueError(f"feature_range must satisfy lo < hi, got ({lo}, {hi}).")
         if mode not in ("frozen", "bag"):
-            raise ValueError(
-                f"MinMaxScaler mode must be 'frozen' or 'bag', got {mode!r}."
-            )
+            raise ValueError(f"MinMaxScaler mode must be 'frozen' or 'bag', got {mode!r}.")
         self.mode = mode  # instance attribute
         self.feature_range = feature_range
         self.data_min_: NDArray | None = None
@@ -190,8 +183,7 @@ class MinMaxScaler(Transformer):
     def _check_fitted(self) -> None:
         if self.data_min_ is None or self.data_range_ is None:
             raise RuntimeError(
-                "MinMaxScaler has not been fitted yet. "
-                "Call Pipeline.learn_initial_training_set() before predict()."
+                "MinMaxScaler has not been fitted yet. Call Pipeline.learn_initial_training_set() before predict()."
             )
 
     def _scale(self, v: NDArray) -> NDArray:
@@ -213,6 +205,7 @@ class MinMaxScaler(Transformer):
 # ---------------------------------------------------------------------------
 # Private helper
 # ---------------------------------------------------------------------------
+
 
 def _sign_flip_components(components: NDArray) -> NDArray:
     """Enforce a deterministic sign convention for eigenvectors.
@@ -238,6 +231,7 @@ def _sign_flip_components(components: NDArray) -> NDArray:
 # ---------------------------------------------------------------------------
 # PCA
 # ---------------------------------------------------------------------------
+
 
 class PCA(Transformer, SerializableMixin):
     """Rotate features into their principal-component basis.
@@ -309,13 +303,9 @@ class PCA(Transformer, SerializableMixin):
         mode: str = "frozen",
     ) -> None:
         if mode not in ("frozen", "bag"):
-            raise ValueError(
-                f"PCA mode must be 'frozen' or 'bag', got {mode!r}."
-            )
+            raise ValueError(f"PCA mode must be 'frozen' or 'bag', got {mode!r}.")
         if n_components is not None and n_components < 1:
-            raise ValueError(
-                f"n_components must be a positive integer or None, got {n_components!r}."
-            )
+            raise ValueError(f"n_components must be a positive integer or None, got {n_components!r}.")
         self.mode = mode
         self.n_components = n_components
         self.n_: int | None = None
@@ -333,20 +323,18 @@ class PCA(Transformer, SerializableMixin):
         """
         n, d = X.shape
         if n < 2:
-            raise ValueError(
-                f"PCA requires at least 2 samples to fit, got {n}."
-            )
+            raise ValueError(f"PCA requires at least 2 samples to fit, got {n}.")
         self.mean_ = X.mean(axis=0)
         X_c = X - self.mean_
         cov = X_c.T @ X_c / (n - 1)  # (d, d) unbiased sample covariance
 
         vals, vecs = np.linalg.eigh(cov)  # ascending order, real symmetric
-        idx = np.argsort(vals)[::-1]      # descending variance order
+        idx = np.argsort(vals)[::-1]  # descending variance order
 
         k_max = min(n - 1, d)
         k = min(self.n_components, k_max) if self.n_components is not None else k_max
 
-        components = vecs[:, idx[:k]].T   # (k, d)
+        components = vecs[:, idx[:k]].T  # (k, d)
         self.components_ = _sign_flip_components(components)
         self.singular_values_ = np.sqrt(np.maximum(vals[idx[:k]], 0.0))
         self.n_ = n
@@ -354,8 +342,7 @@ class PCA(Transformer, SerializableMixin):
     def _check_fitted(self) -> None:
         if self.components_ is None:
             raise RuntimeError(
-                "PCA has not been fitted yet. "
-                "Call Pipeline.learn_initial_training_set() before predict()."
+                "PCA has not been fitted yet. Call Pipeline.learn_initial_training_set() before predict()."
             )
 
     def transform(self, X: NDArray) -> NDArray:
@@ -393,6 +380,7 @@ class PCA(Transformer, SerializableMixin):
 # ---------------------------------------------------------------------------
 # SVD
 # ---------------------------------------------------------------------------
+
 
 class SVD(Transformer, SerializableMixin):
     """Project features onto the top-*k* right singular vectors of *X*.
@@ -465,13 +453,9 @@ class SVD(Transformer, SerializableMixin):
         center: bool = True,
     ) -> None:
         if mode not in ("frozen", "bag"):
-            raise ValueError(
-                f"SVD mode must be 'frozen' or 'bag', got {mode!r}."
-            )
+            raise ValueError(f"SVD mode must be 'frozen' or 'bag', got {mode!r}.")
         if n_components is not None and n_components < 1:
-            raise ValueError(
-                f"n_components must be a positive integer or None, got {n_components!r}."
-            )
+            raise ValueError(f"n_components must be a positive integer or None, got {n_components!r}.")
         self.mode = mode
         self.n_components = n_components
         self.center = center
@@ -490,9 +474,7 @@ class SVD(Transformer, SerializableMixin):
         """
         n, d = X.shape
         if n < 2:
-            raise ValueError(
-                f"SVD requires at least 2 samples to fit, got {n}."
-            )
+            raise ValueError(f"SVD requires at least 2 samples to fit, got {n}.")
         if self.center:
             self.mean_ = X.mean(axis=0)
             X_c = X - self.mean_
@@ -500,15 +482,15 @@ class SVD(Transformer, SerializableMixin):
         else:
             self.mean_ = None
             X_c = X
-            gram = X_c.T @ X_c / n        # biased (n denominator)
+            gram = X_c.T @ X_c / n  # biased (n denominator)
 
         vals, vecs = np.linalg.eigh(gram)  # ascending order
-        idx = np.argsort(vals)[::-1]       # descending singular-value order
+        idx = np.argsort(vals)[::-1]  # descending singular-value order
 
         k_max = min(n - 1, d) if self.center else min(n, d)
         k = min(self.n_components, k_max) if self.n_components is not None else k_max
 
-        components = vecs[:, idx[:k]].T    # (k, d)
+        components = vecs[:, idx[:k]].T  # (k, d)
         self.components_ = _sign_flip_components(components)
         self.singular_values_ = np.sqrt(np.maximum(vals[idx[:k]], 0.0))
         self.n_ = n
@@ -516,8 +498,7 @@ class SVD(Transformer, SerializableMixin):
     def _check_fitted(self) -> None:
         if self.components_ is None:
             raise RuntimeError(
-                "SVD has not been fitted yet. "
-                "Call Pipeline.learn_initial_training_set() before predict()."
+                "SVD has not been fitted yet. Call Pipeline.learn_initial_training_set() before predict()."
             )
 
     def transform(self, X: NDArray) -> NDArray:
@@ -553,7 +534,4 @@ class SVD(Transformer, SerializableMixin):
         return x @ self.components_.T
 
     def __repr__(self) -> str:
-        return (
-            f"SVD(n_components={self.n_components!r}, "
-            f"mode={self.mode!r}, center={self.center!r})"
-        )
+        return f"SVD(n_components={self.n_components!r}, mode={self.mode!r}, center={self.center!r})"

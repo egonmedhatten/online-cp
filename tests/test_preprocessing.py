@@ -28,8 +28,8 @@ def rng():
 def small_batch(rng):
     """20×3 matrix with very different per-feature scales."""
     X = rng.normal(size=(20, 3))
-    X[:, 0] *= 100.0   # large scale
-    X[:, 1] *= 0.001   # tiny scale
+    X[:, 0] *= 100.0  # large scale
+    X[:, 1] *= 0.001  # tiny scale
     # X[:,2] is ~ N(0,1)
     return X
 
@@ -375,9 +375,7 @@ class TestPCA:
         pca = PCA(n_components=2)
         pca.fit(small_batch)
         for x in small_batch:
-            np.testing.assert_allclose(
-                pca.transform_one(x), pca.transform(x.reshape(1, -1))[0]
-            )
+            np.testing.assert_allclose(pca.transform_one(x), pca.transform(x.reshape(1, -1))[0])
 
     def test_sign_convention_stable(self, rng):
         """Permuting rows must not change components_ (permutation-invariant fit)."""
@@ -478,9 +476,7 @@ class TestSVD:
         svd = SVD(n_components=2)
         svd.fit(small_batch)
         for x in small_batch:
-            np.testing.assert_allclose(
-                svd.transform_one(x), svd.transform(x.reshape(1, -1))[0]
-            )
+            np.testing.assert_allclose(svd.transform_one(x), svd.transform(x.reshape(1, -1))[0])
 
     def test_center_false_no_mean(self, small_batch):
         svd = SVD(center=False)

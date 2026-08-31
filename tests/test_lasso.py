@@ -203,9 +203,7 @@ class TestConformalLassoRegressor:
         X = rng.normal(size=(n_train + 10, p))
         y = X @ beta_true + rng.normal(size=n_train + 10)
 
-        cp = ConformalLassoRegressor(
-            lam=lam, epsilon=epsilon, search_range_factor=0.25, rnd_state=7
-        )
+        cp = ConformalLassoRegressor(lam=lam, epsilon=epsilon, search_range_factor=0.25, rnd_state=7)
         cp.learn_initial_training_set(X[:n_train], y[:n_train])
         X_train, y_train = X[:n_train], y[:n_train]
 
@@ -234,9 +232,7 @@ class TestConformalLassoRegressor:
                     in_set_bf.append(y_trial)
 
             if not in_set_bf:
-                assert np.isnan(interval.lower), (
-                    f"Test {i}: brute-force empty but homotopy non-empty"
-                )
+                assert np.isnan(interval.lower), f"Test {i}: brute-force empty but homotopy non-empty"
                 continue
 
             lo_bf, hi_bf = min(in_set_bf), max(in_set_bf)
@@ -244,12 +240,10 @@ class TestConformalLassoRegressor:
 
             # Endpoints should agree within a few grid spacings
             assert abs(interval.lower - lo_bf) < 5 * grid_spacing, (
-                f"Test {i}: lower endpoint mismatch: "
-                f"homotopy={interval.lower:.4f} vs bf={lo_bf:.4f}"
+                f"Test {i}: lower endpoint mismatch: homotopy={interval.lower:.4f} vs bf={lo_bf:.4f}"
             )
             assert abs(interval.upper - hi_bf) < 5 * grid_spacing, (
-                f"Test {i}: upper endpoint mismatch: "
-                f"homotopy={interval.upper:.4f} vs bf={hi_bf:.4f}"
+                f"Test {i}: upper endpoint mismatch: homotopy={interval.upper:.4f} vs bf={hi_bf:.4f}"
             )
 
 

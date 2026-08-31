@@ -436,9 +436,7 @@ class TestKNNAggregation:
         assert cp.aggregation == "median"
         # Should still produce valid predictions
         label_space = np.array([0, 1])
-        cp = ConformalNearestNeighboursClassifier(
-            k=3, label_space=label_space, aggregation="median", rnd_state=0
-        )
+        cp = ConformalNearestNeighboursClassifier(k=3, label_space=label_space, aggregation="median", rnd_state=0)
         X = np.array([[1.0], [2.0], [3.0], [10.0], [11.0], [12.0]])
         y = np.array([0, 0, 0, 1, 1, 1])
         cp.learn_initial_training_set(X, y)
@@ -467,13 +465,17 @@ class TestWrapperWarmStart:
 
         with pytest.warns(UserWarning):
             cp_warm = ConformalClassifierWrapper(
-                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
-                rnd_state=123, warm_start=True,
+                LogisticRegression(max_iter=200),
+                label_space=np.array([0, 1]),
+                rnd_state=123,
+                warm_start=True,
             )
         with pytest.warns(UserWarning):
             cp_cold = ConformalClassifierWrapper(
-                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
-                rnd_state=123, warm_start=False,
+                LogisticRegression(max_iter=200),
+                label_space=np.array([0, 1]),
+                rnd_state=123,
+                warm_start=False,
             )
 
         cp_warm.learn_initial_training_set(X[:20], y[:20])
@@ -492,13 +494,17 @@ class TestWrapperWarmStart:
 
         with pytest.warns(UserWarning):
             cp_lr = ConformalClassifierWrapper(
-                LogisticRegression(), label_space=np.array([0, 1]), rnd_state=0,
+                LogisticRegression(),
+                label_space=np.array([0, 1]),
+                rnd_state=0,
             )
         assert cp_lr._warm_start is True
 
         with pytest.warns(UserWarning):
             cp_rf = ConformalClassifierWrapper(
-                RandomForestClassifier(n_estimators=5), label_space=np.array([0, 1]), rnd_state=0,
+                RandomForestClassifier(n_estimators=5),
+                label_space=np.array([0, 1]),
+                rnd_state=0,
             )
         assert cp_rf._warm_start is False
 
@@ -510,13 +516,17 @@ class TestWrapperWarmStart:
 
         with pytest.warns(UserWarning):
             cp_seq = ConformalClassifierWrapper(
-                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
-                rnd_state=99, n_jobs=None,
+                LogisticRegression(max_iter=200),
+                label_space=np.array([0, 1]),
+                rnd_state=99,
+                n_jobs=None,
             )
         with pytest.warns(UserWarning):
             cp_par = ConformalClassifierWrapper(
-                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
-                rnd_state=99, n_jobs=2,
+                LogisticRegression(max_iter=200),
+                label_space=np.array([0, 1]),
+                rnd_state=99,
+                n_jobs=2,
             )
 
         cp_seq.learn_initial_training_set(X[:20], y[:20])
@@ -536,7 +546,8 @@ class TestWrapperWarmStart:
 
         with pytest.warns(UserWarning):
             cp = ConformalClassifierWrapper(
-                LogisticRegression(max_iter=200), label_space=np.array([0, 1]),
+                LogisticRegression(max_iter=200),
+                label_space=np.array([0, 1]),
                 rnd_state=0,
             )
 
@@ -561,7 +572,9 @@ class TestWrapperWarmStart:
         with pytest.warns(UserWarning):
             cp = ConformalClassifierWrapper(
                 RandomForestClassifier(n_estimators=5, random_state=0),
-                label_space=np.array([0, 1]), rnd_state=0, warm_start=True,
+                label_space=np.array([0, 1]),
+                rnd_state=0,
+                warm_start=True,
             )
 
         cp.learn_initial_training_set(X[:20], y[:20])

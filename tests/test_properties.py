@@ -67,8 +67,8 @@ from online_cp.venn import _pava_inplace
 #
 # Total target: ~8 s for the full property suite in CI.
 _TESTS_SLOW = 360  # model-fitting or full streaming-pipeline properties
-_TESTS_MED  = 720  # sequence-loop / matrix-decomposition properties
-_TESTS_FAST = 3600 # pure-arithmetic / data-structure properties
+_TESTS_MED = 720  # sequence-loop / matrix-decomposition properties
+_TESTS_FAST = 3600  # pure-arithmetic / data-structure properties
 
 # =========================================================================== #
 # Domain types for LeanCheck enumeration.                                     #
@@ -355,9 +355,7 @@ _DI_Y = _DI_X @ np.array([1.0, 0.5]) + 0.1 * _DI_RNG.normal(size=_DI_N)
 _DI_MODEL = ConformalRidgeRegressor(a=1.0, warnings=False)
 _DI_MODEL.learn_initial_training_set(_DI_X, _DI_Y)
 # Baseline: no delay, frozen model.
-_DI_BASELINE = progressive_val(
-    _DI_MODEL, _DI_X, _DI_Y, epsilon=0.2, metric=ErrorRate(), learn=False
-).get()
+_DI_BASELINE = progressive_val(_DI_MODEL, _DI_X, _DI_Y, epsilon=0.2, metric=ErrorRate(), learn=False).get()
 
 
 def prop_metric_value_delay_invariant(delays: list[int]) -> bool:
@@ -612,7 +610,7 @@ def test_interval_containment_iff_in_bounds():
 # y=0.0 (always-cover vs. never-cover sentinel intervals).
 # --------------------------------------------------------------------------- #
 
-_CM_IV_IN = ConformalPredictionInterval(-1e9, 1e9, 0.1)    # always covers y=0
+_CM_IV_IN = ConformalPredictionInterval(-1e9, 1e9, 0.1)  # always covers y=0
 _CM_IV_OUT = ConformalPredictionInterval(100.0, 200.0, 0.1)  # never covers y=0
 
 
@@ -763,9 +761,7 @@ def prop_predict_return_update_state_equivalence(ks: list[int]) -> bool:
     cp_b.learn_one(x_new, y_new, precomputed=cache)
 
     return bool(
-        np.allclose(cp_a.XTXinv, cp_b.XTXinv, atol=1e-8)
-        and np.allclose(cp_a.y, cp_b.y)
-        and np.allclose(cp_a.X, cp_b.X)
+        np.allclose(cp_a.XTXinv, cp_b.XTXinv, atol=1e-8) and np.allclose(cp_a.y, cp_b.y) and np.allclose(cp_a.X, cp_b.X)
     )
 
 
@@ -810,9 +806,7 @@ def prop_cpd_monotone_in_y(a: int, b: int, tau: UnitProb) -> bool:
 
 
 def prop_cpd_boundary_conditions(tau: UnitProb) -> bool:
-    return bool(
-        abs(_CPD(-np.inf, float(tau))) < 1e-9 and abs(_CPD(np.inf, float(tau)) - 1.0) < 1e-9
-    )
+    return bool(abs(_CPD(-np.inf, float(tau))) < 1e-9 and abs(_CPD(np.inf, float(tau)) - 1.0) < 1e-9)
 
 
 def prop_cpd_quantile_lower_bound(p: PValue, tau: UnitProb) -> bool:
@@ -910,6 +904,7 @@ def test_pca_components_orthonormal():
 # --------------------------------------------------------------------------- #
 # Property 23: SVD components_ are orthonormal (center=True and False).      #
 # --------------------------------------------------------------------------- #
+
 
 def prop_svd_components_orthonormal(idx: int) -> bool:
     """SVD components_ @ components_.T == I_k regardless of center flag."""

@@ -310,9 +310,11 @@ class TestVennAbersKNN:
             X = np.atleast_2d(X)
             if Y is None:
                 from scipy.spatial.distance import pdist, squareform
+
                 return squareform(pdist(X, metric="cityblock"))
             else:
                 from scipy.spatial.distance import cdist
+
                 Y = np.atleast_2d(Y)
                 return cdist(X, Y, metric="cityblock")
 
@@ -341,7 +343,7 @@ class TestVennAbersSVM:
 
     def test_predictions_in_unit_interval(self):
         vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         for i in range(self.n_train, self.n_train + 10):
             pred = vap.predict(self.X[i])
             assert 0 <= pred.p0 <= 1, f"p0={pred.p0} out of [0,1]"
@@ -350,7 +352,7 @@ class TestVennAbersSVM:
 
     def test_p1_geq_p0(self):
         vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         for i in range(self.n_train, self.n_train + 10):
             pred = vap.predict(self.X[i])
             assert pred.p1 >= pred.p0, f"p1={pred.p1} < p0={pred.p0}"
@@ -358,7 +360,7 @@ class TestVennAbersSVM:
 
     def test_streaming_with_learn_one(self):
         vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         for i in range(self.n_train, self.n_train + 5):
             vap.predict(self.X[i])
             vap.learn_one(self.X[i], self.y[i])
@@ -366,7 +368,7 @@ class TestVennAbersSVM:
 
     def test_return_update_speeds_learn(self):
         vap = VennAbersPredictor(scorer="svm", kernel="rbf", sigma=1.0, C=10.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         pred, precomputed = vap.predict(self.X[self.n_train], return_update=True)
         assert "K" in precomputed
         assert precomputed["K"].shape == (self.n_train + 1, self.n_train + 1)
@@ -375,20 +377,21 @@ class TestVennAbersSVM:
 
     def test_kernel_linear(self):
         vap = VennAbersPredictor(scorer="svm", kernel="linear", C=1.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         pred = vap.predict(self.X[self.n_train])
         assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
 
     def test_kernel_poly(self):
         vap = VennAbersPredictor(scorer="svm", kernel="poly", degree=2, C=1.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         pred = vap.predict(self.X[self.n_train])
         assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
 
     def test_kernel_instance(self):
         from online_cp.kernels import GaussianKernel
+
         vap = VennAbersPredictor(scorer="svm", kernel=GaussianKernel(sigma=2.0), C=5.0)
-        vap.learn_initial_training_set(self.X[:self.n_train], self.y[:self.n_train])
+        vap.learn_initial_training_set(self.X[: self.n_train], self.y[: self.n_train])
         pred = vap.predict(self.X[self.n_train])
         assert 0 <= pred.p0 <= 1 and 0 <= pred.p1 <= 1
 
@@ -430,8 +433,7 @@ class TestVennAbersValidity:
         mean_pred_1 = preds[y_test == 1].mean()
         mean_pred_0 = preds[y_test == 0].mean()
         assert mean_pred_1 > mean_pred_0, (
-            f"Mean pred for class 1 ({mean_pred_1:.3f}) should be > "
-            f"class 0 ({mean_pred_0:.3f})"
+            f"Mean pred for class 1 ({mean_pred_1:.3f}) should be > class 0 ({mean_pred_0:.3f})"
         )
 
 
@@ -536,10 +538,17 @@ class TestNearestNeighboursVennPredictor:
         → p0=s(0,1)=0.5, p1=s(1,1)=1.0
         """
         # Labels: positive=1, negative=0
-        X_train = np.array([
-            [0, 3], [2, 2], [3, 3],       # positive
-            [-1, 1], [-1, -1], [0, 1],     # negative
-        ], dtype=float)
+        X_train = np.array(
+            [
+                [0, 3],
+                [2, 2],
+                [3, 3],  # positive
+                [-1, 1],
+                [-1, -1],
+                [0, 1],  # negative
+            ],
+            dtype=float,
+        )
         y_train = np.array([1, 1, 1, 0, 0, 0])
 
         vp = NearestNeighboursVennPredictor(k=1)
@@ -560,10 +569,12 @@ class TestNearestNeighboursVennPredictor:
     def test_prediction_bounds(self):
         """Check that p0 <= p1 for well-separated data."""
         np.random.seed(42)
-        X = np.vstack([
-            np.random.randn(20, 2) + [2, 0],
-            np.random.randn(20, 2) + [-2, 0],
-        ])
+        X = np.vstack(
+            [
+                np.random.randn(20, 2) + [2, 0],
+                np.random.randn(20, 2) + [-2, 0],
+            ]
+        )
         y = np.array([1] * 20 + [0] * 20)
 
         vp = NearestNeighboursVennPredictor(k=1)
@@ -698,10 +709,8 @@ class TestNearestNeighboursVennValidity:
 
             # Error bounds for predicted label
             # L = 1 - max(s(v, y_hat)), U = 1 - min(s(v, y_hat))
-            lower = 1 - max(pred.p0 if y_hat == 1 else 1 - pred.p0,
-                            pred.p1 if y_hat == 1 else 1 - pred.p1)
-            upper = 1 - min(pred.p0 if y_hat == 1 else 1 - pred.p0,
-                            pred.p1 if y_hat == 1 else 1 - pred.p1)
+            lower = 1 - max(pred.p0 if y_hat == 1 else 1 - pred.p0, pred.p1 if y_hat == 1 else 1 - pred.p1)
+            upper = 1 - min(pred.p0 if y_hat == 1 else 1 - pred.p0, pred.p1 if y_hat == 1 else 1 - pred.p1)
 
             if y_hat != y[i]:
                 errors += 1
@@ -723,7 +732,6 @@ class TestNearestNeighboursVennValidity:
 # ===========================================================================
 # Multiclass NearestNeighboursVennPredictor tests
 # ===========================================================================
-
 
 
 class TestMulticlassNearestNeighboursVenn:
@@ -832,9 +840,7 @@ class TestMulticlassNearestNeighboursVenn:
         rng = np.random.default_rng(12)
         n_per_class = 20
         centers = rng.normal(size=(5, 3)) * 5
-        X = np.vstack(
-            [rng.normal(c, 0.3, size=(n_per_class, 3)) for c in centers]
-        )
+        X = np.vstack([rng.normal(c, 0.3, size=(n_per_class, 3)) for c in centers])
         y = np.repeat(np.arange(5), n_per_class)
         perm = rng.permutation(len(y))
         X, y = X[perm], y[perm]
@@ -1117,18 +1123,14 @@ class TestMulticlassVennAbersPredictor:
     def test_label_space_policy_fixed_rejects(self):
         """Fixed label_space rejects unknown labels."""
         vap = VennAbersPredictor(scorer="ridge", a=1.0, label_space=[0, 1, 2])
-        vap.learn_initial_training_set(
-            np.random.randn(9, 2), np.array([0, 1, 2, 0, 1, 2, 0, 1, 2])
-        )
+        vap.learn_initial_training_set(np.random.randn(9, 2), np.array([0, 1, 2, 0, 1, 2, 0, 1, 2]))
         with pytest.raises(ValueError, match="not in declared label_space"):
             vap.learn_one(np.array([0.0, 0.0]), 5)
 
     def test_label_space_policy_adaptive_expands(self):
         """Adaptive label_space grows when new labels arrive."""
         vap = VennAbersPredictor(scorer="ridge", a=1.0)
-        vap.learn_initial_training_set(
-            np.random.randn(6, 2), np.array([0, 1, 0, 1, 0, 1])
-        )
+        vap.learn_initial_training_set(np.random.randn(6, 2), np.array([0, 1, 0, 1, 0, 1]))
         assert list(vap.label_space) == [0, 1]
         vap.learn_one(np.array([0.0, 0.0]), 2)
         assert 2 in vap.label_space

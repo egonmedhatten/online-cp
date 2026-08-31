@@ -1,4 +1,5 @@
 """Jumper and mixture martingale implementations."""
+
 from __future__ import annotations
 
 import warnings
@@ -103,10 +104,9 @@ class PluginMartingale(ConformalTestMartingale):
         # Betting functions should be > 0 (probability densities/likelihoods)
         if not np.isfinite(b) or b <= 0:
             warnings.warn(
-                f"Betting function returned invalid value b={b} for p={p}. "
-                f"Using fallback b=1.0 (uniform betting)",
+                f"Betting function returned invalid value b={b} for p={p}. Using fallback b=1.0 (uniform betting)",
                 RuntimeWarning,
-                stacklevel=2
+                stacklevel=2,
             )
             b = 1.0
 
@@ -201,7 +201,7 @@ class SimpleJumper(ConformalTestMartingale):
                     f"Betting function returned invalid value for epsilon={epsilon}, "
                     f"p={p}: b={bet_val}. Using fallback b=1.0",
                     RuntimeWarning,
-                    stacklevel=2
+                    stacklevel=2,
                 )
                 bet_val = 1.0
             new_log_C_epsilon[epsilon] = log_C_mixed + np.log(bet_val)
@@ -387,5 +387,3 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         self.log_martingale_values.append(self.logM)
 
         self._mark_stale()
-
-

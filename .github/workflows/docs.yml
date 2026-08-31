@@ -18,11 +18,17 @@ jobs:
         with:
           version: "0.6.3"
       
+      - name: Create virtual environment
+        run: uv venv
+      
       - name: Install dependencies
         run: |
-          uv pip install hatchling mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
+          source .venv/bin/activate
+          pip install hatchling mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
           uv build
-          uv pip install dist/*.whl
+          pip install dist/*.whl
       
       - name: Deploy documentation
-        run: uv run mkdocs gh-deploy --force
+        run: |
+          source .venv/bin/activate
+          uv run mkdocs gh-deploy --force

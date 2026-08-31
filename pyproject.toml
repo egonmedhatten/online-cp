@@ -57,13 +57,13 @@ ci = [
 	"validate-pyproject",
 	"trove-classifiers",
 ]
-all = [
-	"online-cp[fast,dev,viz]",
-]
 benchmark = [
 	"scikit-learn",
 	"ucimlrepo",
 	"crepes",
+]
+all = [
+	"online-cp[fast,dev,viz,benchmark]",
 ]
 
 [project.urls]

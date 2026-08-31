@@ -14,6 +14,8 @@ Default grid: E = {-1/2, -1/4, 0, 1/4, 1/2}.
 from __future__ import annotations
 
 import itertools
+from fractions import Fraction
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -30,6 +32,9 @@ from .base import ConformalTestMartingale
 #: Standard 5-point epsilon grid from the paper.
 STANDARD_GRID = (-0.5, -0.25, 0.0, 0.25, 0.5)
 
+# Bounded cache for exact Gaunt coefficients keyed by order tuple.
+GAUNT_CACHE_MAXSIZE = 32
+
 
 def shifted_legendre_poly(k):
     """Return the k-th shifted Legendre polynomial P_k(2u-1) as a Polynomial in u.
@@ -45,6 +50,160 @@ def shifted_legendre_poly(k):
         Polynomial in the monomial basis, orthogonal on [0, 1].
     """
     return Legendre([0] * k + [1], domain=[0, 1]).convert(kind=Polynomial)
+
+
+def _poly_add_exact(a, b):
+    n = max(len(a), len(b))
+    out = [Fraction(0, 1)] * n
+    for i in range(n):
+        ai = a[i] if i < len(a) else Fraction(0, 1)
+        bi = b[i] if i < len(b) else Fraction(0, 1)
+        out[i] = ai + bi
+    while len(out) > 1 and out[-1] == 0:
+        out.pop()
+    return out
+
+
+def _poly_scale_exact(a, c):
+    cf = Fraction(c, 1)
+    return [cf * x for x in a]
+
+
+def _poly_mul_exact(a, b):
+    out = [Fraction(0, 1)] * (len(a) + len(b) - 1)
+    for i, ai in enumerate(a):
+        for j, bj in enumerate(b):
+            out[i + j] += ai * bj
+    while len(out) > 1 and out[-1] == 0:
+        out.pop()
+    return out
+
+
+def _poly_mul_linear_2u_minus_1_exact(a):
+    out = [Fraction(0, 1)] * (len(a) + 1)
+    for i, ai in enumerate(a):
+        out[i] -= ai
+        out[i + 1] += 2 * ai
+    while len(out) > 1 and out[-1] == 0:
+        out.pop()
+    return out
+
+
+def _integral_unit_interval_exact(poly):
+    total = Fraction(0, 1)
+    for i, ci in enumerate(poly):
+        total += ci / Fraction(i + 1, 1)
+    return total
+
+
+def _build_shifted_legendre_exact(orders):
+    if not orders:
+        return {}
+    max_order = max(orders)
+    polys = {0: [Fraction(1, 1)]}
+    if max_order >= 1:
+        polys[1] = [Fraction(-1, 1), Fraction(2, 1)]
+
+    for n in range(1, max_order):
+        term1 = _poly_scale_exact(
+            _poly_mul_linear_2u_minus_1_exact(polys[n]),
+            2 * n + 1,
+        )
+        term2 = _poly_scale_exact(polys[n - 1], -n)
+        numer = _poly_add_exact(term1, term2)
+        denom = Fraction(n + 1, 1)
+        polys[n + 1] = [c / denom for c in numer]
+
+    return {k: polys[k] for k in orders}
+
+
+@lru_cache(maxsize=GAUNT_CACHE_MAXSIZE)
+def _gaunt_terms_exact_cached(orders_tuple):
+    """Return exact Gaunt coefficients for a fixed order tuple.
+
+    Output is a tuple of ``(indices, coefficient_float)`` where ``indices`` are
+    positions in ``orders_tuple`` (not polynomial degrees themselves).
+    """
+    K = len(orders_tuple)
+    if K < 3:
+        return ()
+
+    unique_orders = sorted(set(orders_tuple))
+    exact_shifted = _build_shifted_legendre_exact(unique_orders)
+
+    out = []
+    for size in range(3, K + 1):
+        for indices in itertools.combinations(range(K), size):
+            poly = [Fraction(1, 1)]
+            for idx in indices:
+                poly = _poly_mul_exact(poly, exact_shifted[orders_tuple[idx]])
+            coeff = float(_integral_unit_interval_exact(poly))
+            if abs(coeff) > 1e-15:
+                out.append((indices, coeff))
+    return tuple(out)
+
+
+def _compensated_sum(values):
+    """Neumaier compensated summation for improved numerical stability."""
+    total = np.longdouble(0.0)
+    compensation = np.longdouble(0.0)
+    for x in values:
+        t = total + x
+        if abs(total) >= abs(x):
+            compensation += (total - t) + x
+        else:
+            compensation += (x - t) + total
+        total = t
+    return total + compensation
+
+
+def _evaluate_Z_from_gaunt(eps, gaunt_terms):
+    eps_ld = np.asarray(eps, dtype=np.longdouble)
+    if not gaunt_terms:
+        return 1.0
+    z_terms = []
+    for indices, G_S in gaunt_terms:
+        prod_all = np.longdouble(1.0)
+        for idx in indices:
+            prod_all *= eps_ld[idx]
+        z_terms.append(np.longdouble(G_S) * prod_all)
+    z_terms.sort(key=lambda x: abs(x))
+    Z = np.longdouble(1.0) + _compensated_sum(z_terms)
+    return float(Z)
+
+
+def _evaluate_Z_and_grad_from_gaunt(eps, gaunt_terms, K):
+    eps_ld = np.asarray(eps, dtype=np.longdouble)
+    if not gaunt_terms:
+        return 1.0, np.zeros(K, dtype=float)
+
+    z_terms = []
+    grad_terms = [[] for _ in range(K)]
+
+    for indices, G_S in gaunt_terms:
+        G_ld = np.longdouble(G_S)
+        prod_all = np.longdouble(1.0)
+        for idx in indices:
+            prod_all *= eps_ld[idx]
+        z_terms.append(G_ld * prod_all)
+
+        for idx in indices:
+            prod_excl = np.longdouble(1.0)
+            for j in indices:
+                if j != idx:
+                    prod_excl *= eps_ld[j]
+            grad_terms[idx].append(G_ld * prod_excl)
+
+    z_terms.sort(key=lambda x: abs(x))
+    Z = np.longdouble(1.0) + _compensated_sum(z_terms)
+
+    grad_Z = np.zeros(K, dtype=np.longdouble)
+    for k in range(K):
+        if grad_terms[k]:
+            grad_terms[k].sort(key=lambda x: abs(x))
+            grad_Z[k] = _compensated_sum(grad_terms[k])
+
+    return float(Z), np.asarray(grad_Z, dtype=float)
 
 
 def compute_normalization_Z(orders, epsilon_vec):
@@ -65,12 +224,9 @@ def compute_normalization_Z(orders, epsilon_vec):
     float
         The normalization constant.
     """
-    poly = Polynomial([1.0])
-    for k, eps in zip(orders, epsilon_vec):
-        factor = Polynomial([1.0]) + Polynomial([eps]) * shifted_legendre_poly(k)
-        poly = poly * factor
-    antideriv = poly.integ()
-    return float(antideriv(1.0) - antideriv(0.0))
+    orders_tuple = tuple(int(k) for k in orders)
+    gaunt_terms = _gaunt_terms_exact_cached(orders_tuple)
+    return _evaluate_Z_from_gaunt(epsilon_vec, gaunt_terms)
 
 
 def product_betting_value(orders, epsilon_vec, p, Z=None):
@@ -476,29 +632,11 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         # Z(eps) = 1 + sum_{|S|>=3} (prod_{k in S} eps_k) * G_S
         # where G_S = integral_0^1 prod_{k in S} P_k(p) dp.
         # For |K| <= 2, Z = 1 always (by orthogonality).
-        self._gaunt_terms = []  # list of (index_tuple, G_S)
-        if self.K >= 3:
-            for size in range(3, self.K + 1):
-                for indices in itertools.combinations(range(self.K), size):
-                    poly = Polynomial([1.0])
-                    for idx in indices:
-                        poly = poly * shifted_legendre_poly(self.orders[idx])
-                    antideriv = poly.integ()
-                    G_S = float(antideriv(1.0) - antideriv(0.0))
-                    if abs(G_S) > 1e-15:
-                        self._gaunt_terms.append((indices, G_S))
+        self._gaunt_terms = list(_gaunt_terms_exact_cached(tuple(self.orders)))
 
     def _fast_Z(self, eps_bar):
         """Compute Z(eps_bar) using precomputed Gaunt coefficients. O(1) for typical |K|."""
-        if not self._gaunt_terms:
-            return 1.0
-        Z = 1.0
-        for indices, G_S in self._gaunt_terms:
-            prod = 1.0
-            for idx in indices:
-                prod *= eps_bar[idx]
-            Z += prod * G_S
-        return Z
+        return _evaluate_Z_from_gaunt(eps_bar, self._gaunt_terms)
 
     def update(self, p: float) -> None:
         r"""Advance the variational Legendre jumper by one p-value.
@@ -566,16 +704,145 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         def _b_n(u, _eps_bar=eps_bar.copy(), _orders=orders, _gaunt=gaunt_terms):  # noqa: B008
             Pk_vals = [eval_legendre(k, 2.0 * u - 1.0) for k in _orders]
             # Fast Z from precomputed Gaunt coefficients
-            Z = 1.0
-            for indices, G_S in _gaunt:
-                prod = 1.0
-                for idx in indices:
-                    prod *= _eps_bar[idx]
-                Z += prod * G_S
+            Z = _evaluate_Z_from_gaunt(_eps_bar, _gaunt)
             val = 1.0
             for j, eps in enumerate(_eps_bar):
                 val *= (1.0 + eps * Pk_vals[j])
             return val / Z
+
+        def _B_n(u):
+            if u <= 0:
+                return 0.0
+            if u >= 1:
+                return 1.0
+            from scipy.integrate import quad
+            val, _ = quad(_b_n, 1e-12, u, limit=50)
+            return val
+
+        self.b_n = _b_n
+        self.B_n = _B_n
+
+
+# ---------------------------------------------------------------------------
+# Optimistic FTRL + Barrier Legendre martingale
+# ---------------------------------------------------------------------------
+
+
+class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
+    """Jumpless multivariate Legendre martingale via Optimistic-FTRL + Barrier.
+
+    Uses the same product betting function as ``ProductLegendreJumper``:
+
+        f_eps^K(p) = prod_k (1 + eps_k * P_k(p)) / Z(eps),
+
+    but updates the parameter vector ``eps`` continuously with the
+    Optimistic-FTRL + Barrier closed-form update from Wang et al. (Algorithm 3).
+
+    Parameters
+    ----------
+    orders : list of int or None
+        Set K of Legendre polynomial degrees (each >= 1).
+    eta : float
+        Learning-rate parameter for Optimistic-FTRL. Must satisfy
+        ``0 < eta <= 0.25``.
+    store_p_values : bool
+        Whether to store incoming p-values.
+
+    Examples
+    --------
+    >>> oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2], eta=0.25)
+    >>> for _ in range(10):
+    ...     oftrl.update(0.01)
+    >>> oftrl.M > 1.0
+    True
+    """
+
+    def __init__(self, orders: list[int] | None = None, eta: float = 0.25,
+                 store_p_values: bool = True) -> None:
+        super().__init__(store_p_values)
+        if orders is None:
+            orders = [1, 2, 3]
+        if not orders:
+            raise ValueError("At least one order is required.")
+        if any(k < 1 for k in orders):
+            raise ValueError("All orders must be >= 1.")
+        if not (0.0 < eta <= 0.25):
+            raise ValueError("eta must be in (0, 0.25].")
+
+        self.orders = list(orders)
+        self.K = len(self.orders)
+        self.eta = float(eta)
+        self._z_floor = 1e-14
+
+        # Current parameter vector eps_t and cumulative gradient G_t.
+        self._eps = np.zeros(self.K, dtype=float)
+        self._G = np.zeros(self.K, dtype=float)
+
+        # Pre-compute Gaunt coefficients for exact Z and exact grad(Z).
+        # Z(eps) = 1 + sum_{|S|>=3} (prod_{k in S} eps_k) * G_S.
+        self._gaunt_terms = list(_gaunt_terms_exact_cached(tuple(self.orders)))
+
+    def _compute_Z_only_strict(self, eps):
+        """Strict normalization recomputation in longdouble from Gaunt terms."""
+        return np.longdouble(_evaluate_Z_from_gaunt(eps, self._gaunt_terms))
+
+    def _compute_Z_and_gradient(self, eps):
+        """Compute exact Z(eps) and exact grad Z(eps) from Gaunt coefficients."""
+        return _evaluate_Z_and_grad_from_gaunt(eps, self._gaunt_terms, self.K)
+
+    def update(self, p: float) -> None:
+        r"""Advance martingale by one p-value using exact Optimistic-FTRL updates.
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
+        if self.store_p_values:
+            self.p_values.append(p)
+
+        Pk_vals = np.array([eval_legendre(k, 2.0 * p - 1.0) for k in self.orders], dtype=float)
+        Z, grad_Z = self._compute_Z_and_gradient(self._eps)
+        if (not np.isfinite(Z)) or (Z <= self._z_floor):
+            Z_strict = self._compute_Z_only_strict(self._eps)
+            if np.isfinite(Z_strict) and Z_strict > self._z_floor:
+                Z = float(Z_strict)
+            else:
+                raise FloatingPointError(f"Invalid normalization constant Z={Z} (strict={Z_strict}).")
+        if Z <= 0.0:
+            raise FloatingPointError(f"Invalid normalization constant Z={Z}.")
+
+        denom = 1.0 + self._eps * Pk_vals
+        if np.any(denom <= 0.0):
+            raise FloatingPointError("Encountered non-positive term in product betting function.")
+
+        # Bet with current eps_t.
+        self.logM += float(np.sum(np.log(denom)) - np.log(Z))
+        self.log_martingale_values.append(self.logM)
+
+        # Exact gradient of loss l_t(eps).
+        grad = -(Pk_vals / denom) + (grad_Z / Z)
+
+        # Optimistic-FTRL state update: G_t += grad_t, then eps_{t+1} from G_t + m_{t+1}
+        # with m_{t+1} = grad_t.
+        self._G += grad
+        a = self.eta * (self._G + grad)
+
+        eps_next = np.zeros_like(self._eps)
+        mask = np.abs(a) > 1e-15
+        eps_next[mask] = (1.0 - np.sqrt(1.0 + a[mask] ** 2)) / a[mask]
+        self._eps = eps_next
+
+        self._mark_stale()
+
+    def _update_exposed_functions(self):
+        """Set b_n and B_n at the current Optimistic-FTRL parameter eps."""
+        eps = self._eps.copy()
+        orders = self.orders
+        Z, _ = self._compute_Z_and_gradient(eps)
+
+        def _b_n(u, _orders=orders, _eps=eps, _Z=Z):
+            return product_betting_value(_orders, _eps, u, Z=_Z)
 
         def _B_n(u):
             if u <= 0:

@@ -39,6 +39,7 @@ import numpy as np
 from online_cp import (
     ConformalNearestNeighboursRegressor,
     ConformalRidgeRegressor,
+    OptimisticFTRLBarrierLegendreMartingale,
     RidgePredictionMachine,
     SimpleLegendreJumper,
     StandardScaler,
@@ -321,6 +322,81 @@ def prop_vlj_logM_synced_and_positive(pvs: list[PValue]) -> bool:
 
 def test_vlj_logM_synced_and_positive():
     assert leancheck.check(prop_vlj_logM_synced_and_positive, max_tests=_TESTS_MED, silent=True)
+
+
+# ======================================================================= #
+# A9 – OptimisticFTRLBarrierLegendreMartingale density validity           #
+#                                                                          #
+# Attack: random p-value sequences should keep eps in (-1,1), keep M      #
+# finite/positive, and preserve normalization of b_n.                      #
+# ======================================================================= #
+
+
+def prop_oftrl_barrier_density_valid(pvs: list[PValue]) -> bool:
+    """Exact OFTRL+Barrier martingale must preserve basic validity invariants."""
+    from scipy.integrate import quad
+
+    leancheck.precondition(bool(pvs))
+    oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+    for p in pvs[:20]:
+        oftrl.update(float(p))
+
+    if not (np.isfinite(oftrl.logM) and oftrl.M > 0):
+        return False
+    if np.max(np.abs(oftrl._eps)) >= 1.0:
+        return False
+
+    integral, _ = quad(oftrl.b_n, 0.0, 1.0, limit=50)
+    if abs(integral - 1.0) >= 0.02:
+        return False
+
+    xs = np.linspace(0.0, 1.0, 30)
+    return bool(all(oftrl.b_n(float(x)) >= -1e-10 for x in xs))
+
+
+def test_oftrl_barrier_density_valid():
+    assert leancheck.check(prop_oftrl_barrier_density_valid, max_tests=_TESTS_MED, silent=True)
+
+
+# ======================================================================= #
+# A10 – OptimisticFTRLBarrierLegendreMartingale null stability            #
+#                                                                          #
+# Attack: long uniform sequences should not break interior constraints.    #
+# ======================================================================= #
+
+
+def prop_oftrl_barrier_null_stability(pvs: list[PValue]) -> bool:
+    """Uniform-like p-value streams should keep eps strictly in the interior."""
+    leancheck.precondition(bool(pvs))
+    oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+    for p in pvs[:100]:
+        oftrl.update(float(p))
+    return bool(np.max(np.abs(oftrl._eps)) < 1.0)
+
+
+def test_oftrl_barrier_null_stability():
+    assert leancheck.check(prop_oftrl_barrier_null_stability, max_tests=_TESTS_MED, silent=True)
+
+
+# ======================================================================= #
+# A11 – High-degree OFTRL stability                                       #
+#                                                                          #
+# Attack: stress OFTRL with many Legendre orders and mixed p-values.      #
+# ======================================================================= #
+
+
+def prop_oftrl_barrier_high_degree_stability(pvs: list[PValue]) -> bool:
+    """High-degree OFTRL should keep finite wealth and positive normalization."""
+    leancheck.precondition(bool(pvs))
+    oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=list(range(1, 10)), eta=0.25)
+    for p in pvs[:30]:
+        oftrl.update(float(p))
+    Z, _ = oftrl._compute_Z_and_gradient(oftrl._eps)
+    return bool(np.isfinite(oftrl.logM) and oftrl.M > 0 and np.isfinite(Z) and Z > 0)
+
+
+def test_oftrl_barrier_high_degree_stability():
+    assert leancheck.check(prop_oftrl_barrier_high_degree_stability, max_tests=_TESTS_MED, silent=True)
 
 
 if __name__ == "__main__":

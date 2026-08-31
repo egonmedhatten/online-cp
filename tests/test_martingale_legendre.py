@@ -3,9 +3,11 @@
 import numpy as np
 import pytest
 from scipy.integrate import quad
+from scipy.special import eval_legendre
 
 from online_cp.martingale import (
     CompositeLegendreJumper,
+    OptimisticFTRLBarrierLegendreMartingale,
     ProductLegendreJumper,
     SimpleLegendreJumper,
     VariationalLegendreJumper,
@@ -376,6 +378,143 @@ class TestVLJBehaviour:
                 vlj.update(p)
             # Under null, logM should stay moderate (no systematic growth)
             assert vlj.logM < 20.0, f"seed={seed}: logM={vlj.logM} too large under null"
+
+
+# ---------------------------------------------------------------------------
+# OptimisticFTRLBarrierLegendreMartingale tests
+# ---------------------------------------------------------------------------
+
+
+class TestOptimisticFTRLBarrierLegendreMartingale:
+    def test_starts_at_one(self):
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2], eta=0.25)
+        assert oftrl.logM == 0.0
+        assert np.isclose(oftrl.M, 1.0)
+
+    def test_grows_under_alternative(self):
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2], eta=0.25)
+        rng = np.random.default_rng(42)
+        p_values = rng.beta(0.5, 2, size=200)
+        for p in p_values:
+            oftrl.update(p)
+        assert oftrl.logM > 0, f"Expected growth, got logM={oftrl.logM}"
+
+    def test_bounded_under_null(self):
+        rng = np.random.default_rng(987)
+        final_logMs = []
+        for _ in range(20):
+            oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+            for p in rng.uniform(size=200):
+                oftrl.update(p)
+            final_logMs.append(oftrl.logM)
+        assert np.mean(final_logMs) < 5.0
+
+    def test_eps_stays_in_bounds(self):
+        rng = np.random.default_rng(123)
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+        for p in rng.uniform(size=500):
+            oftrl.update(p)
+        assert np.max(np.abs(oftrl._eps)) < 1.0
+
+    def test_b_n_nonnegative(self):
+        rng = np.random.default_rng(11)
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+        for p in rng.uniform(size=40):
+            oftrl.update(p)
+        xs = np.linspace(0, 1, 50)
+        for x in xs:
+            assert oftrl.b_n(x) >= -1e-10, f"b_n({x}) = {oftrl.b_n(x)}"
+
+    def test_b_n_integrates_to_one(self):
+        rng = np.random.default_rng(12)
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+        for p in rng.uniform(size=30):
+            oftrl.update(p)
+        integral, _ = quad(oftrl.b_n, 0, 1)
+        assert np.isclose(integral, 1.0, atol=1e-8)
+
+    def test_default_orders(self):
+        oftrl = OptimisticFTRLBarrierLegendreMartingale()
+        assert oftrl.orders == [1, 2, 3]
+
+    def test_matches_raw_1d_ftrl_barrier(self):
+        """orders=[1] must match a direct 1D Wang FTRL+Barrier implementation."""
+        eta = 0.2
+        rng = np.random.default_rng(314)
+        p_values = rng.uniform(1e-6, 1 - 1e-6, size=300)
+
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1], eta=eta)
+
+        raw_logM = 0.0
+        raw_eps = 0.0
+        raw_G = 0.0
+
+        for p in p_values:
+            # For order 1, shifted Legendre polynomial is P_1(2p-1) = 2p - 1.
+            h = 2.0 * p - 1.0
+
+            denom = 1.0 + raw_eps * h
+            raw_logM += np.log(denom)
+
+            grad = -h / denom
+            raw_G += grad
+
+            a = eta * (raw_G + grad)
+            if abs(a) < 1e-15:
+                raw_eps = 0.0
+            else:
+                raw_eps = (1.0 - np.sqrt(1.0 + a * a)) / a
+
+            oftrl.update(p)
+
+        assert np.isclose(oftrl.logM, raw_logM, atol=1e-12)
+        assert np.isclose(oftrl._eps[0], raw_eps, atol=1e-12)
+
+    def test_high_degree_Z_matches_reference(self):
+        """Gaunt-based Z should agree with direct quadrature at high degree."""
+        rng = np.random.default_rng(2718)
+        orders = list(range(1, 10))
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=orders, eta=0.25)
+
+        for _ in range(40):
+            eps = rng.uniform(-0.95, 0.95, size=len(orders))
+            Z_gaunt, _ = oftrl._compute_Z_and_gradient(eps)
+            def _integrand(u):
+                val = 1.0
+                for k, e in zip(orders, eps):
+                    val *= (1.0 + e * eval_legendre(k, 2.0 * u - 1.0))
+                return val
+
+            Z_ref, _ = quad(_integrand, 0.0, 1.0, limit=200)
+            assert np.isclose(Z_gaunt, Z_ref, rtol=1e-10, atol=1e-12), (
+                f"Z mismatch: gaunt={Z_gaunt}, ref={Z_ref}"
+            )
+
+    def test_high_degree_stream_stays_finite(self):
+        """High-order OFTRL stream should keep finite wealth and positive Z."""
+        rng = np.random.default_rng(12345)
+        orders = list(range(1, 10))
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=orders, eta=0.25)
+
+        for p in rng.uniform(1e-6, 1 - 1e-6, size=500):
+            oftrl.update(float(p))
+            Z, _ = oftrl._compute_Z_and_gradient(oftrl._eps)
+            assert np.isfinite(Z) and Z > 0.0
+
+        assert np.isfinite(oftrl.logM) and oftrl.M > 0.0
+
+    def test_gaunt_coefficient_K123_matches_known_rational(self):
+        """Integral of P1*P2*P3 on [0,1] should be exactly 3/35."""
+        oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25)
+        target = 3.0 / 35.0
+        idxs = (0, 1, 2)
+        found = None
+        for indices, coeff in oftrl._gaunt_terms:
+            if indices == idxs:
+                found = coeff
+                break
+        assert found is not None, "Missing Gaunt coefficient for (1,2,3) subset"
+        assert np.isclose(found, target, atol=1e-15)
 
 
 # ---------------------------------------------------------------------------

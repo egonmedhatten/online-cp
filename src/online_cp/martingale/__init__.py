@@ -17,7 +17,8 @@ wrappers
     ``VilleWrapper``, ``CUSUMWrapper``, ``ShiryaevRobertsWrapper``.
 legendre
     ``SimpleLegendreJumper``, ``ProductLegendreJumper``,
-    ``VariationalLegendreJumper``, ``CompositeLegendreJumper``.
+    ``VariationalLegendreJumper``, ``OptimisticFTRLBarrierLegendreMartingale``,
+    ``CompositeLegendreJumper``.
 """
 
 from online_cp.betting import (
@@ -65,6 +66,9 @@ from online_cp.martingale.legendre import (
 )
 from online_cp.martingale.legendre import (
     CompositeLegendreJumper as CompositeLegendreJumper,
+)
+from online_cp.martingale.legendre import (
+    OptimisticFTRLBarrierLegendreMartingale as OptimisticFTRLBarrierLegendreMartingale,
 )
 from online_cp.martingale.legendre import (
     ProductLegendreJumper as ProductLegendreJumper,
@@ -119,6 +123,7 @@ __all__ = [
     "SimpleLegendreJumper",
     "ProductLegendreJumper",
     "VariationalLegendreJumper",
+    "OptimisticFTRLBarrierLegendreMartingale",
     "CompositeLegendreJumper",
     # Legendre utilities
     "STANDARD_GRID",

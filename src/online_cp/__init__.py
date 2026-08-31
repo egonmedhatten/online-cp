@@ -171,6 +171,9 @@ from online_cp.martingale import (
     ParticleFilterStrategy as ParticleFilterStrategy,
 )
 from online_cp.martingale import (
+    OptimisticFTRLBarrierLegendreMartingale as OptimisticFTRLBarrierLegendreMartingale,
+)
+from online_cp.martingale import (
     PiecewiseConstantBetting as PiecewiseConstantBetting,
 )
 from online_cp.martingale import (

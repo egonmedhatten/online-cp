@@ -479,7 +479,7 @@ class TestOptimisticFTRLBarrierLegendreMartingale:
         for _ in range(40):
             eps = rng.uniform(-0.95, 0.95, size=len(orders))
             Z_gaunt, _ = oftrl._compute_Z_and_gradient(eps)
-            def _integrand(u):
+            def _integrand(u, eps=eps):
                 val = 1.0
                 for k, e in zip(orders, eps):
                     val *= (1.0 + e * eval_legendre(k, 2.0 * u - 1.0))

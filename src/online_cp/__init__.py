@@ -168,10 +168,10 @@ from online_cp.martingale import (
     GaussianKDE as GaussianKDE,
 )
 from online_cp.martingale import (
-    ParticleFilterStrategy as ParticleFilterStrategy,
+    OptimisticFTRLBarrierLegendreMartingale as OptimisticFTRLBarrierLegendreMartingale,
 )
 from online_cp.martingale import (
-    OptimisticFTRLBarrierLegendreMartingale as OptimisticFTRLBarrierLegendreMartingale,
+    ParticleFilterStrategy as ParticleFilterStrategy,
 )
 from online_cp.martingale import (
     PiecewiseConstantBetting as PiecewiseConstantBetting,

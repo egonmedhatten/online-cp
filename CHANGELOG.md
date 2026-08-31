@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
  
 - **Random Number Generation** — expanded `seed` and `rnd_state` arguments in regressors, classifiers, and betting strategies to accept `np.random.Generator` objects in addition to integer seeds.
+
+- **Optimistic-FTRL Barrier Legendre Martingale** (`online_cp.martingale`) —
+  added `OptimisticFTRLBarrierLegendreMartingale(orders, eta)` as a jumpless
+  multivariate Legendre betting martingale using the Optimistic-FTRL + Barrier
+  update rule (Wang et al., Algorithm 3) with the same product betting function
+  family as `ProductLegendreJumper`.
+  - Uses an exact analytical gradient for all `|K|`:
+    $\nabla_{\epsilon_k}\ell_t = -\frac{P_k(p_t)}{1+\epsilon_k P_k(p_t)} + \frac{1}{Z(\epsilon)}\frac{\partial Z(\epsilon)}{\partial \epsilon_k}$.
+  - Adds `_compute_Z_and_gradient(eps)` in `legendre.py`, computing both
+    `Z(\epsilon)` and `\nabla Z(\epsilon)` exactly from precomputed
+    Gaunt-coefficient terms.
+  - Exported from both `online_cp.martingale` and top-level `online_cp`.
+  - Test coverage added:
+    - `tests/test_martingale_legendre.py`: behavioural tests plus regression
+      test that `orders=[1]` matches a raw 1D Wang FTRL+Barrier loop exactly.
+    - `tests/test_properties_adversarial.py`: adversarial properties A9/A10
+      for density validity, positivity/finite wealth, and interior
+      parameter stability (`|\epsilon_k| < 1`).
  
 ---
 

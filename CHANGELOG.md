@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       for density validity, positivity/finite wealth, and interior
       parameter stability (`|\epsilon_k| < 1`).
  
+### Fixed
+
+- **Ruff Linting** — fixed import sorting (I001) and loop variable binding (B023) issues in tests.
+- **GitHub Pages Deployment** — fixed docs workflow to properly create virtual environment, install dependencies, and deploy documentation.
+
 ---
 
 ## [0.3.0] — 2026-06-18

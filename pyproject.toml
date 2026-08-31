@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "online-cp"
 version = "0.3.0"
 authors = [
-	{ name="Johan Hallberg Szabadvary", email="johan.hallberg.szabadvary@ju.se" },
+	{ name="Johan Hallberg Szabadváry", email="johan.hallberg.szabadvary@ju.se" },
 ]
 description = "An implementation of online conformal prediction"
 readme = "README.md"

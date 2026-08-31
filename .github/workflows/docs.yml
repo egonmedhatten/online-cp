@@ -20,9 +20,9 @@ jobs:
       
       - name: Install dependencies
         run: |
-          uv pip install hatchling
+          uv pip install hatchling mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
           uv build
-          uv pip install --find-links dist/ online-cp mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
+          uv pip install dist/*.whl
       
       - name: Deploy documentation
         run: uv run mkdocs gh-deploy --force

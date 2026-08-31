@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/uv-setuptools@v0.2
         with:
           python-version: "3.12"
-      - run: pip install mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
-      - run: mkdocs gh-deploy --force
+      - run: uv pip install --extra docs mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
+      - run: uv run --extra docs mkdocs gh-deploy --force

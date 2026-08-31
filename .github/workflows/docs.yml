@@ -19,7 +19,10 @@ jobs:
           version: "0.6.3"
       
       - name: Install dependencies
-        run: uv pip install -e .[docs] mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
+        run: |
+          uv pip install hatchling
+          uv build
+          uv pip install --find-links dist/ online-cp mkdocs-material "mkdocstrings[python]" mkdocs-macros-plugin
       
       - name: Deploy documentation
-        run: uv run --extra docs mkdocs gh-deploy --force
+        run: uv run mkdocs gh-deploy --force

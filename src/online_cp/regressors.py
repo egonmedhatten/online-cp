@@ -2983,15 +2983,15 @@ class ConformalMondrianTreeRegressor(ConformalRegressor):
                 f"draw_partition() requires exactly 2 features, got {self.X.shape[1]}. "
                 "The leaf bounding boxes only tile feature space exactly at d=2."
             )
-        import matplotlib.cm as mcm
         import matplotlib.colors as mcolors
         import matplotlib.pyplot as plt
+        from matplotlib import colormaps
 
         ax = _get_ax(ax)
 
         y_min, y_max = float(self.y.min()), float(self.y.max())
         norm = mcolors.Normalize(vmin=y_min, vmax=y_max)
-        cmap = mcm.get_cmap("coolwarm")
+        cmap = colormaps["coolwarm"]
 
         def leaf_color_fn(leaf):
             if leaf.indices is None:
@@ -3705,15 +3705,15 @@ class ConformalMondrianForestRegressor(ConformalRegressor):
                 f"draw_partition() requires exactly 2 features, got {self.X.shape[1]}. "
                 "The leaf bounding boxes only tile feature space exactly at d=2."
             )
-        import matplotlib.cm as mcm
         import matplotlib.colors as mcolors
         import matplotlib.pyplot as plt
+        from matplotlib import colormaps
 
         ax = _get_ax(ax)
 
         y_min, y_max = float(self.y.min()), float(self.y.max())
         norm = mcolors.Normalize(vmin=y_min, vmax=y_max)
-        cmap = mcm.get_cmap("coolwarm")
+        cmap = colormaps["coolwarm"]
 
         def leaf_color_fn(leaf):
             if leaf.indices is None:

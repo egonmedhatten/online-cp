@@ -1969,13 +1969,13 @@ class ConformalMondrianTreeClassifier(ConformalClassifier):
                 f"draw_partition() requires exactly 2 features, got {self.X.shape[1]}. "
                 "The leaf bounding boxes only tile feature space exactly at d=2."
             )
-        import matplotlib.cm as mcm
+        from matplotlib import colormaps
         from matplotlib.lines import Line2D
 
         ax = _get_ax(ax)
 
         K = len(self.label_space)
-        cmap = mcm.get_cmap("tab10", K)
+        cmap = colormaps["tab10"].resampled(K)
         label_to_color = {lbl: cmap(i) for i, lbl in enumerate(self.label_space)}
 
         def leaf_color_fn(leaf):
@@ -2766,13 +2766,13 @@ class ConformalMondrianForestClassifier(ConformalClassifier):
                 f"draw_partition() requires exactly 2 features, got {self.X.shape[1]}. "
                 "The leaf bounding boxes only tile feature space exactly at d=2."
             )
-        import matplotlib.cm as mcm
+        from matplotlib import colormaps
         from matplotlib.lines import Line2D
 
         ax = _get_ax(ax)
 
         K = len(self.label_space)
-        cmap = mcm.get_cmap("tab10", K)
+        cmap = colormaps["tab10"].resampled(K)
         label_to_color = {lbl: cmap(i) for i, lbl in enumerate(self.label_space)}
 
         def leaf_color_fn(leaf):

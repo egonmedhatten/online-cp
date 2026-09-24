@@ -717,6 +717,73 @@ class TestMondrianConformalClassifierRoundTrip:
         np.testing.assert_array_equal(orig.elements, new.elements)
 
 
+class TestMondrianTreeForestRoundTrip:
+    def test_tree_classifier(self, tmp_path):
+        from online_cp.classifiers import ConformalMondrianTreeClassifier
+
+        m = ConformalMondrianTreeClassifier(lifetime=1.0, rnd_state=42, label_space=[-1, 1])
+        m.learn_initial_training_set(X_CLF, Y_CLF)
+        path = tmp_path / "mondrian_tree_clf.joblib"
+        m.save(str(path))
+        loaded = ConformalMondrianTreeClassifier.load(str(path))
+        orig = m.predict(X_TEST_CLF, epsilon=0.1)
+        new = loaded.predict(X_TEST_CLF, epsilon=0.1)
+        np.testing.assert_array_equal(orig.elements, new.elements)
+
+    def test_forest_classifier(self, tmp_path):
+        from online_cp.classifiers import ConformalMondrianForestClassifier
+
+        m = ConformalMondrianForestClassifier(
+            n_trees=5, lifetime=1.0, rnd_state=42, label_space=[-1, 1]
+        )
+        m.learn_initial_training_set(X_CLF, Y_CLF)
+        path = tmp_path / "mondrian_forest_clf.joblib"
+        m.save(str(path))
+        loaded = ConformalMondrianForestClassifier.load(str(path))
+        orig = m.predict(X_TEST_CLF, epsilon=0.1)
+        new = loaded.predict(X_TEST_CLF, epsilon=0.1)
+        np.testing.assert_array_equal(orig.elements, new.elements)
+
+    def test_tree_regressor(self, tmp_path):
+        from online_cp.regressors import ConformalMondrianTreeRegressor
+
+        m = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=42)
+        m.learn_initial_training_set(X_REG, Y_REG)
+        path = tmp_path / "mondrian_tree_reg.joblib"
+        m.save(str(path))
+        loaded = ConformalMondrianTreeRegressor.load(str(path))
+        orig = m.predict(X_TEST_REG, epsilon=0.2)
+        new = loaded.predict(X_TEST_REG, epsilon=0.2)
+        np.testing.assert_allclose([orig.lower, orig.upper], [new.lower, new.upper])
+
+    def test_forest_regressor(self, tmp_path):
+        from online_cp.regressors import ConformalMondrianForestRegressor
+
+        m = ConformalMondrianForestRegressor(n_trees=5, lifetime=1.0, rnd_state=42)
+        m.learn_initial_training_set(X_REG, Y_REG)
+        path = tmp_path / "mondrian_forest_reg.joblib"
+        m.save(str(path))
+        loaded = ConformalMondrianForestRegressor.load(str(path))
+        orig = m.predict(X_TEST_REG, epsilon=0.2)
+        new = loaded.predict(X_TEST_REG, epsilon=0.2)
+        np.testing.assert_allclose([orig.lower, orig.upper], [new.lower, new.upper])
+
+
+class TestMondrianVennPredictorRoundTrip:
+    def test_round_trip(self, tmp_path):
+        from online_cp.venn import MondrianVennPredictor
+
+        y = (Y_CLF > 0).astype(int)
+        m = MondrianVennPredictor(lifetime=1.0, rnd_state=42)
+        m.learn_initial_training_set(X_CLF, y)
+        path = tmp_path / "mondrian_venn.joblib"
+        m.save(str(path))
+        loaded = MondrianVennPredictor.load(str(path))
+        orig = m.predict(X_TEST_CLF)
+        new = loaded.predict(X_TEST_CLF)
+        np.testing.assert_allclose([orig.p0, orig.p1], [new.p0, new.p1])
+
+
 # ---------------------------------------------------------------------------
 # Phase B — ConformalPredictiveDecisionMaker
 # ---------------------------------------------------------------------------

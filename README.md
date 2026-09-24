@@ -130,6 +130,32 @@ wrapper.learn_initial_training_set(X_train, y_train)
 interval = wrapper.predict(x_new, epsilon=0.1)
 ```
 
+Adaptive Mondrian **tree and forest** conformal predictors partition feature
+space automatically (no category function required) and are exactly valid:
+
+```python
+from online_cp import (
+    ConformalMondrianForestClassifier,
+    ConformalMondrianTreeRegressor,
+    MondrianVennPredictor,
+)
+
+# Prediction set from a Mondrian forest
+clf = ConformalMondrianForestClassifier(n_trees=50, rnd_state=0)
+clf.learn_initial_training_set(X_train, y_train)
+pred_set = clf.predict(x_new, epsilon=0.1)
+
+# Prediction interval from a single Mondrian tree
+reg = ConformalMondrianTreeRegressor(rnd_state=0)
+reg.learn_initial_training_set(X_train, y_train)
+interval = reg.predict(x_new, epsilon=0.1)
+
+# Calibrated probabilities via the Mondrian-leaf Venn taxonomy
+venn = MondrianVennPredictor(rnd_state=0)
+venn.learn_initial_training_set(X_train, y_train)
+prob = venn.predict(x_new)
+```
+
 ### Streaming evaluation
 
 River-style test-then-train loop with composable metrics:

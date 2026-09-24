@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `online_cp/mondrian/framework.py`; their public import path
     (`from online_cp import ...`) is unchanged.
   - Added property (permutation invariance) and adversarial (tie-break
-    order-invariance) tests for the Mondrian partition.
+    order-invariance) tests for the Mondrian partition, plus `save` / `load`
+    round-trip tests for all five predictors.
 
 - **Random Number Generation** — expanded `seed` and `rnd_state` arguments in regressors, classifiers, and betting strategies to accept `np.random.Generator` objects in addition to integer seeds.
 

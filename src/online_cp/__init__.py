@@ -22,7 +22,10 @@ CPS
 venn
     Venn(-Abers) *calibrated probability* predictors.
 mondrian
-    Mondrian (group-/label-conditional) conformal wrappers.
+    Mondrian process partition (``MondrianTree``) and the group-conditional
+    conformal *taxonomy* wrappers. The Mondrian tree/forest conformal
+    predictors live in ``classifiers``/``regressors`` and the Mondrian Venn
+    predictor in ``venn``.
 martingale, betting
     Conformal test martingales for online change-point / exchangeability
     testing, and the betting strategies that drive them.

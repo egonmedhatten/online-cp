@@ -282,6 +282,35 @@ prob = venn.predict(x_new)
     `lifetime="sqrt_n"` / `lifetime="density"` (unsupervised — labels are never
     used). Standardise or `PCA`-rotate features first for best results.
 
+#### Online (streaming) mode
+
+Pass `online=True` to learn one example at a time without regrowing the
+partition. The tree (or forest) is grown once from the initial set and then
+**extended** one point at a time (`ExtendMondrianBlock`), so each step costs
+`O(depth)` per tree instead of rebuilding from scratch:
+
+```python
+from online_cp import ConformalMondrianForestRegressor, ErrorRate, progressive_val
+
+reg = ConformalMondrianForestRegressor(n_trees=10, lifetime=3.0, rnd_state=0, online=True)
+reg.learn_initial_training_set(X_init, y_init)
+
+# Streaming: predict, observe, learn
+for x, y in stream:
+    interval = reg.predict(x, epsilon=0.1)
+    reg.learn_one(x, y)          # persists the exact tree(s) that scored x
+
+# …or use the built-in test-then-train harness
+progressive_val(reg, X_stream, y_stream, epsilon=0.1, metric=ErrorRate())
+```
+
+Online mode is opt-in and requires a fixed float `lifetime` and `max_depth=None`
+(the projective Mondrian regime); batch mode stays the default and reference.
+Because `learn_one` keeps the exact partition that `predict` scored, the whole
+stream is one consistent draw of the Mondrian process, so the online *error
+sequence* enjoys the same validity guarantee as batch — not just per-step
+coverage. Typical speedups over rebuilding each step are **~3–6×**.
+
 ### Group-conditional taxonomy wrappers
 
 Use these when you need validity guarantees **within subgroups**, not just overall.

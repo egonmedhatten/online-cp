@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Leaf-Local Laplace Smoothing as the nonconformity measure.
   - **`ConformalMondrianTreeRegressor`, `ConformalMondrianForestRegressor`**
     (`online_cp.regressors`) — conformal regressors using the leaf-residual NCM;
-    the single tree solves the prediction interval exactly via an O(n)
-    knot-point solver.
+    the single tree solves the prediction interval exactly via an O(n log n)
+    knot-point solver (vectorised p-values via binary search over the
+    candidate-independent leaf scores).
   - **`MondrianVennPredictor`** (`online_cp.venn`) — a Venn predictor using the
     Mondrian leaf as the taxonomy category (bag function → Venn validity,
     ALRW2 Thm 6.4); refactored onto `MondrianTree`.
@@ -39,6 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added property (permutation invariance) and adversarial (tie-break
     order-invariance) tests for the Mondrian partition, plus `save` / `load`
     round-trip tests for all five predictors.
+
+- **Online (incremental) Mondrian predictors** — all four Mondrian conformal
+  predictors gained an opt-in `online=True` mode for streaming data.
+  - `ConformalMondrianTree{Classifier,Regressor}` keep a single persistent tree
+    and `ConformalMondrianForest{Classifier,Regressor}` keep `n_trees`
+    persistent trees. `predict` projects the test point into the partition with
+    the `ExtendMondrianBlock` update (Roy & Teh 2009; Lakshminarayanan et al.
+    2014) in `O(depth)` per tree instead of regrowing it from scratch. Batch
+    mode remains the default and reference implementation.
+  - `learn_one` persists the exact extension that `predict` scored (surfaced via
+    `return_update=True` and an internal cache), so the realised stream is a
+    single consistent draw of the Mondrian process — giving the clean online
+    i.i.d.-error-sequence guarantee (ALRW2 §2.2.9), not merely per-step marginal
+    validity. A staleness guard falls back to a fresh extension under
+    delayed / out-of-order feedback.
+  - Requires a fixed float `lifetime` and `max_depth=None` (the projective
+    Mondrian regime); the persistent tree(s) are serialised by `save` / `load`.
+  - Typical speedups over rebuilding each step (200 predict + learn, n 200→400):
+    tree regressor ~6×, forest classifier ~6×, forest regressor ~3×.
 
 - **Random Number Generation** — expanded `seed` and `rnd_state` arguments in regressors, classifiers, and betting strategies to accept `np.random.Generator` objects in addition to integer seeds.
 

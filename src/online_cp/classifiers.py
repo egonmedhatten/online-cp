@@ -1589,9 +1589,9 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
     _SAVE_PARAMS: tuple = (
         "lifetime", "lambda_", "label_space", "epsilon", "rnd_state",
-        "verbose", "max_depth", "feature_weights",
+        "verbose", "max_depth", "feature_weights", "online",
     )
-    _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space")
+    _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space", "_online_tree")
 
     def __init__(
         self,
@@ -1603,6 +1603,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         verbose: int = 0,
         max_depth: int | None = None,
         feature_weights: str | NDArray | None = None,
+        online: bool = False,
     ):
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
@@ -1616,6 +1617,16 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
                 f"Unknown feature_weights string {feature_weights!r}. "
                 "Recognised value: 'variance'."
             )
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
         super().__init__(epsilon=epsilon)
         self.lifetime = lifetime
         self.feature_weights = feature_weights
@@ -1624,12 +1635,14 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         self.rnd_state = rnd_state
         self.verbose = verbose
         self.max_depth = max_depth
+        self.online = online
 
         self.X = None
         self.y = None
         self.label_to_idx = None
         self.rnd_gen = np.random.default_rng(rnd_state)
         self._last_tree = None
+        self._online_tree = None
 
     def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
         """Batch training phase.
@@ -1657,6 +1670,12 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
         # Build label-to-index mapping
         self.label_to_idx = {label: idx for idx, label in enumerate(self.label_space)}
+
+        if self.online:
+            self._online_tree = MondrianTree.grow(
+                self.X, self.rnd_gen,
+                lifetime=self.lifetime, feature_weights=self.feature_weights,
+            )
 
         if self.verbose >= 1:
             print(
@@ -1688,6 +1707,8 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
         self.X = np.vstack([self.X, x])
         self.y = np.append(self.y, y)
+        if self.online:
+            self._online_tree = self._online_tree.extend(x, self.rnd_gen)
 
 
     def predict(
@@ -1733,15 +1754,18 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         K = len(self.label_space)
 
         # Build the Mondrian partition from the augmented bag (unsupervised in X).
-        tree = MondrianTree.grow(
-            X_aug,
-            self.rnd_gen,
-            lifetime=self.lifetime,
-            x_test=x,
-            max_depth=self.max_depth,
-            feature_weights=self.feature_weights,
-            verbose=self.verbose,
-        ).root
+        if self.online:
+            tree = self._online_tree.extend(x, self.rnd_gen).root
+        else:
+            tree = MondrianTree.grow(
+                X_aug,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                x_test=x,
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
 
         # Find leaf containing test point (index n in X_aug)
         leaf_star = _find_leaf(tree, X_aug[n])
@@ -1865,15 +1889,18 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         label_idx = self.label_to_idx[y]
 
         # Build the Mondrian partition from the augmented bag (unsupervised in X).
-        tree = MondrianTree.grow(
-            X_aug,
-            self.rnd_gen,
-            lifetime=self.lifetime,
-            x_test=X_aug[n],
-            max_depth=self.max_depth,
-            feature_weights=self.feature_weights,
-            verbose=self.verbose,
-        ).root
+        if self.online:
+            tree = self._online_tree.extend(x, self.rnd_gen).root
+        else:
+            tree = MondrianTree.grow(
+                X_aug,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                x_test=X_aug[n],
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
 
         # Find leaf and assign training-only counts
         leaf_star = _find_leaf(tree, X_aug[n])

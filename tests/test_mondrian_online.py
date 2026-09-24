@@ -10,7 +10,13 @@ property (Roy & Teh 2009) that underpins online validity.
 import numpy as np
 import pytest
 from scipy import stats
+from sklearn.datasets import make_moons
 
+from online_cp import (
+    ConformalMondrianTreeClassifier,
+    ErrorRate,
+    progressive_val,
+)
 from online_cp.mondrian import MondrianTree
 from online_cp.mondrian.tree import _MondrianNode
 
@@ -97,3 +103,60 @@ class TestExtendDistribution:
         # Means agree closely and a two-sample KS test does not reject equality.
         assert abs(batch.mean() - extend.mean()) < 0.15 * batch.mean()
         assert stats.ks_2samp(batch, extend).pvalue > 0.02
+
+
+def _clf_stream_error(seed, online):
+    """Progressive-validation error rate of the (online or batch) tree classifier."""
+    X, y = make_moons(n_samples=200, noise=0.3, random_state=seed)
+    X = (X - X.mean(axis=0)) / X.std(axis=0)
+    clf = ConformalMondrianTreeClassifier(
+        lifetime=3.0, label_space=np.array([0, 1]), rnd_state=seed, online=online
+    )
+    clf.learn_initial_training_set(X[:70], y[:70])
+    metric = progressive_val(clf, X[70:], y[70:], epsilon=0.1, metric=ErrorRate())
+    return metric.get()
+
+
+class TestOnlineClassifier:
+    def test_predict_and_learn_grow_the_tree(self):
+        X, y = make_moons(n_samples=120, noise=0.3, random_state=0)
+        clf = ConformalMondrianTreeClassifier(
+            lifetime=3.0, label_space=np.array([0, 1]), rnd_state=0, online=True
+        )
+        clf.learn_initial_training_set(X[:80], y[:80])
+        assert clf._online_tree.X.shape[0] == 80
+        Gamma = clf.predict(X[80], epsilon=0.1)
+        assert set(Gamma.elements).issubset({0, 1})
+        clf.learn_one(X[80], y[80])
+        assert clf._online_tree.X.shape[0] == 81  # persistent tree grew by one
+
+    def test_coverage_tracks_epsilon(self):
+        errs = [_clf_stream_error(s, online=True) for s in range(15)]
+        assert 0.06 < float(np.mean(errs)) < 0.15  # ε = 0.1
+
+    def test_coverage_matches_batch(self):
+        online = float(np.mean([_clf_stream_error(s, True) for s in range(10)]))
+        batch = float(np.mean([_clf_stream_error(s, False) for s in range(10)]))
+        assert abs(online - batch) < 0.04
+
+    def test_save_load_round_trip(self, tmp_path):
+        X, y = make_moons(n_samples=120, noise=0.3, random_state=1)
+        clf = ConformalMondrianTreeClassifier(
+            lifetime=3.0, label_space=np.array([0, 1]), rnd_state=1, online=True
+        )
+        clf.learn_initial_training_set(X[:80], y[:80])
+        before = clf.predict(X[80], epsilon=0.1)
+        path = tmp_path / "online_clf.joblib"
+        clf.save(str(path))
+        loaded = ConformalMondrianTreeClassifier.load(str(path))
+        assert loaded.online is True
+        after = loaded.predict(X[80], epsilon=0.1)
+        np.testing.assert_array_equal(before.elements, after.elements)
+
+    def test_rejects_string_lifetime(self):
+        with pytest.raises(ValueError, match="fixed float lifetime"):
+            ConformalMondrianTreeClassifier(lifetime="sqrt_n", online=True)
+
+    def test_rejects_max_depth(self):
+        with pytest.raises(ValueError, match="max_depth=None"):
+            ConformalMondrianTreeClassifier(max_depth=5, online=True)

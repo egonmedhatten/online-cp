@@ -66,6 +66,7 @@ from online_cp.mondrian.tree import (
     _build_tree_summary,
     _collect_leaves,
     _find_leaf,
+    _summarize_tree,
 )
 
 __all__ = [
@@ -2070,9 +2071,9 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
 
     _SAVE_PARAMS: tuple = (
         "n_trees", "lifetime", "lambda_", "label_space", "epsilon",
-        "rnd_state", "verbose", "n_jobs", "max_depth",
+        "rnd_state", "verbose", "n_jobs", "max_depth", "online",
     )
-    _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space")
+    _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space", "_forest")
 
     def __init__(
         self,
@@ -2085,9 +2086,20 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         verbose: int = 0,
         n_jobs: int = 1,
         max_depth: int | None = None,
+        online: bool = False,
     ):
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
         super().__init__(epsilon=epsilon)
         self.n_trees = n_trees
         self.lifetime = lifetime
@@ -2097,6 +2109,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         self.verbose = verbose
         self.n_jobs = n_jobs
         self.max_depth = max_depth
+        self.online = online
 
         self.X = None
         self.y = None
@@ -2105,6 +2118,8 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         self._last_tree = None
         self._last_seeds = None
         self._last_x = None
+        self._forest = None
+        self._pending_forest = None
 
     def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
         """Batch training phase.
@@ -2133,6 +2148,13 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         # Build label-to-index mapping
         self.label_to_idx = {label: idx for idx, label in enumerate(self.label_space)}
 
+        if self.online:
+            seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
+            self._forest = [
+                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime)
+                for s in seeds
+            ]
+
         if self.verbose >= 1:
             print(
                 f"[MondrianForest] Initialized with {X.shape[0]} training points, "
@@ -2145,7 +2167,12 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         Args:
             x: New feature vector (d,) or (1, d)
             y: New label (any hashable value in label_space)
-            precomputed: Optional dict from previous predict (not used here)
+            precomputed: Update dict from ``predict(..., return_update=True)`` for
+                this same ``x``. In online mode, if it carries the forest
+                extensions that scored ``x`` they become the persisted forest, so
+                each tree's stream is a single consistent Mondrian process (exact
+                online validity). The last ``predict`` is also cached, so the plain
+                ``predict(x)`` → ``learn_one(x, y)`` loop reuses it automatically.
         """
         x = np.asarray(x).ravel()
 
@@ -2163,6 +2190,56 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
 
         self.X = np.vstack([self.X, x])
         self.y = np.append(self.y, y)
+        if self.online:
+            cand = precomputed.get("online_forest") if precomputed else None
+            if not self._is_consistent_forest(cand, x):
+                cand = getattr(self, "_pending_forest", None)
+            self._pending_forest = None
+            if self._is_consistent_forest(cand, x):
+                self._forest = cand
+            else:
+                self._forest = [t.extend(x, self.rnd_gen) for t in self._forest]
+
+    def _is_consistent_forest(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted forest with every tree extended by exactly ``x``."""
+        if cand is None or self._forest is None or len(cand) != len(self._forest):
+            return False
+        xr = np.asarray(x, dtype=float).ravel()
+        base_n = self._forest[0].X.shape[0]
+        return all(
+            t.X.shape[0] == base_n + 1 and np.array_equal(t.X[-1], xr) for t in cand
+        )
+
+    def _forest_summaries(self, X_aug, x, n, K):
+        """Per-tree ``(n_leaves, counts, ls_train_idx)`` summaries + viz/reuse caches.
+
+        Batch: T fresh trees from seeds (joblib). Online: extend each persistent
+        tree and summarise, caching the extensions for ``learn_one`` reuse.
+        """
+        if self.online:
+            pending = [t.extend(x, self.rnd_gen) for t in self._forest]
+            self._pending_forest = pending
+            self._last_seeds = None
+            self._last_x = x.copy()
+            summaries = [
+                _summarize_tree(t.root, self.y, self.label_to_idx, K, n) for t in pending
+            ]
+            self._last_tree = pending[0].root
+            return summaries
+        seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
+        self._last_seeds = seeds.copy()
+        self._last_x = x.copy()
+        self._pending_forest = None
+        _rng0 = np.random.default_rng(int(seeds[0]))
+        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
+        _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
+        self._last_tree = _tree0
+        return Parallel(n_jobs=self.n_jobs)(
+            delayed(_build_tree_summary)(
+                int(seed), X_aug, self.y, self.label_to_idx, K, n, self.lifetime, self.max_depth
+            )
+            for seed in seeds
+        )
 
     # ------------------------------------------------------------------
     # Forest indexing
@@ -2203,6 +2280,31 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         IndexError
             If ``i`` is out of range.
         """
+        if self.online:
+            pending = getattr(self, "_pending_forest", None)
+            if pending is None:
+                raise RuntimeError(
+                    "No trees cached. Call predict() or compute_p_value() first."
+                )
+            if not (0 <= i < self.n_trees):
+                raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
+            n = self.X.shape[0]
+            K = len(self.label_space)
+            tree_i = pending[i].root
+            _assign_counts(tree_i, self.y, self.label_to_idx, K, n_train=n)
+            view = ConformalMondrianTreeClassifier(
+                lifetime=self.lifetime,
+                lambda_=self.lambda_,
+                label_space=self.label_space.copy(),
+                epsilon=self.epsilon,
+                max_depth=self.max_depth,
+            )
+            view.X = self.X
+            view.y = self.y
+            view.label_to_idx = self.label_to_idx
+            view._last_tree = tree_i
+            return view
+
         if self._last_seeds is None:
             raise RuntimeError(
                 "No trees cached. Call predict() or compute_p_value() first."
@@ -2273,19 +2375,9 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         n_total = n + 1
         K = len(self.label_space)
 
-        # Build T tree summaries — possibly in parallel (n_jobs follows sklearn semantics)
-        seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
-        # Cache seeds + test point for __getitem__ and representative-tree viz
-        self._last_seeds = seeds.copy()
-        self._last_x = x.copy()
-        _rng0 = np.random.default_rng(int(seeds[0]))
-        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
-        _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
-        self._last_tree = _tree0
-        tree_summaries = Parallel(n_jobs=self.n_jobs)(
-            delayed(_build_tree_summary)(int(seed), X_aug, self.y, self.label_to_idx, K, n, self.lifetime, self.max_depth)
-            for seed in seeds
-        )
+        # Build T tree summaries (batch: fresh trees from seeds; online: extend
+        # the persistent forest). Caches viz/reuse state as a side effect.
+        tree_summaries = self._forest_summaries(X_aug, x, n, K)
         n_leaves_all = [ts[0] for ts in tree_summaries]  # T x (n_total,)
         counts_all = [ts[1] for ts in tree_summaries]  # T x (n_total, K)
         ls_train_idx = [ts[2] for ts in tree_summaries]  # T x variable
@@ -2399,7 +2491,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         result = self._compute_Gamma(p_values, epsilon)
 
         # Handle return flags
-        _update = {"n_leaves_all": n_leaves_all, "counts_all": counts_all, "leaf_star_train_indices_all": ls_train_idx}
+        _update = {"n_leaves_all": n_leaves_all, "counts_all": counts_all, "leaf_star_train_indices_all": ls_train_idx, "online_forest": self._pending_forest}
         if return_update and return_p_values:
             return result, p_values, _update
         elif return_p_values:
@@ -2433,18 +2525,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         label_idx = self.label_to_idx[y]
 
         # Build T tree summaries (possibly in parallel)
-        seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
-        # Cache seeds + test point for __getitem__ and representative-tree viz
-        self._last_seeds = seeds.copy()
-        self._last_x = x.copy()
-        _rng0 = np.random.default_rng(int(seeds[0]))
-        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
-        _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
-        self._last_tree = _tree0
-        tree_summaries = Parallel(n_jobs=self.n_jobs)(
-            delayed(_build_tree_summary)(int(seed), X_aug, self.y, self.label_to_idx, K, n, self.lifetime, self.max_depth)
-            for seed in seeds
-        )
+        tree_summaries = self._forest_summaries(X_aug, x, n, K)
         n_leaves_all = [ts[0] for ts in tree_summaries]
         counts_all = [ts[1] for ts in tree_summaries]
         ls_train_idx = [ts[2] for ts in tree_summaries]
@@ -2552,6 +2633,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
                 "n_leaves_all": n_leaves_all,
                 "counts_all": counts_all,
                 "leaf_star_train_indices_all": ls_train_idx,
+                "online_forest": self._pending_forest,
             }
         else:
             return p_val

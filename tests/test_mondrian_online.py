@@ -13,6 +13,8 @@ from scipy import stats
 from sklearn.datasets import make_moons
 
 from online_cp import (
+    ConformalMondrianForestClassifier,
+    ConformalMondrianForestRegressor,
     ConformalMondrianTreeClassifier,
     ConformalMondrianTreeRegressor,
     ErrorRate,
@@ -282,3 +284,182 @@ class TestSingleOmegaReuse:
         clf.learn_one(X[41], y[41])
         assert clf._online_tree is not pc["online_tree"]
         assert np.array_equal(clf._online_tree.X[-1], X[41])
+
+
+# ---------------------------------------------------------------------------
+# Online forests (Phase 3): T persistent trees, extended one point at a time.
+# ---------------------------------------------------------------------------
+
+def _clf_forest_stream_error(seed, online, n_total=110, n_train=70):
+    X, y = make_moons(n_samples=n_total, noise=0.3, random_state=seed)
+    X = (X - X.mean(axis=0)) / X.std(axis=0)
+    clf = ConformalMondrianForestClassifier(
+        n_trees=5, lifetime=3.0, label_space=np.array([0, 1]), rnd_state=seed, online=online
+    )
+    clf.learn_initial_training_set(X[:n_train], y[:n_train])
+    metric = progressive_val(clf, X[n_train:], y[n_train:], epsilon=0.1, metric=ErrorRate())
+    return metric.get()
+
+
+class TestOnlineForestClassifier:
+    def _clf(self):
+        X, y = make_moons(n_samples=60, noise=0.3, random_state=0)
+        clf = ConformalMondrianForestClassifier(
+            n_trees=5, lifetime=3.0, label_space=np.array([0, 1]), rnd_state=0, online=True
+        )
+        clf.learn_initial_training_set(X[:40], y[:40])
+        return clf, X, y
+
+    def test_predict_and_learn_grow_the_forest(self):
+        clf, X, y = self._clf()
+        assert all(t.X.shape[0] == 40 for t in clf._forest)
+        Gamma = clf.predict(X[40], epsilon=0.1)
+        assert set(Gamma.elements).issubset({0, 1})
+        clf.learn_one(X[40], y[40])
+        assert all(t.X.shape[0] == 41 for t in clf._forest)
+
+    def test_getitem_returns_tree_views(self):
+        clf, X, y = self._clf()
+        clf.predict(X[40], epsilon=0.1)
+        assert clf[0]._last_tree is not None
+        assert len(list(clf)) == clf.n_trees
+
+    def test_reuses_scored_forest_via_precomputed(self):
+        clf, X, y = self._clf()
+        _, pc = clf.predict(X[40], epsilon=0.1, return_update=True)
+        clf.learn_one(X[40], y[40], precomputed=pc)
+        assert clf._forest is pc["online_forest"]
+
+    def test_reuses_scored_forest_via_cache(self):
+        clf, X, y = self._clf()
+        _, pc = clf.predict(X[40], epsilon=0.1, return_update=True)
+        clf.learn_one(X[40], y[40])
+        assert clf._forest is pc["online_forest"]
+
+    def test_stale_forest_falls_back(self):
+        clf, X, y = self._clf()
+        _, pc = clf.predict(X[40], epsilon=0.1, return_update=True)
+        clf.learn_one(X[41], y[41])
+        assert clf._forest is not pc["online_forest"]
+        assert all(np.array_equal(t.X[-1], X[41]) for t in clf._forest)
+
+    def test_save_load_round_trip(self, tmp_path):
+        X, y = make_moons(n_samples=120, noise=0.3, random_state=1)
+        clf = ConformalMondrianForestClassifier(
+            n_trees=5, lifetime=3.0, label_space=np.array([0, 1]), rnd_state=1, online=True
+        )
+        clf.learn_initial_training_set(X[:80], y[:80])
+        before = clf.predict(X[80], epsilon=0.1)
+        path = tmp_path / "online_forest_clf.joblib"
+        clf.save(str(path))
+        loaded = ConformalMondrianForestClassifier.load(str(path))
+        assert loaded.online is True
+        assert len(loaded._forest) == 5
+        after = loaded.predict(X[80], epsilon=0.1)
+        np.testing.assert_array_equal(before.elements, after.elements)
+
+    def test_rejects_string_lifetime(self):
+        with pytest.raises(ValueError, match="fixed float lifetime"):
+            ConformalMondrianForestClassifier(lifetime="sqrt_n", online=True)
+
+    def test_rejects_max_depth(self):
+        with pytest.raises(ValueError, match="max_depth=None"):
+            ConformalMondrianForestClassifier(max_depth=5, online=True)
+
+    @pytest.mark.slow
+    def test_coverage_tracks_epsilon(self):
+        errs = [_clf_forest_stream_error(s, online=True) for s in range(8)]
+        assert 0.05 < float(np.mean(errs)) < 0.16  # ε = 0.1
+
+    @pytest.mark.slow
+    def test_coverage_matches_batch(self):
+        online = float(np.mean([_clf_forest_stream_error(s, True) for s in range(6)]))
+        batch = float(np.mean([_clf_forest_stream_error(s, False) for s in range(6)]))
+        assert abs(online - batch) < 0.05
+
+
+def _reg_forest_stream_error(seed, online, n_total=100, n_train=70):
+    r = np.random.default_rng(seed)
+    X = r.uniform(-3, 3, (n_total, 2))
+    y = np.sin(X[:, 0]) + 0.5 * X[:, 1] + 0.2 * r.normal(size=n_total)
+    reg = ConformalMondrianForestRegressor(n_trees=5, lifetime=3.0, rnd_state=seed, online=online)
+    reg.learn_initial_training_set(X[:n_train], y[:n_train])
+    metric = progressive_val(reg, X[n_train:], y[n_train:], epsilon=0.1, metric=ErrorRate())
+    return metric.get()
+
+
+class TestOnlineForestRegressor:
+    def _reg(self):
+        r = np.random.default_rng(0)
+        X = r.uniform(-3, 3, (60, 2))
+        y = np.sin(X[:, 0]) + X[:, 1]
+        reg = ConformalMondrianForestRegressor(n_trees=5, lifetime=3.0, rnd_state=0, online=True)
+        reg.learn_initial_training_set(X[:40], y[:40])
+        return reg, X, y
+
+    def test_predict_and_learn_grow_the_forest(self):
+        reg, X, y = self._reg()
+        assert all(t.X.shape[0] == 40 for t in reg._forest)
+        interval = reg.predict(X[40], epsilon=0.2)
+        assert interval.lower <= interval.upper
+        reg.learn_one(X[40], y[40])
+        assert all(t.X.shape[0] == 41 for t in reg._forest)
+
+    def test_getitem_returns_tree_views(self):
+        reg, X, y = self._reg()
+        reg.predict(X[40], epsilon=0.2)
+        assert reg[0]._last_tree is not None
+        assert len(list(reg)) == reg.n_trees
+
+    def test_reuses_scored_forest_via_precomputed(self):
+        reg, X, y = self._reg()
+        _, pc = reg.predict(X[40], epsilon=0.2, return_update=True)
+        reg.learn_one(X[40], y[40], precomputed=pc)
+        assert reg._forest is pc["online_forest"]
+
+    def test_reuses_scored_forest_via_cache(self):
+        reg, X, y = self._reg()
+        _, pc = reg.predict(X[40], epsilon=0.2, return_update=True)
+        reg.learn_one(X[40], y[40])
+        assert reg._forest is pc["online_forest"]
+
+    def test_stale_forest_falls_back(self):
+        reg, X, y = self._reg()
+        _, pc = reg.predict(X[40], epsilon=0.2, return_update=True)
+        reg.learn_one(X[41], y[41])
+        assert reg._forest is not pc["online_forest"]
+        assert all(np.array_equal(t.X[-1], X[41]) for t in reg._forest)
+
+    def test_save_load_round_trip(self, tmp_path):
+        r = np.random.default_rng(1)
+        X = r.uniform(-3, 3, (100, 2))
+        y = np.sin(X[:, 0]) + 0.5 * X[:, 1]
+        reg = ConformalMondrianForestRegressor(n_trees=5, lifetime=3.0, rnd_state=1, online=True)
+        reg.learn_initial_training_set(X[:70], y[:70])
+        before = reg.predict(X[70], epsilon=0.2)
+        path = tmp_path / "online_forest_reg.joblib"
+        reg.save(str(path))
+        loaded = ConformalMondrianForestRegressor.load(str(path))
+        assert loaded.online is True
+        assert len(loaded._forest) == 5
+        after = loaded.predict(X[70], epsilon=0.2)
+        np.testing.assert_allclose([before.lower, before.upper], [after.lower, after.upper])
+
+    def test_rejects_string_lifetime(self):
+        with pytest.raises(ValueError, match="fixed float lifetime"):
+            ConformalMondrianForestRegressor(lifetime="density", online=True)
+
+    def test_rejects_max_depth(self):
+        with pytest.raises(ValueError, match="max_depth=None"):
+            ConformalMondrianForestRegressor(max_depth=4, online=True)
+
+    @pytest.mark.slow
+    def test_coverage_tracks_epsilon(self):
+        errs = [_reg_forest_stream_error(s, online=True) for s in range(6)]
+        assert 0.04 < float(np.mean(errs)) < 0.17  # ε = 0.1
+
+    @pytest.mark.slow
+    def test_coverage_matches_batch(self):
+        online = float(np.mean([_reg_forest_stream_error(s, True) for s in range(5)]))
+        batch = float(np.mean([_reg_forest_stream_error(s, False) for s in range(5)]))
+        assert abs(online - batch) < 0.06

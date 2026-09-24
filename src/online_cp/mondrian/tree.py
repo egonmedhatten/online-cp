@@ -1191,13 +1191,31 @@ def _build_tree_summary(
     n_total = len(X_aug)
     rng = np.random.default_rng(seed)
     tree = _sample_mondrian_tree(rng, X_aug, np.arange(n_total), 0.0, lifetime, max_depth=max_depth)
-    _assign_counts(tree, y_train, label_to_idx, K, n_train=n)
+    return _summarize_tree(tree, y_train, label_to_idx, K, n)
+
+
+def _summarize_tree(
+    root: _MondrianNode,
+    y_train: NDArray,
+    label_to_idx: dict,
+    K: int,
+    n: int,
+) -> tuple[NDArray, NDArray, NDArray]:
+    """Pack per-point leaf classification info from a grown-or-extended tree.
+
+    Assigns training-only counts (the test point's slot at index ``n`` is
+    excluded) then returns the same summary as :func:`_build_tree_summary`.
+    Shared by the batch forest (fresh trees) and the online forest (extensions
+    of persistent trees).
+    """
+    _assign_counts(root, y_train, label_to_idx, K, n_train=n)
+    n_total = n + 1
 
     n_leaves = np.empty(n_total, dtype=np.int64)
     counts_matrix = np.empty((n_total, K), dtype=np.int64)
     leaf_star_train_indices = np.array([], dtype=np.int64)
 
-    for leaf in _collect_leaves(tree):
+    for leaf in _collect_leaves(root):
         sz = leaf.n_points()
         is_leaf_star = False
         for idx in leaf.indices:
@@ -1247,12 +1265,27 @@ def _build_tree_summary_reg(
     n_total = n + 1
     rng = np.random.default_rng(seed)
     tree = _sample_mondrian_tree(rng, X_aug, np.arange(n_total), 0.0, lifetime, max_depth=max_depth)
-    leaf_star = _find_leaf(tree, X_aug[n])
+    return _summarize_tree_reg(tree, y_train, n, X_aug[n])
+
+
+def _summarize_tree_reg(
+    root: _MondrianNode,
+    y_train: NDArray,
+    n: int,
+    x_test: NDArray,
+) -> tuple[NDArray, NDArray, float]:
+    """Regression leaf statistics from a grown-or-extended tree.
+
+    Returns the same ``(base_ncm, leaf_star_train_idx, leaf_star_mu_train)``
+    summary as :func:`_build_tree_summary_reg`. Shared by the batch forest
+    (fresh trees) and the online forest (extensions of persistent trees).
+    """
+    leaf_star = _find_leaf(root, x_test)
 
     base_ncm = np.empty(n, dtype=float)
     leaf_star_train_idx = np.array([], dtype=np.int64)
 
-    for leaf in _collect_leaves(tree):
+    for leaf in _collect_leaves(root):
         train_idx = leaf.indices[leaf.indices < n]
         if len(train_idx) == 0:
             continue

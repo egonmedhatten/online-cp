@@ -14,6 +14,7 @@ from sklearn.datasets import make_moons
 
 from online_cp import (
     ConformalMondrianTreeClassifier,
+    ConformalMondrianTreeRegressor,
     ErrorRate,
     progressive_val,
 )
@@ -160,3 +161,60 @@ class TestOnlineClassifier:
     def test_rejects_max_depth(self):
         with pytest.raises(ValueError, match="max_depth=None"):
             ConformalMondrianTreeClassifier(max_depth=5, online=True)
+
+
+def _reg_stream_error(seed, online, n_total=160, n_train=60):
+    r = np.random.default_rng(seed)
+    X = r.uniform(-3, 3, (n_total, 2))
+    y = np.sin(X[:, 0]) + 0.5 * X[:, 1] + 0.2 * r.normal(size=n_total)
+    reg = ConformalMondrianTreeRegressor(lifetime=3.0, rnd_state=seed, online=online)
+    reg.learn_initial_training_set(X[:n_train], y[:n_train])
+    metric = progressive_val(reg, X[n_train:], y[n_train:], epsilon=0.1, metric=ErrorRate())
+    return metric.get()
+
+
+class TestOnlineRegressor:
+    def test_predict_and_learn_grow_the_tree(self):
+        r = np.random.default_rng(0)
+        X = r.uniform(-3, 3, (60, 2))
+        y = np.sin(X[:, 0]) + X[:, 1]
+        reg = ConformalMondrianTreeRegressor(lifetime=3.0, rnd_state=0, online=True)
+        reg.learn_initial_training_set(X[:40], y[:40])
+        assert reg._online_tree.X.shape[0] == 40
+        interval = reg.predict(X[40], epsilon=0.2)
+        assert interval.lower <= interval.upper
+        reg.learn_one(X[40], y[40])
+        assert reg._online_tree.X.shape[0] == 41
+
+    def test_save_load_round_trip(self, tmp_path):
+        r = np.random.default_rng(1)
+        X = r.uniform(-3, 3, (100, 2))
+        y = np.sin(X[:, 0]) + 0.5 * X[:, 1]
+        reg = ConformalMondrianTreeRegressor(lifetime=3.0, rnd_state=1, online=True)
+        reg.learn_initial_training_set(X[:70], y[:70])
+        before = reg.predict(X[70], epsilon=0.2)
+        path = tmp_path / "online_reg.joblib"
+        reg.save(str(path))
+        loaded = ConformalMondrianTreeRegressor.load(str(path))
+        assert loaded.online is True
+        after = loaded.predict(X[70], epsilon=0.2)
+        np.testing.assert_allclose([before.lower, before.upper], [after.lower, after.upper])
+
+    def test_rejects_string_lifetime(self):
+        with pytest.raises(ValueError, match="fixed float lifetime"):
+            ConformalMondrianTreeRegressor(lifetime="density", online=True)
+
+    def test_rejects_max_depth(self):
+        with pytest.raises(ValueError, match="max_depth=None"):
+            ConformalMondrianTreeRegressor(max_depth=4, online=True)
+
+    @pytest.mark.slow
+    def test_coverage_tracks_epsilon(self):
+        errs = [_reg_stream_error(s, online=True) for s in range(12)]
+        assert 0.06 < float(np.mean(errs)) < 0.15  # ε = 0.1
+
+    @pytest.mark.slow
+    def test_coverage_matches_batch(self):
+        online = float(np.mean([_reg_stream_error(s, True) for s in range(8)]))
+        batch = float(np.mean([_reg_stream_error(s, False) for s in range(8)]))
+        assert abs(online - batch) < 0.04

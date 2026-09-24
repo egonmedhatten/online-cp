@@ -2478,9 +2478,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
     _SAVE_PARAMS: tuple = (
         "lifetime", "epsilon", "rnd_state", "verbose", "max_depth",
-        "feature_weights",
+        "feature_weights", "online",
     )
-    _SAVE_STATE: tuple = ("X", "y")
+    _SAVE_STATE: tuple = ("X", "y", "_online_tree")
 
     def __init__(
         self,
@@ -2490,6 +2490,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         verbose: int = 0,
         max_depth: int | None = None,
         feature_weights: str | NDArray | None = None,
+        online: bool = False,
     ) -> None:
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
@@ -2503,16 +2504,28 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 f"Unknown feature_weights string {feature_weights!r}. "
                 "Recognised value: 'variance'."
             )
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
         super().__init__(epsilon=epsilon)
         self.lifetime = lifetime
         self.feature_weights = feature_weights
         self.rnd_state = rnd_state
         self.verbose = verbose
         self.max_depth = max_depth
+        self.online = online
         self.X: NDArray | None = None
         self.y: NDArray | None = None
         self.rnd_gen = np.random.default_rng(rnd_state)
         self._last_tree = None
+        self._online_tree = None
 
     # ------------------------------------------------------------------
     # Training interface
@@ -2534,6 +2547,11 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             raise ValueError("X and y must have the same length")
         self.X = X.copy()
         self.y = y.copy()
+        if self.online:
+            self._online_tree = MondrianTree.grow(
+                self.X, self.rnd_gen,
+                lifetime=self.lifetime, feature_weights=self.feature_weights,
+            )
 
     def learn_one(
         self,
@@ -2556,28 +2574,34 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
         self.X = np.vstack([self.X, x])
         self.y = np.append(self.y, float(y))
+        if self.online:
+            self._online_tree = self._online_tree.extend(x, self.rnd_gen)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _build_augmented_tree(self, x: NDArray):
-        """Build one Mondrian tree from [X_train; x], return (tree, leaf_star, n)."""
-        X_aug = np.vstack([self.X, x.reshape(1, -1)])
-        n = self.X.shape[0]
-        x_test = X_aug[n]
+        """Build (batch) or extend (online) the partition on [X_train; x].
 
-        # Build the Mondrian partition from the augmented bag (unsupervised in X).
-        tree = MondrianTree.grow(
-            X_aug,
-            self.rnd_gen,
-            lifetime=self.lifetime,
-            x_test=x_test,
-            max_depth=self.max_depth,
-            feature_weights=self.feature_weights,
-            verbose=self.verbose,
-        ).root
-        leaf_star = _find_leaf(tree, x_test)
+        Returns ``(root, leaf_star, n)``.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self.X.shape[0]
+        if self.online:
+            tree = self._online_tree.extend(x, self.rnd_gen).root
+        else:
+            X_aug = np.vstack([self.X, x])
+            tree = MondrianTree.grow(
+                X_aug,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                x_test=x,
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
+        leaf_star = _find_leaf(tree, x)
         return tree, leaf_star, n
 
     def _leaf_ncms(self, tree: _MondrianNode, n_train: int, y_all: NDArray) -> NDArray:

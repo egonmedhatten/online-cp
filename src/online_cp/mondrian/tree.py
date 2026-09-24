@@ -33,7 +33,7 @@ References
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -256,6 +256,109 @@ def _sample_mondrian_tree(
     )
 
     return node
+
+
+def _extend_mondrian(
+    node: _MondrianNode,
+    x: NDArray,
+    x_idx: int,
+    rng: np.random.Generator,
+    lifetime: float,
+    feature_weights: NDArray | None = None,
+) -> _MondrianNode:
+    """Project a new point ``x`` into an existing Mondrian tree (ExtendMondrianBlock).
+
+    Returns the root of the *augmented* tree. This is a **functional** update: only
+    the O(depth) nodes on the path to ``x`` are freshly allocated (via
+    :func:`dataclasses.replace`); every off-path subtree is shared with *node*, and
+    *node* itself is never mutated. Callers therefore get a new tree that either
+    replaces the persistent one (``learn_one``) or can be scored and discarded
+    (transductive ``predict``) without touching the original.
+
+    The Mondrian process is projective (Roy & Teh 2009; Lakshminarayanan et al.
+    2014, Algorithm 3): the tree returned here has the same *law* as
+    :func:`_sample_mondrian_tree` grown in one batch on the augmented point set.
+    Only the standard (uncapped) process is projective, so this routine assumes a
+    fixed float ``lifetime``, no ``max_depth`` cap and ``min_samples_leaf == 1``.
+
+    Args:
+        node: Root of the tree to extend.
+        x: New point, shape ``(d,)``.
+        x_idx: Index assigned to ``x`` (its row in the caller's augmented ``X``).
+        rng: Random generator (advanced in place).
+        lifetime: The tree's lifetime budget.
+        feature_weights: Optional per-dimension split weights (must match the tree).
+
+    Returns:
+        Root of the augmented tree.
+    """
+    lower = node.lower_bounds
+    upper = node.upper_bounds
+    e_lower = np.maximum(lower - x, 0.0)
+    e_upper = np.maximum(x - upper, 0.0)
+    extent = e_lower + e_upper
+    weighted = feature_weights * extent if feature_weights is not None else extent
+    rate = float(weighted.sum())
+
+    exp_draw = rng.exponential(scale=1.0 / rate) if rate > 0 else np.inf
+    # A leaf has no split of its own; its box "survives" until the lifetime budget.
+    upper_time = node.split_time if not node.is_leaf() else lifetime
+
+    if node.parent_time + exp_draw < upper_time:
+        # Introduce a brand-new split *above* this node, carving x off from its box.
+        split_dim = int(rng.choice(len(x), p=weighted / rate))
+        if x[split_dim] > upper[split_dim]:
+            split_loc = float(rng.uniform(upper[split_dim], x[split_dim]))
+        else:
+            split_loc = float(rng.uniform(x[split_dim], lower[split_dim]))
+        new_time = node.parent_time + exp_draw
+
+        new_leaf = _MondrianNode(
+            split_dim=-1,
+            split_loc=np.nan,
+            split_time=new_time,
+            parent_time=new_time,
+            lower_bounds=x.copy(),
+            upper_bounds=x.copy(),
+            indices=np.array([x_idx]),
+            counts=None,
+        )
+        # The existing subtree is reborn at new_time; it keeps its original box
+        # (x lies outside it, in the sibling leaf).
+        existing = replace(node, parent_time=new_time)
+        if x[split_dim] <= split_loc:
+            left, right = new_leaf, existing
+        else:
+            left, right = existing, new_leaf
+
+        return _MondrianNode(
+            split_dim=split_dim,
+            split_loc=split_loc,
+            split_time=new_time,
+            parent_time=node.parent_time,
+            left=left,
+            right=right,
+            lower_bounds=np.minimum(lower, x),
+            upper_bounds=np.maximum(upper, x),
+            indices=None,
+            counts=None,
+        )
+
+    # No new split here: grow this node's box to include x and descend.
+    new_lower = np.minimum(lower, x)
+    new_upper = np.maximum(upper, x)
+    if node.is_leaf():
+        return replace(
+            node,
+            lower_bounds=new_lower,
+            upper_bounds=new_upper,
+            indices=np.append(node.indices, x_idx),
+        )
+    if x[node.split_dim] <= node.split_loc:
+        new_left = _extend_mondrian(node.left, x, x_idx, rng, lifetime, feature_weights)
+        return replace(node, lower_bounds=new_lower, upper_bounds=new_upper, left=new_left)
+    new_right = _extend_mondrian(node.right, x, x_idx, rng, lifetime, feature_weights)
+    return replace(node, lower_bounds=new_lower, upper_bounds=new_upper, right=new_right)
 
 
 def _find_leaf(node: _MondrianNode, x: NDArray) -> _MondrianNode:
@@ -1280,6 +1383,33 @@ class MondrianTree:
             feature_weights=fw_arr,
         )
         return cls(root, X, lifetime=lt_val, feature_weights=fw_arr)
+
+    def extend(self, x: NDArray, rng: np.random.Generator) -> MondrianTree:
+        """Return a new tree with ``x`` projected in (online ``ExtendMondrianBlock``).
+
+        The result has the same law as :meth:`grow` on the augmented point set
+        but costs only ``O(depth)`` (Roy & Teh 2009). This tree is left unchanged;
+        ``x`` is appended as the last row of the returned tree's ``X``.
+
+        Requires a fixed float ``lifetime`` (the projective regime); string
+        lifetimes are not supported online.
+        """
+        if not isinstance(self.lifetime, (int, float)):
+            raise ValueError(
+                "extend() requires a fixed float lifetime; got "
+                f"{self.lifetime!r}. String/auto-tuned lifetimes are batch-only."
+            )
+        x = np.asarray(x, dtype=float).ravel()
+        x_idx = self.X.shape[0]
+        new_root = _extend_mondrian(
+            self.root, x, x_idx, rng, float(self.lifetime), self.feature_weights
+        )
+        return MondrianTree(
+            new_root,
+            np.vstack([self.X, x]),
+            lifetime=self.lifetime,
+            feature_weights=self.feature_weights,
+        )
 
     def find_leaf(self, x: NDArray) -> _MondrianNode:
         """Return the leaf node whose cell contains ``x``."""

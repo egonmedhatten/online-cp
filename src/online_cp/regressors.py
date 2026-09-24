@@ -59,13 +59,11 @@ except ImportError:
 
 from online_cp.mondrian._inspection import _MondrianRegressorInspection
 from online_cp.mondrian.tree import (
+    MondrianTree,
     _build_tree_summary_reg,
     _collect_leaves,
     _find_leaf,
     _MondrianNode,
-    _resolve_feature_weights,
-    _resolve_lifetime,
-    _sample_mondrian_tree,
 )
 
 __all__ = [
@@ -2567,23 +2565,18 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         """Build one Mondrian tree from [X_train; x], return (tree, leaf_star, n)."""
         X_aug = np.vstack([self.X, x.reshape(1, -1)])
         n = self.X.shape[0]
-        n_total = n + 1
         x_test = X_aug[n]
 
-        # Resolve adaptive lifetime and feature weights (unsupervised; no labels used)
-        fw_arr = _resolve_feature_weights(X_aug, self.feature_weights)
-        lt_val  = _resolve_lifetime(X_aug, x_test, self.lifetime, self.rnd_gen, fw_arr)
-
-        tree = _sample_mondrian_tree(
-            self.rnd_gen,
+        # Build the Mondrian partition from the augmented bag (unsupervised in X).
+        tree = MondrianTree.grow(
             X_aug,
-            np.arange(n_total),
-            parent_time=0.0,
-            lifetime=lt_val,
-            verbose=self.verbose,
+            self.rnd_gen,
+            lifetime=self.lifetime,
+            x_test=x_test,
             max_depth=self.max_depth,
-            feature_weights=fw_arr,
-        )
+            feature_weights=self.feature_weights,
+            verbose=self.verbose,
+        ).root
         leaf_star = _find_leaf(tree, x_test)
         return tree, leaf_star, n
 
@@ -2982,7 +2975,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         self._last_seeds = seeds.copy()
         self._last_x = x.copy()
         _rng0 = np.random.default_rng(int(seeds[0]))
-        self._last_tree = _sample_mondrian_tree(_rng0, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+        self._last_tree = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
 
         results = Parallel(n_jobs=self.n_jobs)(
             delayed(_build_tree_summary_reg)(s, X_aug, self.y, n, self.lifetime, self.max_depth) for s in seeds
@@ -3095,10 +3088,9 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         if not (0 <= i < self.n_trees):
             raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
 
-        n = self.X.shape[0]
         X_aug = np.vstack([self.X, self._last_x])
         rng_i = np.random.default_rng(int(self._last_seeds[i]))
-        tree_i = _sample_mondrian_tree(rng_i, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+        tree_i = MondrianTree.grow(X_aug, rng_i, lifetime=self.lifetime, max_depth=self.max_depth).root
 
         view = ConformalMondrianTreeRegressor(
             lifetime=self.lifetime,
@@ -3148,7 +3140,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         self._last_seeds = seeds.copy()
         self._last_x = x.copy()
         _rng0 = np.random.default_rng(int(seeds[0]))
-        self._last_tree = _sample_mondrian_tree(_rng0, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+        self._last_tree = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
         summaries = Parallel(n_jobs=self.n_jobs)(
             delayed(_build_tree_summary_reg)(s, X_aug, self.y, n, self.lifetime, self.max_depth) for s in seeds
         )

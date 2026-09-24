@@ -61,13 +61,11 @@ except ImportError:
 
 from online_cp.mondrian._inspection import _MondrianClassifierInspection
 from online_cp.mondrian.tree import (
+    MondrianTree,
     _assign_counts,
     _build_tree_summary,
     _collect_leaves,
     _find_leaf,
-    _resolve_feature_weights,
-    _resolve_lifetime,
-    _sample_mondrian_tree,
 )
 
 __all__ = [
@@ -1734,22 +1732,16 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         n_total = n + 1
         K = len(self.label_space)
 
-        # Resolve adaptive lifetime and feature weights (unsupervised; no labels used)
-        fw_arr  = _resolve_feature_weights(X_aug, self.feature_weights)
-        lt_val  = _resolve_lifetime(X_aug, x, self.lifetime, self.rnd_gen, fw_arr)
-
-        # Build tree from augmented features
-        indices_all = np.arange(n_total)
-        tree = _sample_mondrian_tree(
-            self.rnd_gen,
+        # Build the Mondrian partition from the augmented bag (unsupervised in X).
+        tree = MondrianTree.grow(
             X_aug,
-            indices_all,
-            parent_time=0.0,
-            lifetime=lt_val,
-            verbose=self.verbose,
+            self.rnd_gen,
+            lifetime=self.lifetime,
+            x_test=x,
             max_depth=self.max_depth,
-            feature_weights=fw_arr,
-        )
+            feature_weights=self.feature_weights,
+            verbose=self.verbose,
+        ).root
 
         # Find leaf containing test point (index n in X_aug)
         leaf_star = _find_leaf(tree, X_aug[n])
@@ -1872,22 +1864,16 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         K = len(self.label_space)
         label_idx = self.label_to_idx[y]
 
-        # Resolve adaptive lifetime and feature weights (unsupervised; no labels used)
-        fw_arr  = _resolve_feature_weights(X_aug, self.feature_weights)
-        lt_val  = _resolve_lifetime(X_aug, X_aug[n], self.lifetime, self.rnd_gen, fw_arr)
-
-        # Build tree
-        indices_all = np.arange(n_total)
-        tree = _sample_mondrian_tree(
-            self.rnd_gen,
+        # Build the Mondrian partition from the augmented bag (unsupervised in X).
+        tree = MondrianTree.grow(
             X_aug,
-            indices_all,
-            parent_time=0.0,
-            lifetime=lt_val,
-            verbose=self.verbose,
+            self.rnd_gen,
+            lifetime=self.lifetime,
+            x_test=X_aug[n],
             max_depth=self.max_depth,
-            feature_weights=fw_arr,
-        )
+            feature_weights=self.feature_weights,
+            verbose=self.verbose,
+        ).root
 
         # Find leaf and assign training-only counts
         leaf_star = _find_leaf(tree, X_aug[n])
@@ -2166,7 +2152,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         X_aug = np.vstack([self.X, self._last_x])
         K = len(self.label_space)
         rng_i = np.random.default_rng(int(self._last_seeds[i]))
-        tree_i = _sample_mondrian_tree(rng_i, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+        tree_i = MondrianTree.grow(X_aug, rng_i, lifetime=self.lifetime, max_depth=self.max_depth).root
         _assign_counts(tree_i, self.y, self.label_to_idx, K, n_train=n)
 
         view = ConformalMondrianTreeClassifier(
@@ -2231,7 +2217,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         self._last_seeds = seeds.copy()
         self._last_x = x.copy()
         _rng0 = np.random.default_rng(int(seeds[0]))
-        _tree0 = _sample_mondrian_tree(_rng0, X_aug, np.arange(n_total), 0.0, self.lifetime, max_depth=self.max_depth)
+        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
         _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
         self._last_tree = _tree0
         tree_summaries = Parallel(n_jobs=self.n_jobs)(
@@ -2390,7 +2376,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         self._last_seeds = seeds.copy()
         self._last_x = x.copy()
         _rng0 = np.random.default_rng(int(seeds[0]))
-        _tree0 = _sample_mondrian_tree(_rng0, X_aug, np.arange(n_total), 0.0, self.lifetime, max_depth=self.max_depth)
+        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
         _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
         self._last_tree = _tree0
         tree_summaries = Parallel(n_jobs=self.n_jobs)(

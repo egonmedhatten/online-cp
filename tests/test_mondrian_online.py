@@ -218,3 +218,67 @@ class TestOnlineRegressor:
         online = float(np.mean([_reg_stream_error(s, True) for s in range(8)]))
         batch = float(np.mean([_reg_stream_error(s, False) for s in range(8)]))
         assert abs(online - batch) < 0.04
+
+
+class TestSingleOmegaReuse:
+    """The tree that ``predict`` scores must be the one ``learn_one`` persists.
+
+    Only then do the per-step partitions form a single nested Mondrian process
+    (one ``Ω``), which is what the online-validity proof relies on. Re-drawing a
+    fresh extension in ``learn_one`` would still be marginally valid but would
+    break that single-``Ω`` coupling.
+    """
+
+    def _reg(self):
+        r = np.random.default_rng(0)
+        X = r.uniform(-3, 3, (30, 2))
+        y = np.sin(X[:, 0]) + X[:, 1]
+        reg = ConformalMondrianTreeRegressor(lifetime=3.0, rnd_state=0, online=True)
+        reg.learn_initial_training_set(X[:20], y[:20])
+        return reg, X, y
+
+    def test_regressor_reuses_scored_tree_via_precomputed(self):
+        reg, X, y = self._reg()
+        _, pc = reg.predict(X[20], epsilon=0.2, return_update=True)
+        reg.learn_one(X[20], y[20], precomputed=pc)
+        assert reg._online_tree is pc["online_tree"]
+
+    def test_regressor_reuses_scored_tree_via_cache(self):
+        reg, X, y = self._reg()
+        _, pc = reg.predict(X[20], epsilon=0.2, return_update=True)
+        reg.learn_one(X[20], y[20])  # no precomputed → internal cache
+        assert reg._online_tree is pc["online_tree"]
+
+    def test_regressor_stale_extension_falls_back(self):
+        reg, X, y = self._reg()
+        _, pc = reg.predict(X[20], epsilon=0.2, return_update=True)
+        reg.learn_one(X[21], y[21])  # different point → must not reuse the stale tree
+        assert reg._online_tree is not pc["online_tree"]
+        assert np.array_equal(reg._online_tree.X[-1], X[21])
+
+    def _clf(self):
+        X, y = make_moons(n_samples=60, noise=0.3, random_state=0)
+        clf = ConformalMondrianTreeClassifier(
+            lifetime=3.0, label_space=np.array([0, 1]), rnd_state=0, online=True
+        )
+        clf.learn_initial_training_set(X[:40], y[:40])
+        return clf, X, y
+
+    def test_classifier_reuses_scored_tree_via_precomputed(self):
+        clf, X, y = self._clf()
+        _, pc = clf.predict(X[40], epsilon=0.1, return_update=True)
+        clf.learn_one(X[40], y[40], precomputed=pc)
+        assert clf._online_tree is pc["online_tree"]
+
+    def test_classifier_reuses_scored_tree_via_cache(self):
+        clf, X, y = self._clf()
+        _, pc = clf.predict(X[40], epsilon=0.1, return_update=True)
+        clf.learn_one(X[40], y[40])  # no precomputed → internal cache
+        assert clf._online_tree is pc["online_tree"]
+
+    def test_classifier_stale_extension_falls_back(self):
+        clf, X, y = self._clf()
+        _, pc = clf.predict(X[40], epsilon=0.1, return_update=True)
+        clf.learn_one(X[41], y[41])
+        assert clf._online_tree is not pc["online_tree"]
+        assert np.array_equal(clf._online_tree.X[-1], X[41])

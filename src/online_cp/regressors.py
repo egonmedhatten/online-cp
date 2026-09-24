@@ -2526,6 +2526,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         self.rnd_gen = np.random.default_rng(rnd_state)
         self._last_tree = None
         self._online_tree = None
+        self._pending_tree = None  # extension scored by the last predict (online)
 
     # ------------------------------------------------------------------
     # Training interface
@@ -2565,7 +2566,15 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         ----------
         x : array-like, shape (d,)
         y : float
-        precomputed : dict, optional — ignored (reserved for API compatibility)
+        precomputed : dict, optional
+            The update dict from ``predict(..., return_update=True)`` (or
+            ``compute_p_value(..., return_update=True)``) for this same ``x``.
+            In online mode, if it carries the extension that scored ``x`` the
+            persisted tree becomes that exact extension, so the realised stream
+            is a single consistent Mondrian process (exact online validity).
+            Without it — or if it is stale — a fresh ``extend`` is drawn (still
+            valid). The last ``predict`` is also cached, so the plain
+            ``predict(x)`` → ``learn_one(x, y)`` loop reuses it automatically.
         """
         x = np.asarray(x, dtype=float).ravel()
         if self.X is None:
@@ -2575,7 +2584,15 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         self.X = np.vstack([self.X, x])
         self.y = np.append(self.y, float(y))
         if self.online:
-            self._online_tree = self._online_tree.extend(x, self.rnd_gen)
+            cand = precomputed.get("online_tree") if precomputed else None
+            if not self._is_consistent_extension(cand, x):
+                cand = getattr(self, "_pending_tree", None)
+            self._pending_tree = None
+            self._online_tree = (
+                cand
+                if self._is_consistent_extension(cand, x)
+                else self._online_tree.extend(x, self.rnd_gen)
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -2584,13 +2601,21 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     def _build_augmented_tree(self, x: NDArray):
         """Build (batch) or extend (online) the partition on [X_train; x].
 
+        In online mode the extension is cached (``_pending_tree``) so a
+        subsequent ``learn_one`` on the same ``x`` can persist the very tree
+        that scored it — making the realised stream a single consistent
+        Mondrian process (see :meth:`learn_one`).
+
         Returns ``(root, leaf_star, n)``.
         """
         x = np.asarray(x, dtype=float).ravel()
         n = self.X.shape[0]
         if self.online:
-            tree = self._online_tree.extend(x, self.rnd_gen).root
+            ext_tree = self._online_tree.extend(x, self.rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
         else:
+            self._pending_tree = None
             X_aug = np.vstack([self.X, x])
             tree = MondrianTree.grow(
                 X_aug,
@@ -2603,6 +2628,20 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             ).root
         leaf_star = _find_leaf(tree, x)
         return tree, leaf_star, n
+
+    def _is_consistent_extension(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted online tree extended by exactly ``x``.
+
+        Guards reuse of a scored extension: it must have one more row than the
+        persisted tree and that row must be ``x`` — so a stale extension (the
+        base has advanced since it was scored) falls back to a fresh ``extend``.
+        """
+        return (
+            cand is not None
+            and self._online_tree is not None
+            and cand.X.shape[0] == self._online_tree.X.shape[0] + 1
+            and np.array_equal(cand.X[-1], np.asarray(x, dtype=float).ravel())
+        )
 
     def _outside_ncms_sorted(self, tree: _MondrianNode, leaf_star: _MondrianNode, n_train: int) -> NDArray:
         """Sorted nonconformity scores of all training points *outside* leaf_star.
@@ -2705,7 +2744,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         self._last_tree = tree
 
         if return_update:
-            return p_val, {"tree": tree, "leaf_star": leaf_star}
+            return p_val, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
         return p_val
 
     # ------------------------------------------------------------------
@@ -2756,7 +2795,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         if A == 0:
             result = self._make_result(epsilon, -np.inf, np.inf)
             if return_update:
-                return result, {"tree": tree, "leaf_star": leaf_star}
+                return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
             return result
 
         # ---- Collect knot points ----------------------------------------
@@ -2808,7 +2847,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             result = self._construct_Gamma(lo, hi, float(epsilon))
 
         if return_update:
-            return result, {"tree": tree, "leaf_star": leaf_star}
+            return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
         # Cache the tree for inspection utilities
         self._last_tree = tree
 

@@ -1643,6 +1643,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         self.rnd_gen = np.random.default_rng(rnd_state)
         self._last_tree = None
         self._online_tree = None
+        self._pending_tree = None  # extension scored by the last predict (online)
 
     def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
         """Batch training phase.
@@ -1689,7 +1690,14 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         Args:
             x: New feature vector (d,) or (1, d)
             y: New label (any hashable value in label_space)
-            precomputed: Optional dict from previous predict (not used here)
+            precomputed: Update dict from ``predict(..., return_update=True)`` (or
+                ``compute_p_value(..., return_update=True)``) for this same ``x``.
+                In online mode, if it carries the extension that scored ``x`` the
+                persisted tree becomes that exact extension, so the realised
+                stream is a single consistent Mondrian process (exact online
+                validity). Without it — or if it is stale — a fresh ``extend`` is
+                drawn. The last ``predict`` is also cached, so the plain
+                ``predict(x)`` → ``learn_one(x, y)`` loop reuses it automatically.
         """
         x = np.asarray(x).ravel()
 
@@ -1708,8 +1716,29 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         self.X = np.vstack([self.X, x])
         self.y = np.append(self.y, y)
         if self.online:
-            self._online_tree = self._online_tree.extend(x, self.rnd_gen)
+            cand = precomputed.get("online_tree") if precomputed else None
+            if not self._is_consistent_extension(cand, x):
+                cand = getattr(self, "_pending_tree", None)
+            self._pending_tree = None
+            self._online_tree = (
+                cand
+                if self._is_consistent_extension(cand, x)
+                else self._online_tree.extend(x, self.rnd_gen)
+            )
 
+    def _is_consistent_extension(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted online tree extended by exactly ``x``.
+
+        Guards reuse of a scored extension: a stale one (the base has advanced
+        since it was scored) fails the row-count/last-row check, so a fresh
+        ``extend`` is drawn instead.
+        """
+        return (
+            cand is not None
+            and self._online_tree is not None
+            and cand.X.shape[0] == self._online_tree.X.shape[0] + 1
+            and np.array_equal(cand.X[-1], np.asarray(x, dtype=float).ravel())
+        )
 
     def predict(
         self,
@@ -1755,8 +1784,11 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
         # Build the Mondrian partition from the augmented bag (unsupervised in X).
         if self.online:
-            tree = self._online_tree.extend(x, self.rnd_gen).root
+            ext_tree = self._online_tree.extend(x, self.rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
         else:
+            self._pending_tree = None
             tree = MondrianTree.grow(
                 X_aug,
                 self.rnd_gen,
@@ -1857,11 +1889,11 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
         # Handle return flags
         if return_update and return_p_values:
-            return result, p_values, {"tree": tree, "leaf_star": leaf_star}
+            return result, p_values, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
         elif return_p_values:
             return result, p_values
         elif return_update:
-            return result, {"tree": tree, "leaf_star": leaf_star}
+            return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
         else:
             return result
 
@@ -1890,8 +1922,11 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
         # Build the Mondrian partition from the augmented bag (unsupervised in X).
         if self.online:
-            tree = self._online_tree.extend(x, self.rnd_gen).root
+            ext_tree = self._online_tree.extend(x, self.rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
         else:
+            self._pending_tree = None
             tree = MondrianTree.grow(
                 X_aug,
                 self.rnd_gen,
@@ -1978,7 +2013,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         self._last_tree = tree
 
         if return_update:
-            return p_val, {"tree": tree, "leaf_star": leaf_star}
+            return p_val, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
         else:
             return p_val
 

@@ -2604,20 +2604,63 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         leaf_star = _find_leaf(tree, x)
         return tree, leaf_star, n
 
-    def _leaf_ncms(self, tree: _MondrianNode, n_train: int, y_all: NDArray) -> NDArray:
-        """Compute base NCMs for all n_train training points.
+    def _outside_ncms_sorted(self, tree: _MondrianNode, leaf_star: _MondrianNode, n_train: int) -> NDArray:
+        """Sorted nonconformity scores of all training points *outside* leaf_star.
 
-        Each training point i gets NCM = |y_i − μ_leaf_i|, where μ_leaf_i is
-        the mean of the *training* y-values in its leaf (test-point slot excluded).
+        These scores are independent of the candidate ``y`` (the test point only
+        affects its own leaf), so they are computed once per prediction — a
+        single O(n) tree traversal + O(n log n) sort — and then reused for every
+        candidate via binary search (see :meth:`_pvalues_at`).
         """
-        ncm = np.empty(n_train)
+        outside: list[NDArray] = []
         for leaf in _collect_leaves(tree):
+            if leaf is leaf_star:
+                continue
             train_idx = leaf.indices[leaf.indices < n_train]
             if len(train_idx) == 0:
                 continue
-            mu = y_all[train_idx].mean()
-            ncm[train_idx] = np.abs(y_all[train_idx] - mu)
-        return ncm
+            mu = self.y[train_idx].mean()
+            outside.append(np.abs(self.y[train_idx] - mu))
+        ext = np.concatenate(outside) if outside else np.empty(0)
+        ext.sort()
+        return ext
+
+    def _pvalues_at(
+        self,
+        y_grid: NDArray,
+        A: int,
+        B: float,
+        ext_sorted: NDArray,
+        y_star: NDArray,
+        n_train: int,
+        tau: float,
+    ) -> NDArray:
+        """Smoothed conformal p-values at candidate values ``y_grid`` (vectorised).
+
+        The candidate-independent ``ext_sorted`` scores are counted by binary
+        search (O(log n) per candidate); only the O(A) leaf-local scores are
+        recomputed per candidate. This makes the exact solver O(n log n) instead
+        of O(n^2). Numerically identical to evaluating the per-candidate p-value
+        directly.
+        """
+        y_grid = np.atleast_1d(np.asarray(y_grid, dtype=float))
+        ncm_test = np.abs(A * y_grid - B) / (A + 1)
+        _TOL = 1e-9
+        n_out = ext_sorted.size
+
+        right = np.searchsorted(ext_sorted, ncm_test + _TOL, side="right")
+        left = np.searchsorted(ext_sorted, ncm_test - _TOL, side="left")
+        gt = (n_out - right).astype(np.int64)
+        eq = (right - left).astype(np.int64)
+
+        if A > 0 and y_star.size > 0:
+            inside = np.abs((A + 1) * y_star[None, :] - B - y_grid[:, None]) / (A + 1)
+            d = inside - ncm_test[:, None]
+            gt = gt + np.sum(d > _TOL, axis=1)
+            eq = eq + np.sum(np.abs(d) <= _TOL, axis=1)
+
+        eq = eq + 1  # the test point always ties with itself
+        return (gt + tau * eq) / (n_train + 1)
 
     # ------------------------------------------------------------------
     # compute_p_value
@@ -2649,7 +2692,14 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         y_cand = float(y_cand)
         tree, leaf_star, _ = self._build_augmented_tree(x)
-        p_val = self._compute_p_value_from_tree(tree, leaf_star, n, y_cand)
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
+        A = len(leaf_star_train_idx)
+        B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
+        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+        p_val = float(
+            self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau)[0]
+        )
 
         # Cache the tree for inspection utilities
         self._last_tree = tree
@@ -2657,62 +2707,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         if return_update:
             return p_val, {"tree": tree, "leaf_star": leaf_star}
         return p_val
-
-    def _compute_p_value_from_tree(
-        self,
-        tree: _MondrianNode,
-        leaf_star: _MondrianNode,
-        n_train: int,
-        y_cand: float,
-        tau: float | None = None,
-    ) -> float:
-        """Core O(n) p-value computation given a pre-built tree.
-
-        Parameters
-        ----------
-        tau : float, optional
-            Fixed randomisation value for the smoothed p-value.  If None,
-            a fresh value is drawn from ``self.rnd_gen``.
-        """
-        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n_train]
-        A = len(leaf_star_train_idx)
-        B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
-
-        # Test NCM: |A·y - B| / (A+1)
-        ncm_test = abs(A * y_cand - B) / (A + 1)
-
-        # --- Outside leaf_star: base NCMs (fixed w.r.t. y_cand) --------
-        # Vectorised: collect per-leaf mean, then broadcast
-        outside_ncms: list[NDArray] = []
-        for leaf in _collect_leaves(tree):
-            train_idx = leaf.indices[leaf.indices < n_train]
-            if len(train_idx) == 0:
-                continue
-            # Skip leaf_star — handled below
-            if leaf is leaf_star:
-                continue
-            mu = self.y[train_idx].mean()
-            outside_ncms.append(np.abs(self.y[train_idx] - mu))
-        outside_arr = np.concatenate(outside_ncms) if outside_ncms else np.array([])
-
-        # --- Inside leaf_star: NCMs depend on y_cand -------------------
-        if A > 0:
-            y_star = self.y[leaf_star_train_idx]  # shape (A,)
-            inside_arr = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
-        else:
-            inside_arr = np.array([])
-
-        all_train_ncms = np.concatenate([outside_arr, inside_arr])
-
-        # Smoothed p-value
-        _TOL = 1e-9
-        diff = all_train_ncms - ncm_test
-        gt = int(np.sum(diff > _TOL))
-        eq = int(np.sum(np.abs(diff) <= _TOL))
-        eq += 1  # test point ties with itself
-        if tau is None:
-            tau = self.rnd_gen.uniform(0.0, 1.0)
-        return float((gt + tau * eq) / (n_train + 1))
 
     # ------------------------------------------------------------------
     # predict  (exact knot-point solver)
@@ -2766,22 +2760,17 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             return result
 
         # ---- Collect knot points ----------------------------------------
+        # The candidate-independent outside-leaf scores are computed once here
+        # and reused for the knots and for every p-value evaluation below.
+        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+
         # Outside-leaf_star points: ncm_i is fixed → rank changes when
         #   ncm_test(y) = ncm_i  ↔  y = (B ± ncm_i*(A+1)) / A
-        outside_ncms: list[NDArray] = []
-        for leaf in _collect_leaves(tree):
-            train_idx = leaf.indices[leaf.indices < n]
-            if len(train_idx) == 0 or leaf is leaf_star:
-                continue
-            mu = self.y[train_idx].mean()
-            outside_ncms.append(np.abs(self.y[train_idx] - mu))
-
         knots: list[float] = []
-        if outside_ncms:
-            ext_ncms = np.concatenate(outside_ncms)  # shape (n_out,)
+        if ext_sorted.size:
             fac = (A + 1) / A
-            knots.extend(((B / A) + fac * ext_ncms).tolist())
-            knots.extend(((B / A) - fac * ext_ncms).tolist())
+            knots.extend(((B / A) + fac * ext_sorted).tolist())
+            knots.extend(((B / A) - fac * ext_sorted).tolist())
 
         # Inside-leaf_star points:
         #   always: y_j
@@ -2810,7 +2799,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         # Evaluate every midpoint with the SAME tau so the p-value profile is
         # deterministic and the unimodal shape is preserved.
-        p_vals = np.array([self._compute_p_value_from_tree(tree, leaf_star, n, float(yc), tau=tau) for yc in midpoints])
+        p_vals = self._pvalues_at(midpoints, A, B, ext_sorted, y_star, n, tau)
 
         if hasattr(epsilon, "__iter__"):
             result = self._make_multi_result(epsilon, knots_arr, midpoints, p_vals)

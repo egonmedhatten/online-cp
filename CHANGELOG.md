@@ -7,10 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — targeting 0.3.1
+## [0.3.1] — 2026-09-24
  
 ### Added
  
+- **Mondrian trees & forests** (`online_cp`) — promoted the Mondrian process
+  predictors from development to production and reorganised them under a new
+  `online_cp.mondrian` subpackage.
+  - **`MondrianTree`** (`online_cp.mondrian`) — a standalone Mondrian partition
+    core: `grow(X, rng, lifetime, ...)`, `find_leaf`, `collect_leaves`,
+    `struct_stats`, `to_dataframe`, `draw` / `draw_partition`. Takes an external
+    RNG and is free of predictor-module dependencies. The partition is a bag
+    function (permutation-invariant); string lifetimes (`'sqrt_n'`, `'density'`)
+    grow a deterministic truncation of the master tree (Balog §2.3).
+  - **`ConformalMondrianTreeClassifier`, `ConformalMondrianForestClassifier`**
+    (`online_cp.classifiers`) — transductive conformal classifiers using
+    Leaf-Local Laplace Smoothing as the nonconformity measure.
+  - **`ConformalMondrianTreeRegressor`, `ConformalMondrianForestRegressor`**
+    (`online_cp.regressors`) — conformal regressors using the leaf-residual NCM;
+    the single tree solves the prediction interval exactly via an O(n)
+    knot-point solver.
+  - **`MondrianVennPredictor`** (`online_cp.venn`) — a Venn predictor using the
+    Mondrian leaf as the taxonomy category (bag function → Venn validity,
+    ALRW2 Thm 6.4); refactored onto `MondrianTree`.
+  - All six classes are exported from the top-level `online_cp` namespace and
+    documented under *API Reference → Mondrian Prediction*.
+  - The group-conditional wrappers `MondrianConformalClassifier` /
+    `MondrianConformalRegressor` moved from `online_cp/mondrian.py` to
+    `online_cp/mondrian/framework.py`; their public import path
+    (`from online_cp import ...`) is unchanged.
+  - Added property (permutation invariance) and adversarial (tie-break
+    order-invariance) tests for the Mondrian partition.
+
 - **Random Number Generation** — expanded `seed` and `rnd_state` arguments in regressors, classifiers, and betting strategies to accept `np.random.Generator` objects in addition to integer seeds.
 
 - **Optimistic-FTRL Barrier Legendre Martingale** (`online_cp.martingale`) —
@@ -34,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Ruff Linting** — fixed import sorting (I001) and loop variable binding (B023) issues in tests.
+- **Mondrian graphviz fallback** — `draw()` now degrades gracefully to the
+  matplotlib backend when the `graphviz` Python package is installed but the
+  system `dot` binary is missing, instead of crashing inside `dot`.
 - **GitHub Pages Deployment** — fixed docs workflow to properly create virtual environment, install dependencies, and deploy documentation.
 
 ---

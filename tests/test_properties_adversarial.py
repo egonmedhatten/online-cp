@@ -400,5 +400,44 @@ def test_oftrl_barrier_high_degree_stability():
     assert leancheck.check(prop_oftrl_barrier_high_degree_stability, max_tests=_TESTS_MED, silent=True)
 
 
+# A12 Mondrian tree classifier order-invariance on tie-rich data
+#     The Mondrian partition is a bag function of X (permutation-invariant), so
+#     the conformal p-values must not depend on training insertion order even
+#     when integer-valued features produce many ties at split candidates.
+#     Guard: seeded predictions are identical across any training-row permutation.
+
+_A12_RNG = np.random.default_rng(0)
+_A12_N = 12
+_A12_X = _A12_RNG.integers(0, 3, size=(_A12_N, 2)).astype(float)
+_A12_Y = (_A12_X[:, 0] > 1).astype(int)
+_A12_XQ = np.array([1.0, 2.0])
+
+
+def _fit_mtree_clf(order):
+    from online_cp.classifiers import ConformalMondrianTreeClassifier
+
+    clf = ConformalMondrianTreeClassifier(
+        lifetime=2.0, rnd_state=0, label_space=np.array([0, 1])
+    )
+    clf.learn_initial_training_set(_A12_X[order], _A12_Y[order])
+    return clf
+
+
+def prop_mondrian_tree_clf_order_invariant_ties(keys: list[int]) -> bool:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A12_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    ref = _fit_mtree_clf(list(range(_A12_N)))
+    out = _fit_mtree_clf(perm)
+    _, p_ref = ref.predict(_A12_XQ, epsilon=0.5, return_p_values=True)
+    _, p_out = out.predict(_A12_XQ, epsilon=0.5, return_p_values=True)
+    return all(bool(np.isclose(p_ref[k], p_out[k])) for k in p_ref)
+
+
+def test_mondrian_tree_clf_order_invariant_ties():
+    assert leancheck.check(
+        prop_mondrian_tree_clf_order_invariant_ties, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
 if __name__ == "__main__":
     leancheck.main(verbose=True, exit_on_failure=False)

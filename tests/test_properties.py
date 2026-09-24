@@ -921,5 +921,43 @@ def test_svd_components_orthonormal():
     assert leancheck.check(prop_svd_components_orthonormal, max_tests=_TESTS_MED, silent=True)
 
 
+# --------------------------------------------------------------------------- #
+# Property 24: Mondrian tree partition is permutation-invariant (bag function).#
+#                                                                             #
+# The Mondrian partition depends only on the bag of X-values, never on their  #
+# order. Growing on any row permutation (same RNG seed) must yield the same   #
+# leaf grouping of the original points — the bag-function requirement behind  #
+# conditional/Venn validity (ALRW2 Thm 6.4).                                  #
+# --------------------------------------------------------------------------- #
+
+_MND_RNG = np.random.default_rng(0)
+_MND_N, _MND_D = 12, 2
+_MND_X = _MND_RNG.uniform(0.0, 1.0, size=(_MND_N, _MND_D))
+
+
+def _mnd_leaf_groups(tree, index_map=None):
+    groups = []
+    for leaf in tree.collect_leaves():
+        idx = leaf.indices if index_map is None else index_map[leaf.indices]
+        groups.append(tuple(sorted(int(i) for i in idx)))
+    return sorted(groups)
+
+
+def prop_mondrian_partition_permutation_invariant(keys: list[int]) -> bool:
+    from online_cp.mondrian import MondrianTree
+
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_MND_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    base = MondrianTree.grow(_MND_X, np.random.default_rng(3), lifetime=2.0)
+    perm_tree = MondrianTree.grow(_MND_X[perm], np.random.default_rng(3), lifetime=2.0)
+    return _mnd_leaf_groups(base) == _mnd_leaf_groups(perm_tree, index_map=perm)
+
+
+def test_mondrian_partition_permutation_invariant():
+    assert leancheck.check(
+        prop_mondrian_partition_permutation_invariant, max_tests=_TESTS_MED, silent=True
+    )
+
+
 if __name__ == "__main__":
     leancheck.main(verbose=True, exit_on_failure=False)

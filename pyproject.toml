@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "online-cp"
-version = "0.3.0"
+version = "0.3.1"
 authors = [
 	{ name="Johan Hallberg Szabadváry", email="johan.hallberg.szabadvary@ju.se" },
 ]

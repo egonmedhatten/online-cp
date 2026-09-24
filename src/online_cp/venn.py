@@ -30,10 +30,13 @@ except ImportError:
         return lambda f: f
 
 
+from online_cp.mondrian.tree import MondrianTree
+
 __all__ = [
     "VennPredictor",
     "VennAbersPredictor",
     "NearestNeighboursVennPredictor",
+    "MondrianVennPredictor",
     "VennPrediction",
     "MulticlassVennPrediction",
     "log_loss_point",
@@ -325,7 +328,7 @@ class VennPredictor(SerializableMixin):
     Provides shared label-space management, the empty-training-set fallback,
     and the generic taxonomy → multiprobability prediction loop used by
     taxonomy-based Venn predictors (:class:`NearestNeighboursVennPredictor`,
-    :class:`~online_cp.venn_dev.MondrianVennPredictor`).
+    :class:`MondrianVennPredictor`).
 
     Subclasses must implement :meth:`learn_initial_training_set`,
     :meth:`learn_one`, and :meth:`predict`. Taxonomy-based subclasses should
@@ -1604,3 +1607,261 @@ class NearestNeighboursVennPredictor(VennPredictor):
             taxonomies[i] = np.sum(labels[nn_idx] == labels[i])
 
         return taxonomies
+
+
+# ---------------------------------------------------------------------------
+# Mondrian Venn predictor
+# ---------------------------------------------------------------------------
+
+
+class MondrianVennPredictor(VennPredictor):
+    """Online Venn predictor using the Mondrian tree partition as taxonomy.
+
+    Uses a Mondrian tree leaf as the Venn taxonomy category (ALRW2 §6.2).
+    At each call to ``predict(x)`` a single Mondrian tree is built from the
+    augmented dataset {X_train ∪ {x_test}}.  Each example is assigned to a
+    leaf; the multiprobability prediction is the empirical label distribution
+    within the test point's leaf.
+
+    The Mondrian partition depends only on X-values (bounding boxes), so the
+    same tree is reused for all hypothesised test labels v ∈ Y, making each
+    ``predict`` call build only one tree regardless of label-space size.
+    The partition is a bag function (permutation-invariant in the augmented
+    training set), guaranteeing exact Venn validity under exchangeability
+    (ALRW2 Thm 6.4).
+
+    Parameters
+    ----------
+    lifetime : float or {'sqrt_n', 'density'}
+        Mondrian time budget. Larger → more splits → smaller leaves.
+        Leaves are created when the cumulative split time exceeds ``lifetime``.
+        Default 1.0.
+
+        Can also be a string for unsupervised automatic tuning (only X is
+        used; labels are never accessed):
+
+        - ``'sqrt_n'``: halt when the leaf count drops to ≤ √n. Coarsens
+          the partition in sparse regions.
+        - ``'density'``: choose τ maximising the histogram log-likelihood
+          Σ_leaf n_leaf · log(n_leaf / V_leaf). Adapts to feature density.
+    max_depth : int or None
+        Hard depth cap on the tree. Nodes at depth >= max_depth become leaves
+        regardless of remaining ``lifetime``. None = no cap.
+    min_samples_leaf : int
+        Minimum number of points in each leaf. A split that would produce a
+        child with fewer than ``min_samples_leaf`` points is refused. Default 1
+        (no restriction; equivalent to the canonical Mondrian algorithm). Set
+        to 2 to eliminate singleton leaves and avoid extreme p0/p1 outputs.
+    label_space : array-like or None
+        Explicit set of possible labels. If None, inferred from training data.
+        When provided, the label space is fixed and labels outside it are
+        rejected.
+    rnd_state : int or None
+        Seed for the random generator used to build Mondrian trees. Predictions
+        are reproducible for a fixed seed and fixed call order.
+    feature_weights : {'variance'} or array-like of shape (d,) or None
+        Unsupervised feature importance for split dimension sampling. Labels
+        are never accessed.
+
+        - ``None`` (default): uniform — standard isotropic Mondrian.
+        - ``'variance'``: split probabilities ∝ population variance per
+          feature. High-variance dimensions are sampled more often.
+        - array of shape (d,): explicit non-negative weights (normalised
+          internally; need not sum to 1).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> np.random.seed(0)
+    >>> X = np.random.randn(40, 2)
+    >>> y = (X[:, 0] + X[:, 1] > 0).astype(int)
+    >>> mvp = MondrianVennPredictor(lifetime=1.0, rnd_state=42)
+    >>> mvp.learn_initial_training_set(X[:30], y[:30])
+    >>> pred = mvp.predict(X[30])
+    >>> bool(0.0 <= pred.p0 <= 1.0 and 0.0 <= pred.p1 <= 1.0)
+    True
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "lifetime", "max_depth", "min_samples_leaf", "label_space", "rnd_state",
+        "feature_weights",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "label_space", "_label_space_fixed")
+
+    def __init__(
+        self,
+        lifetime: float | str = 1.0,
+        max_depth: int | None = None,
+        min_samples_leaf: int = 1,
+        label_space=None,
+        rnd_state: int | None = None,
+        feature_weights: str | NDArray | None = None,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if not isinstance(min_samples_leaf, int) or min_samples_leaf < 1:
+            raise ValueError("min_samples_leaf must be a positive integer")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density'."
+            )
+        if isinstance(feature_weights, str) and feature_weights not in ("variance",):
+            raise ValueError(
+                f"Unknown feature_weights string {feature_weights!r}. "
+                "Recognised value: 'variance'."
+            )
+
+        super().__init__(label_space=label_space)
+
+        self.lifetime = lifetime
+        self.feature_weights = feature_weights
+        self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
+        self.rnd_state = rnd_state
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+
+    # ------------------------------------------------------------------
+    # Online learning interface
+    # ------------------------------------------------------------------
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialise with a training set.
+
+        Parameters
+        ----------
+        X : array-like, shape (n, d)
+            Training feature vectors.
+        y : array-like, shape (n,)
+            Integer class labels.
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=np.float64))
+        y = np.asarray(y, dtype=int)
+        self._update_label_space_batch(y)
+        self.X = X
+        self.y = y
+
+    def learn_one(self, x: NDArray, y: int) -> None:
+        """Incrementally add one labelled observation.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Feature vector.
+        y : int
+            True label.
+        """
+        x = np.asarray(x, dtype=np.float64).ravel()
+        y = int(y)
+        self._update_label_space_one(y)
+        if self.X is None:
+            self.X = x.reshape(1, -1)
+            self.y = np.array([y], dtype=int)
+        else:
+            self.X = np.vstack([self.X, x.reshape(1, -1)])
+            self.y = np.append(self.y, y)
+
+    # ------------------------------------------------------------------
+    # Mondrian taxonomy helpers
+    # ------------------------------------------------------------------
+
+    def _build_augmented_leaf_ids(self, x: NDArray) -> NDArray:
+        """Build one Mondrian tree from X_aug = [X_train; x] and return leaf IDs.
+
+        The leaf assignment is label-independent — the same tree is used for
+        all hypothesised test labels v, so we build it only once per
+        ``predict()`` call.
+
+        Uses ``leaf.indices`` stored on each leaf node (O(n) total, avoids
+        per-point tree traversals).
+
+        Parameters
+        ----------
+        x : ndarray, shape (d,)
+            Test feature vector (already flattened).
+
+        Returns
+        -------
+        leaf_ids : ndarray of int, shape (n+1,)
+            Integer leaf identifier for each point in the augmented bag.
+            Points sharing the same id belong to the same Mondrian leaf.
+        """
+        n = len(self.y)
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+
+        # Delegate partition construction to the standalone MondrianTree core.
+        # grow() resolves feature weights and (string) lifetimes and advances
+        # self.rnd_gen in the exact same order as the raw engine calls, so
+        # seeded predictions are unchanged.
+        tree = MondrianTree.grow(
+            X_aug,
+            self.rnd_gen,
+            lifetime=self.lifetime,
+            x_test=x,
+            max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            feature_weights=self.feature_weights,
+        )
+
+        # Assign leaf IDs from leaf.indices — O(n), no redundant tree walks.
+        leaves = tree.collect_leaves()
+        leaf_ids = np.empty(n + 1, dtype=np.intp)
+        for leaf_id, leaf in enumerate(leaves):
+            leaf_ids[leaf.indices] = leaf_id
+
+        return leaf_ids
+
+    def _categories_for_hypothesis(
+        self, taxonomy_data: Any, v: int
+    ) -> tuple:
+        """Return (leaf_ids, labels_aug, test_idx) for hypothesis y_test = v.
+
+        Parameters
+        ----------
+        taxonomy_data : ndarray, shape (n+1,)
+            Leaf IDs precomputed by :meth:`_build_augmented_leaf_ids`.
+        v : int
+            Hypothesised test label.
+
+        Returns
+        -------
+        leaf_ids : ndarray, shape (n+1,)
+        labels_aug : ndarray, shape (n+1,)
+        test_idx : int
+        """
+        leaf_ids = taxonomy_data
+        test_idx = len(self.y)
+        labels_aug = np.append(self.y, v)
+        return leaf_ids, labels_aug, test_idx
+
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
+    def predict(self, x: NDArray) -> VennPrediction:
+        """Produce a Venn multiprobability prediction.
+
+        Builds one Mondrian tree from the augmented dataset {X_train ∪ {x}},
+        assigns each point to a leaf, then computes empirical label frequencies
+        within the test point's leaf under each hypothesis v ∈ Y.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Test feature vector.
+
+        Returns
+        -------
+        VennPrediction
+            Binary: contains p0, p1. Multiclass: |Y|×|Y| probs matrix.
+        """
+        x = np.asarray(x, dtype=np.float64).ravel()
+
+        if self.X is None or len(self.y) == 0:
+            return self._empty_prediction()
+
+        leaf_ids = self._build_augmented_leaf_ids(x)
+        return self._venn_predict_from_taxonomy(leaf_ids)

@@ -45,13 +45,19 @@ Examples
 True
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from online_cp._serialization import (
     SerializationError as SerializationError,
 )
 from online_cp._serialization import (
     register_callable as register_callable,
+)
+from online_cp.classifiers import (
+    ConformalMondrianForestClassifier as ConformalMondrianForestClassifier,
+)
+from online_cp.classifiers import (
+    ConformalMondrianTreeClassifier as ConformalMondrianTreeClassifier,
 )
 from online_cp.classifiers import (
     ConformalNearestNeighboursClassifier as ConformalNearestNeighboursClassifier,
@@ -266,6 +272,9 @@ from online_cp.mondrian import (
 from online_cp.mondrian import (
     MondrianConformalRegressor as MondrianConformalRegressor,
 )
+from online_cp.mondrian import (
+    MondrianTree as MondrianTree,
+)
 from online_cp.pipeline import (
     Discard as Discard,
 )
@@ -330,6 +339,12 @@ from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,
 )
 from online_cp.regressors import (
+    ConformalMondrianForestRegressor as ConformalMondrianForestRegressor,
+)
+from online_cp.regressors import (
+    ConformalMondrianTreeRegressor as ConformalMondrianTreeRegressor,
+)
+from online_cp.regressors import (
     ConformalNearestNeighboursRegressor as ConformalNearestNeighboursRegressor,
 )
 from online_cp.regressors import (
@@ -337,6 +352,9 @@ from online_cp.regressors import (
 )
 from online_cp.regressors import (
     KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
+)
+from online_cp.venn import (
+    MondrianVennPredictor as MondrianVennPredictor,
 )
 from online_cp.venn import (
     MulticlassVennPrediction as MulticlassVennPrediction,

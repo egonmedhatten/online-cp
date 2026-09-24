@@ -41,6 +41,7 @@ except ImportError:
     from _serialization import SerializableMixin
 
 import numpy as np
+from joblib import Parallel, delayed
 from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
@@ -56,6 +57,21 @@ except ImportError:
         return lambda f: f
 
 
+from online_cp.mondrian.tree import (
+    _build_tree_summary_reg,
+    _collect_leaves,
+    _draw_partition,
+    _find_leaf,
+    _get_ax,
+    _iter_nodes,
+    _MondrianNode,
+    _render_tree,
+    _resolve_feature_weights,
+    _resolve_lifetime,
+    _sample_mondrian_tree,
+    _tree_struct_stats,
+)
+
 __all__ = [
     "ConformalRidgeRegressor",
     "ConformalNearestNeighboursRegressor",
@@ -63,6 +79,8 @@ __all__ = [
     "ConformalLassoRegressor",
     "ConformalPredictionInterval",
     "MultiLevelPredictionInterval",
+    "ConformalMondrianTreeRegressor",
+    "ConformalMondrianForestRegressor",
 ]
 
 
@@ -2397,3 +2415,1499 @@ class ConformalLassoRegressor(ConformalRegressor):
             else:
                 merged.append((a, b))
         return merged
+
+
+# ---------------------------------------------------------------------------
+# Mondrian tree / forest conformal regressors
+# ---------------------------------------------------------------------------
+
+
+class ConformalMondrianTreeRegressor(ConformalRegressor):
+    """Conformal predictor using a single Mondrian tree for regression.
+
+    A full (transductive) conformal predictor that rebuilds one Mondrian tree
+    at each prediction step from the augmented bag ``[X_train; x_test]``.
+    The nonconformity measure (NCM) is the absolute residual from the leaf mean:
+
+        α_i = |y_i − μ_leaf(x_i)|
+
+    where μ_leaf is the mean of **all** y-values (including the candidate) in
+    the leaf.  Because the mean is computed over the full augmented multiset
+    this is a valid bag function and the resulting conformal predictor has
+    exact, finite-sample validity (ALRW2 §2.2.9).
+
+    The prediction interval is computed **algebraically** via an O(n) knot-point
+    solver: the p-value p(y) is piecewise-constant between O(n) critical y-values
+    where NCM ranks change.  No grid search is needed.
+
+    Mathematical note
+    -----------------
+    Let A = number of training points in ``leaf_star`` and B = their y-sum.
+    Under candidate y:
+
+    * Test NCM:      ``|A·y − B| / (A+1)``        slope ±A/(A+1)
+    * Inside NCM_j:  ``|(A+1)·y_j − B − y| / (A+1)``  slope ∓1/(A+1)
+
+    Since A ≥ 1, the test NCM grows strictly faster than any inside NCM as
+    y → ±∞, so p(y) is unimodal (guaranteed contiguous interval).
+
+    Parameters
+    ----------
+    lifetime : float or {'sqrt_n', 'density'}
+        Mondrian tree depth budget L. Larger → more splits → smaller leaves.
+        Default 1.0.
+
+        Can also be a string for unsupervised automatic tuning (only X is
+        used; labels are never accessed):
+
+        - ``'sqrt_n'``: halt when the leaf count drops to ≤ √n.
+        - ``'density'``: choose τ maximising Σ_leaf n_leaf · log(n_leaf / V_leaf).
+    epsilon : float
+        Default significance level. Default 0.1.
+    rnd_state : int, optional
+        Seed for reproducibility.
+    verbose : int
+        Verbosity level (0 = silent).
+    max_depth : int or None
+        Hard depth cap. Nodes at depth >= max_depth become leaves regardless
+        of remaining lifetime. None = no cap.
+    feature_weights : {'variance'} or array-like of shape (d,) or None
+        Unsupervised feature importance for split dimension sampling. Labels
+        are never accessed.
+
+        - ``None`` (default): uniform — standard isotropic Mondrian.
+        - ``'variance'``: split probabilities ∝ population variance per
+          feature. High-variance dimensions are sampled more often.
+        - array of shape (d,): explicit non-negative weights (normalised
+          internally; need not sum to 1).
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "lifetime", "epsilon", "rnd_state", "verbose", "max_depth",
+        "feature_weights",
+    )
+    _SAVE_STATE: tuple = ("X", "y")
+
+    def __init__(
+        self,
+        lifetime: float | str = 1.0,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        max_depth: int | None = None,
+        feature_weights: str | NDArray | None = None,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density'."
+            )
+        if isinstance(feature_weights, str) and feature_weights not in ("variance",):
+            raise ValueError(
+                f"Unknown feature_weights string {feature_weights!r}. "
+                "Recognised value: 'variance'."
+            )
+        super().__init__(epsilon=epsilon)
+        self.lifetime = lifetime
+        self.feature_weights = feature_weights
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.max_depth = max_depth
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+        self._last_tree = None
+
+    # ------------------------------------------------------------------
+    # Training interface
+    # ------------------------------------------------------------------
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialize with training data.
+
+        Parameters
+        ----------
+        X : ndarray, shape (n, d)
+        y : ndarray, shape (n,)  — real-valued labels
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        y = np.asarray(y, dtype=float).ravel()
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have the same length")
+        self.X = X.copy()
+        self.y = y.copy()
+
+    def learn_one(
+        self,
+        x: NDArray,
+        y: float,
+        precomputed: dict | None = None,
+    ) -> None:
+        """Incrementally add one observation.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y : float
+        precomputed : dict, optional — ignored (reserved for API compatibility)
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, float(y))
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_augmented_tree(self, x: NDArray):
+        """Build one Mondrian tree from [X_train; x], return (tree, leaf_star, n)."""
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        n = self.X.shape[0]
+        n_total = n + 1
+        x_test = X_aug[n]
+
+        # Resolve adaptive lifetime and feature weights (unsupervised; no labels used)
+        fw_arr = _resolve_feature_weights(X_aug, self.feature_weights)
+        lt_val  = _resolve_lifetime(X_aug, x_test, self.lifetime, self.rnd_gen, fw_arr)
+
+        tree = _sample_mondrian_tree(
+            self.rnd_gen,
+            X_aug,
+            np.arange(n_total),
+            parent_time=0.0,
+            lifetime=lt_val,
+            verbose=self.verbose,
+            max_depth=self.max_depth,
+            feature_weights=fw_arr,
+        )
+        leaf_star = _find_leaf(tree, x_test)
+        return tree, leaf_star, n
+
+    def _leaf_ncms(self, tree: _MondrianNode, n_train: int, y_all: NDArray) -> NDArray:
+        """Compute base NCMs for all n_train training points.
+
+        Each training point i gets NCM = |y_i − μ_leaf_i|, where μ_leaf_i is
+        the mean of the *training* y-values in its leaf (test-point slot excluded).
+        """
+        ncm = np.empty(n_train)
+        for leaf in _collect_leaves(tree):
+            train_idx = leaf.indices[leaf.indices < n_train]
+            if len(train_idx) == 0:
+                continue
+            mu = y_all[train_idx].mean()
+            ncm[train_idx] = np.abs(y_all[train_idx] - mu)
+        return ncm
+
+    # ------------------------------------------------------------------
+    # compute_p_value
+    # ------------------------------------------------------------------
+
+    def compute_p_value(
+        self,
+        x: NDArray,
+        y_cand: float,
+        return_update: bool = False,
+    ) -> float | tuple[float, dict]:
+        """Compute conformal p-value for (x, y_cand).
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y_cand : float
+        return_update : bool
+            If True, also return a dict with tree info.
+
+        Returns
+        -------
+        float or (float, dict)
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            return (1.0, {}) if return_update else 1.0
+
+        y_cand = float(y_cand)
+        tree, leaf_star, _ = self._build_augmented_tree(x)
+        p_val = self._compute_p_value_from_tree(tree, leaf_star, n, y_cand)
+
+        # Cache the tree for inspection utilities
+        self._last_tree = tree
+
+        if return_update:
+            return p_val, {"tree": tree, "leaf_star": leaf_star}
+        return p_val
+
+    def _compute_p_value_from_tree(
+        self,
+        tree: _MondrianNode,
+        leaf_star: _MondrianNode,
+        n_train: int,
+        y_cand: float,
+        tau: float | None = None,
+    ) -> float:
+        """Core O(n) p-value computation given a pre-built tree.
+
+        Parameters
+        ----------
+        tau : float, optional
+            Fixed randomisation value for the smoothed p-value.  If None,
+            a fresh value is drawn from ``self.rnd_gen``.
+        """
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n_train]
+        A = len(leaf_star_train_idx)
+        B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
+
+        # Test NCM: |A·y - B| / (A+1)
+        ncm_test = abs(A * y_cand - B) / (A + 1)
+
+        # --- Outside leaf_star: base NCMs (fixed w.r.t. y_cand) --------
+        # Vectorised: collect per-leaf mean, then broadcast
+        outside_ncms: list[NDArray] = []
+        for leaf in _collect_leaves(tree):
+            train_idx = leaf.indices[leaf.indices < n_train]
+            if len(train_idx) == 0:
+                continue
+            # Skip leaf_star — handled below
+            if leaf is leaf_star:
+                continue
+            mu = self.y[train_idx].mean()
+            outside_ncms.append(np.abs(self.y[train_idx] - mu))
+        outside_arr = np.concatenate(outside_ncms) if outside_ncms else np.array([])
+
+        # --- Inside leaf_star: NCMs depend on y_cand -------------------
+        if A > 0:
+            y_star = self.y[leaf_star_train_idx]  # shape (A,)
+            inside_arr = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+        else:
+            inside_arr = np.array([])
+
+        all_train_ncms = np.concatenate([outside_arr, inside_arr])
+
+        # Smoothed p-value
+        _TOL = 1e-9
+        diff = all_train_ncms - ncm_test
+        gt = int(np.sum(diff > _TOL))
+        eq = int(np.sum(np.abs(diff) <= _TOL))
+        eq += 1  # test point ties with itself
+        if tau is None:
+            tau = self.rnd_gen.uniform(0.0, 1.0)
+        return float((gt + tau * eq) / (n_train + 1))
+
+    # ------------------------------------------------------------------
+    # predict  (exact knot-point solver)
+    # ------------------------------------------------------------------
+
+    @property
+    def summary(self) -> dict:
+        """Summary statistics of the regressor.
+
+        Returns
+        -------
+        dict
+            Contains: n_points, n_features, y_mean, y_std, lifetime, epsilon.
+            If a tree has been built (after predict() or compute_p_value()), also includes:
+            n_nodes, n_leaves, n_branches, height, total_observed_weight.
+        """
+        stats = {
+            "n_points": len(self.y) if self.y is not None else 0,
+            "n_features": self.X.shape[1] if self.X is not None else 0,
+            "y_mean": float(np.mean(self.y)) if self.y is not None and len(self.y) > 0 else None,
+            "y_std": float(np.std(self.y)) if self.y is not None and len(self.y) > 0 else None,
+            "lifetime": self.lifetime,
+            "epsilon": self.epsilon,
+        }
+        if self._last_tree is not None:
+            tree_stats = _tree_struct_stats(self._last_tree)
+            stats.update(tree_stats)
+            stats["total_observed_weight"] = len(self.y)
+        return stats
+
+    def to_dataframe(self):
+        """Export tree structure as a pandas DataFrame.
+
+        Returns a DataFrame with one row per node, including node ID, parent ID,
+        depth, split information, and leaf-specific data (mean/std for regressor).
+
+        Raises
+        ------
+        RuntimeError
+            If no tree has been built yet (call predict() first).
+
+        Returns
+        -------
+        pd.DataFrame
+            Tree structure with columns: node_id, parent_id, is_leaf, depth,
+            split_dim, split_loc, split_time, parent_time, bbox_lower, bbox_upper,
+            n_points, y_mean, and y_std (regressor only).
+        """
+        if self._last_tree is None:
+            raise RuntimeError(
+                "No tree has been built yet. Call predict() or compute_p_value() first."
+            )
+        import pandas as pd
+
+        rows = []
+        node_id_map = {}  # Map string node_id to integer
+        next_id = 0
+
+        for node, depth, parent_id_str, node_id_str in _iter_nodes(self._last_tree):
+            # Convert string node_id to integer
+            if node_id_str not in node_id_map:
+                node_id_map[node_id_str] = next_id
+                next_id += 1
+            node_id_int = node_id_map[node_id_str]
+
+            # Convert parent_id_str to integer
+            if parent_id_str is None:
+                parent_id_int = None
+            else:
+                if parent_id_str not in node_id_map:
+                    node_id_map[parent_id_str] = next_id
+                    next_id += 1
+                parent_id_int = node_id_map[parent_id_str]
+
+            bbox_lower = node.lower_bounds.tolist() if len(node.lower_bounds) > 0 else []
+            bbox_upper = node.upper_bounds.tolist() if len(node.upper_bounds) > 0 else []
+
+            row = {
+                "node_id": node_id_int,
+                "parent_id": parent_id_int,
+                "is_leaf": node.is_leaf(),
+                "depth": depth,
+                "split_dim": node.split_dim,
+                "split_loc": float(node.split_loc) if not node.is_leaf() else None,
+                "split_time": float(node.split_time) if not node.is_leaf() else None,
+                "parent_time": float(node.parent_time),
+                "bbox_lower": bbox_lower,
+                "bbox_upper": bbox_upper,
+                "n_points": node.n_points(),
+            }
+            if node.is_leaf() and node.indices is not None:
+                train_idx = node.indices[node.indices < len(self.y)]
+                if len(train_idx) > 0:
+                    y_leaf = self.y[train_idx]
+                    row["y_mean"] = float(np.mean(y_leaf))
+                    row["y_std"] = float(np.std(y_leaf))
+                else:
+                    row["y_mean"] = None
+                    row["y_std"] = None
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    def debug_one(self, x):
+        """Trace the path of a single example through a representative tree.
+
+        Builds a fresh representative tree (using a deterministic RNG seed)
+        and traces the feature vector through it, showing split decisions
+        and leaf information.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Feature vector to trace.
+
+        Returns
+        -------
+        str
+            Human-readable string showing the decision path and final leaf stats.
+
+        Notes
+        -----
+        This uses a representative tree sampled from the same distribution as
+        the tree in the last predict() call, NOT the exact tree itself.
+        This method does not affect the random state of the main RNG.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+
+        if self.X is None:
+            raise RuntimeError("Must call learn_initial_training_set first")
+
+        # Build a representative tree using a fixed seed
+        rng_debug = np.random.default_rng(self.rnd_state if self.rnd_state is not None else 0)
+        X_aug = np.vstack([self.X, x])
+        indices_all = np.arange(len(X_aug))
+        fw_debug = _resolve_feature_weights(X_aug, self.feature_weights)
+        lt_debug = _resolve_lifetime(X_aug, X_aug[-1], self.lifetime, rng_debug, fw_debug)
+        tree_repr = _sample_mondrian_tree(
+            rng_debug,
+            X_aug,
+            indices_all,
+            parent_time=0.0,
+            lifetime=lt_debug,
+            verbose=0,
+            max_depth=self.max_depth,
+            feature_weights=fw_debug,
+        )
+
+        # Trace the path
+        path_lines = []
+        current = tree_repr
+        depth = 0
+
+        while not current.is_leaf():
+            split_str = f"  {'  ' * depth}x[{current.split_dim}] <= {current.split_loc:.6f}"
+            if x[current.split_dim] <= current.split_loc:
+                path_lines.append(split_str + "  [TRUE → left]")
+                current = current.left
+            else:
+                path_lines.append(split_str + "  [FALSE → right]")
+                current = current.right
+            depth += 1
+
+        # Leaf info
+        leaf_str = f"  {'  ' * depth}LEAF: n_points={current.n_points()}"
+        if current.indices is not None:
+            train_idx = current.indices[current.indices < len(self.y)]
+            if len(train_idx) > 0:
+                y_leaf = self.y[train_idx]
+                leaf_str += f", y_mean={np.mean(y_leaf):.6f}, y_std={np.std(y_leaf):.6f}"
+        path_lines.append(leaf_str)
+
+        return "\n".join(path_lines)
+
+    def draw(self, ax=None, max_depth=None, backend="auto", **kwargs):
+        """Draw a node-link tree diagram of the last cached tree.
+
+        **Node types in the diagram**
+
+        - *Internal nodes* (orange): split decisions — ``x[i] ≤ threshold``.
+          Left branch follows ``≤``, right branch follows ``>``.
+        - *Leaf nodes* (blue): ``μ = v`` — the mean of training y-values in
+          this cell (the leaf's point prediction).  The second line shows
+          ``n=k  σ=s  CV=c``: count, standard deviation, and coefficient of
+          variation (σ/|μ|).  A small CV means a homogeneous leaf (tight
+          prediction intervals expected); a large CV means mixed y-values
+          (wide intervals expected).
+        - *"empty"* leaf: the Mondrian process created this rectangular
+          partition cell, but no training points landed in it.  This is
+          normal for small datasets or high lifetime values; such leaves
+          contribute a uniform conformal score that weakly widens intervals.
+
+        .. note::
+           The tree shown is the *augmented* tree built on ``{train ∪ x_test}``
+           during the most recent ``predict()`` or ``compute_p_value()`` call.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Target axes.  If ``None`` and the graphviz backend is active, a
+            :class:`graphviz.Digraph` is returned instead (renders as inline SVG
+            in Jupyter notebooks).
+        max_depth : int or None
+            Maximum depth to display (display-only; does not affect the model).
+        backend : {'auto', 'graphviz', 'matplotlib'}
+            Rendering backend.  ``'auto'`` (default) uses graphviz when available
+            and falls back to matplotlib.  ``'graphviz'`` raises
+            :class:`ImportError` with an install hint if the package is missing.
+            ``'matplotlib'`` forces the built-in renderer.
+            Install graphviz with ``pip install online-cp[viz]``.
+        **kwargs
+            Reserved for future style options.
+
+        Returns
+        -------
+        graphviz.Digraph or matplotlib.axes.Axes
+            A :class:`graphviz.Digraph` when graphviz is used and *ax* is
+            ``None``; otherwise a :class:`~matplotlib.axes.Axes`.
+
+        Raises
+        ------
+        RuntimeError
+            If no tree has been built yet.
+        """
+        if self._last_tree is None:
+            raise RuntimeError(
+                "No tree has been built yet. Call predict() or compute_p_value() first."
+            )
+
+        def label_fn(node, depth, *, collapsed=False):
+            n = node.n_points()
+            if node.is_leaf() or collapsed:
+                if n == 0:
+                    return "empty"
+                if node.indices is not None:
+                    train_idx = node.indices[node.indices < len(self.y)]
+                    if len(train_idx) > 0:
+                        mu = float(np.mean(self.y[train_idx]))
+                        sd = float(np.std(self.y[train_idx]))
+                        cv_str = f"  CV={sd/abs(mu):.2f}" if abs(mu) > 1e-9 else ""
+                        return f"μ = {mu:.3g}\nn={n}  σ={sd:.3g}{cv_str}"
+                return f"n={n}"
+            return f"x[{node.split_dim}] ≤\n{node.split_loc:.3g}"
+
+        return _render_tree(
+            self._last_tree, ax, label_fn, max_depth, backend,
+            title="Mondrian Tree (regressor)",
+        )
+
+    def draw_partition(self, ax=None, scatter=True, **kwargs):
+        """Draw the 2-D Mondrian box-partition of the last cached tree.
+
+        Each leaf is coloured by its training-point mean (``y_mean``).
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.
+        scatter : bool
+            If True (default), overlay training points coloured by their y value.
+        **kwargs
+            Currently unused; reserved for future style options.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+
+        Raises
+        ------
+        RuntimeError
+            If no tree has been built yet.
+        ValueError
+            If the number of features is not exactly 2.
+        """
+        if self._last_tree is None:
+            raise RuntimeError(
+                "No tree has been built yet. Call predict() or compute_p_value() first."
+            )
+        if self.X.shape[1] != 2:
+            raise ValueError(
+                f"draw_partition() requires exactly 2 features, got {self.X.shape[1]}. "
+                "The leaf bounding boxes only tile feature space exactly at d=2."
+            )
+        import matplotlib.cm as mcm
+        import matplotlib.colors as mcolors
+        import matplotlib.pyplot as plt
+
+        ax = _get_ax(ax)
+
+        y_min, y_max = float(self.y.min()), float(self.y.max())
+        norm = mcolors.Normalize(vmin=y_min, vmax=y_max)
+        cmap = mcm.get_cmap("coolwarm")
+
+        def leaf_color_fn(leaf):
+            if leaf.indices is None:
+                return "#cccccc"
+            train_idx = leaf.indices[leaf.indices < len(self.y)]
+            if len(train_idx) == 0:
+                return "#cccccc"
+            mu = float(np.mean(self.y[train_idx]))
+            return cmap(norm(mu))
+
+        scatter_X = self.X if scatter else None
+        scatter_y = self.y if scatter else None
+        _draw_partition(
+            self._last_tree, self.X, ax, leaf_color_fn,
+            scatter_X=scatter_X, scatter_y=scatter_y, scatter_cmap="coolwarm",
+        )
+
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        plt.colorbar(sm, ax=ax, label="y mean")
+        ax.set_xlabel("x[0]")
+        ax.set_ylabel("x[1]")
+        ax.set_title("Mondrian Partition (regressor)", fontsize=9)
+        return ax
+
+
+
+    def predict(
+        self,
+        x: NDArray,
+        epsilon: float | NDArray | None = None,
+        return_update: bool = False,
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple:
+        """Predict a conformal interval for test object x.
+
+        Uses an exact O(n) algebraic knot-point solver.  No grid search.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        epsilon : float or array-like, optional
+            Significance level(s).  Defaults to ``self.epsilon``.
+        return_update : bool
+            If True, return ``(interval, update_dict)`` for ``learn_one``.
+
+        Returns
+        -------
+        ConformalPredictionInterval or MultiLevelPredictionInterval
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        n = self._safe_size_check(self.X)
+        _inf_interval = self._construct_Gamma(-np.inf, np.inf, epsilon)
+
+        if n == 0:
+            if return_update:
+                return _inf_interval, {}
+            return _inf_interval
+
+        tree, leaf_star, _ = self._build_augmented_tree(x)
+
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
+        A = len(leaf_star_train_idx)
+        B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
+
+        # ---- A = 0: empty leaf → total epistemic uncertainty -----------
+        if A == 0:
+            result = self._make_result(epsilon, -np.inf, np.inf)
+            if return_update:
+                return result, {"tree": tree, "leaf_star": leaf_star}
+            return result
+
+        # ---- Collect knot points ----------------------------------------
+        # Outside-leaf_star points: ncm_i is fixed → rank changes when
+        #   ncm_test(y) = ncm_i  ↔  y = (B ± ncm_i*(A+1)) / A
+        outside_ncms: list[NDArray] = []
+        for leaf in _collect_leaves(tree):
+            train_idx = leaf.indices[leaf.indices < n]
+            if len(train_idx) == 0 or leaf is leaf_star:
+                continue
+            mu = self.y[train_idx].mean()
+            outside_ncms.append(np.abs(self.y[train_idx] - mu))
+
+        knots: list[float] = []
+        if outside_ncms:
+            ext_ncms = np.concatenate(outside_ncms)  # shape (n_out,)
+            fac = (A + 1) / A
+            knots.extend(((B / A) + fac * ext_ncms).tolist())
+            knots.extend(((B / A) - fac * ext_ncms).tolist())
+
+        # Inside-leaf_star points:
+        #   always: y_j
+        #   if A > 1: (2B − (A+1)*y_j) / (A−1)
+        y_star = self.y[leaf_star_train_idx]
+        knots.extend(y_star.tolist())
+        if A > 1:
+            knots.extend(((2.0 * B - (A + 1) * y_star) / (A - 1)).tolist())
+
+        # Sort and de-duplicate
+        knots_arr = np.unique(np.array(knots, dtype=float))
+
+        # ---- Evaluate p-value at midpoints between consecutive knots ----
+        # Draw ONE tau for the entire predict call so that the piecewise-constant
+        # p(y) function is evaluated consistently (fixed-tau conformal predictor).
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+
+        _MARGIN = max(abs(knots_arr[0]), abs(knots_arr[-1]), 1.0) * 10.0
+        midpoints = np.concatenate(
+            [
+                [knots_arr[0] - _MARGIN],
+                (knots_arr[:-1] + knots_arr[1:]) / 2.0,
+                [knots_arr[-1] + _MARGIN],
+            ]
+        )
+
+        # Evaluate every midpoint with the SAME tau so the p-value profile is
+        # deterministic and the unimodal shape is preserved.
+        p_vals = np.array([self._compute_p_value_from_tree(tree, leaf_star, n, float(yc), tau=tau) for yc in midpoints])
+
+        if hasattr(epsilon, "__iter__"):
+            result = self._make_multi_result(epsilon, knots_arr, midpoints, p_vals)
+        else:
+            lo, hi = self._extract_interval(knots_arr, midpoints, p_vals, float(epsilon))
+            result = self._construct_Gamma(lo, hi, float(epsilon))
+
+        if return_update:
+            return result, {"tree": tree, "leaf_star": leaf_star}
+        # Cache the tree for inspection utilities
+        self._last_tree = tree
+
+        return result
+
+    @staticmethod
+    def _extract_interval(
+        knots: NDArray,
+        midpoints: NDArray,
+        p_vals: NDArray,
+        epsilon: float,
+    ) -> tuple[float, float]:
+        """Return (lower, upper) convex hull of valid region.
+
+        The prediction set is {y : p(y) > epsilon} (ALRW2 convention).
+        """
+        threshold = epsilon
+        valid = p_vals > threshold
+        if not np.any(valid):
+            # No candidate passes — return degenerate interval at peak
+            mid = midpoints[np.argmax(p_vals)]
+            return mid, mid
+        # Knot boundaries: the valid midpoints index into intervals between knots.
+        # Interval i spans [knots[i-1], knots[i]] with midpoint midpoints[i].
+        # midpoints[0] < knots[0] → left-open interval, midpoints[-1] > knots[-1] → right-open.
+        valid_idx = np.where(valid)[0]
+        lo_idx = valid_idx[0]
+        hi_idx = valid_idx[-1]
+        # Lower bound: left edge of first valid segment
+        lo = -np.inf if lo_idx == 0 else float(knots[lo_idx - 1])
+        # Upper bound: right edge of last valid segment
+        hi = np.inf if hi_idx == len(knots) else float(knots[hi_idx])
+        return lo, hi
+
+    def _make_result(self, epsilon, lo: float, hi: float):
+        """Construct ConformalPredictionInterval or MultiLevelPredictionInterval."""
+        if hasattr(epsilon, "__iter__"):
+            return MultiLevelPredictionInterval(
+                {float(eps): self._construct_Gamma(lo, hi, float(eps)) for eps in epsilon}
+            )
+        return self._construct_Gamma(lo, hi, float(epsilon))
+
+    def _make_multi_result(
+        self,
+        epsilon,
+        knots: NDArray,
+        midpoints: NDArray,
+        p_vals: NDArray,
+    ):
+        predictions = {}
+        for eps in epsilon:
+            lo, hi = self._extract_interval(knots, midpoints, p_vals, float(eps))
+            predictions[float(eps)] = self._construct_Gamma(lo, hi, float(eps))
+        return MultiLevelPredictionInterval(predictions)
+
+
+class ConformalMondrianForestRegressor(ConformalRegressor):
+    """Conformal predictor using an ensemble of Mondrian trees for regression.
+
+    Builds T Mondrian trees per prediction step from the same augmented bag
+    with different seeds. The per-tree NCMs are averaged to give a single
+    smoothed NCM per point, reducing variance while maintaining exact validity.
+
+        α_i = (1/T) Σ_t |y_i − μ_{leaf_t(x_i)}|
+
+    The prediction interval is found via a grid-and-bisection search since
+    averaged NCMs do not yield algebraically tractable knot points.
+
+    Parameters
+    ----------
+    n_trees : int
+        Number of Mondrian trees. Default 10.
+    lifetime : float
+        Mondrian depth budget L. Default 1.0.
+    epsilon : float
+        Default significance level. Default 0.1.
+    rnd_state : int, optional
+        Seed for the root RNG (each tree gets a derived seed).
+    verbose : int
+        Verbosity level (0 = silent).
+    n_jobs : int
+        Number of parallel workers for tree construction. Default 1.
+    grid_resolution : int
+        Number of grid points for the initial interval search. Default 200.
+    bisection_tol : float
+        Convergence tolerance for bisection refinement. Default 1e-6.
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "n_trees", "lifetime", "epsilon", "rnd_state", "verbose",
+        "n_jobs", "grid_resolution", "bisection_tol", "max_depth",
+    )
+    _SAVE_STATE: tuple = ("X", "y")
+
+    def __init__(
+        self,
+        n_trees: int = 10,
+        lifetime: float = 1.0,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        n_jobs: int = 1,
+        grid_resolution: int = 200,
+        bisection_tol: float = 1e-6,
+        max_depth: int | None = None,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        super().__init__(epsilon=epsilon)
+        self.n_trees = n_trees
+        self.lifetime = lifetime
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.n_jobs = n_jobs
+        self.grid_resolution = grid_resolution
+        self.bisection_tol = bisection_tol
+        self.max_depth = max_depth
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+        self._last_tree = None
+        self._last_seeds = None
+        self._last_x = None
+
+    # ------------------------------------------------------------------
+    # Training interface
+    # ------------------------------------------------------------------
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialize with training data."""
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        y = np.asarray(y, dtype=float).ravel()
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have the same length")
+        self.X = X.copy()
+        self.y = y.copy()
+
+    def learn_one(
+        self,
+        x: NDArray,
+        y: float,
+        precomputed: dict | None = None,
+    ) -> None:
+        """Incrementally add one observation."""
+        x = np.asarray(x, dtype=float).ravel()
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, float(y))
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _tree_seeds(self) -> NDArray:
+        """Generate n_trees integer seeds from the root RNG."""
+        return self.rnd_gen.integers(0, 2**31 - 1, size=self.n_trees)
+
+    def _compute_avg_ncms(self, x: NDArray, y_cand: float) -> tuple[NDArray, float]:
+        """Compute averaged NCMs for all training points + test point.
+
+        Returns
+        -------
+        avg_train_ncms : ndarray, shape (n,)
+            Averaged NCM for each training point.
+        avg_test_ncm : float
+            Averaged NCM for the test point.
+        """
+        n = self.X.shape[0]
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        seeds = self._tree_seeds()
+        # Cache seeds + test point for __getitem__ and representative-tree viz
+        self._last_seeds = seeds.copy()
+        self._last_x = x.copy()
+        _rng0 = np.random.default_rng(int(seeds[0]))
+        self._last_tree = _sample_mondrian_tree(_rng0, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+
+        results = Parallel(n_jobs=self.n_jobs)(
+            delayed(_build_tree_summary_reg)(s, X_aug, self.y, n, self.lifetime, self.max_depth) for s in seeds
+        )
+
+        # Accumulate per-tree NCMs
+        # base_ncm[i] = |y_i - mu_leaf_i| (training-only mean)
+        # For test point: ncm_test = |A*y_cand - B| / (A+1)
+        # For inside points j: ncm_j = |(A+1)*y_j - B - y_cand| / (A+1)
+        sum_train_ncms = np.zeros(n, dtype=float)
+        sum_test_ncm = 0.0
+
+        for base_ncm, ls_train_idx, ls_mu_train in results:
+            A = len(ls_train_idx)
+            B = ls_mu_train * A if A > 0 else 0.0
+
+            # Test NCM for this tree
+            test_ncm_t = abs(A * y_cand - B) / (A + 1)
+            sum_test_ncm += test_ncm_t
+
+            # Training NCMs: start from base, override leaf_star
+            ncm_t = base_ncm.copy()
+            if A > 0:
+                y_star = self.y[ls_train_idx]
+                ncm_t[ls_train_idx] = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+
+            sum_train_ncms += ncm_t
+
+        T = float(self.n_trees)
+        return sum_train_ncms / T, sum_test_ncm / T
+
+    # ------------------------------------------------------------------
+    # compute_p_value
+    # ------------------------------------------------------------------
+
+    def compute_p_value(
+        self,
+        x: NDArray,
+        y_cand: float,
+        return_update: bool = False,
+    ) -> float | tuple[float, dict]:
+        """Compute conformal p-value for (x, y_cand).
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y_cand : float
+        return_update : bool
+
+        Returns
+        -------
+        float or (float, dict)
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            return (1.0, {}) if return_update else 1.0
+
+        avg_train_ncms, avg_test_ncm = self._compute_avg_ncms(x, float(y_cand))
+
+        all_ncms = np.append(avg_train_ncms, avg_test_ncm)
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+        p_val = float(self._compute_p_value(all_ncms, tau=tau))
+
+        if return_update:
+            return p_val, {}
+        return p_val
+
+    # ------------------------------------------------------------------
+    # predict  (grid + bisection)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Forest indexing
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        """Number of trees in the forest."""
+        return self.n_trees
+
+    def __iter__(self):
+        """Iterate over individual tree views."""
+        for i in range(self.n_trees):
+            yield self[i]
+
+    def __getitem__(self, i: int) -> ConformalMondrianTreeRegressor:
+        """Return a single-tree view for tree ``i`` from the last predict/compute_p_value call.
+
+        The returned object is a :class:`ConformalMondrianTreeRegressor` whose
+        ``_last_tree`` is the exact i-th tree from the last call, enabling all
+        T1/T2 inspection and visualisation methods. Its own ``predict()`` would
+        rebuild a fresh tree — this object is intended for *inspection only*.
+
+        Parameters
+        ----------
+        i : int
+            Tree index, ``0 <= i < n_trees``.
+
+        Raises
+        ------
+        RuntimeError
+            If ``predict()`` or ``compute_p_value()`` has not been called yet.
+        IndexError
+            If ``i`` is out of range.
+        """
+        if self._last_seeds is None:
+            raise RuntimeError(
+                "No trees cached. Call predict() or compute_p_value() first."
+            )
+        if not (0 <= i < self.n_trees):
+            raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
+
+        n = self.X.shape[0]
+        X_aug = np.vstack([self.X, self._last_x])
+        rng_i = np.random.default_rng(int(self._last_seeds[i]))
+        tree_i = _sample_mondrian_tree(rng_i, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+
+        view = ConformalMondrianTreeRegressor(
+            lifetime=self.lifetime,
+            epsilon=self.epsilon,
+            max_depth=self.max_depth,
+        )
+        view.X = self.X
+        view.y = self.y
+        view._last_tree = tree_i
+        return view
+
+    @property
+    def summary(self) -> dict:
+        """Summary statistics of the forest.
+
+        Returns
+        -------
+        dict
+            Contains: n_points, n_features, y_mean, y_std, lifetime, epsilon, n_trees.
+            If a tree has been built (after predict() or compute_p_value()), also includes
+            stats from the last cached tree: n_nodes, n_leaves, n_branches, height.
+        """
+        stats = {
+            "n_points": len(self.y) if self.y is not None else 0,
+            "n_features": self.X.shape[1] if self.X is not None else 0,
+            "y_mean": float(np.mean(self.y)) if self.y is not None and len(self.y) > 0 else None,
+            "y_std": float(np.std(self.y)) if self.y is not None and len(self.y) > 0 else None,
+            "lifetime": self.lifetime,
+            "epsilon": self.epsilon,
+            "n_trees": self.n_trees,
+        }
+        if self._last_tree is not None:
+            tree_stats = _tree_struct_stats(self._last_tree)
+            stats.update(tree_stats)
+            stats["total_observed_weight"] = len(self.y)
+        return stats
+
+    def to_dataframe(self):
+        """Export the last tree structure as a pandas DataFrame.
+
+        Returns a DataFrame with one row per node from the last cached tree,
+        including node ID, parent ID, depth, split information, and leaf-specific
+        data (mean/std for regressor).
+
+        Raises
+        ------
+        RuntimeError
+            If no tree has been built yet (call predict() first).
+
+        Returns
+        -------
+        pd.DataFrame
+            Tree structure with columns: node_id, parent_id, is_leaf, depth,
+            split_dim, split_loc, split_time, parent_time, bbox_lower, bbox_upper,
+            n_points, y_mean, and y_std (regressor only).
+        """
+        if self._last_tree is None:
+            raise RuntimeError(
+                "No tree has been built yet. Call predict() or compute_p_value() first."
+            )
+        import pandas as pd
+
+        rows = []
+        node_id_map = {}  # Map string node_id to integer
+        next_id = 0
+
+        for node, depth, parent_id_str, node_id_str in _iter_nodes(self._last_tree):
+            # Convert string node_id to integer
+            if node_id_str not in node_id_map:
+                node_id_map[node_id_str] = next_id
+                next_id += 1
+            node_id_int = node_id_map[node_id_str]
+
+            # Convert parent_id_str to integer
+            if parent_id_str is None:
+                parent_id_int = None
+            else:
+                if parent_id_str not in node_id_map:
+                    node_id_map[parent_id_str] = next_id
+                    next_id += 1
+                parent_id_int = node_id_map[parent_id_str]
+
+            bbox_lower = node.lower_bounds.tolist() if len(node.lower_bounds) > 0 else []
+            bbox_upper = node.upper_bounds.tolist() if len(node.upper_bounds) > 0 else []
+
+            row = {
+                "node_id": node_id_int,
+                "parent_id": parent_id_int,
+                "is_leaf": node.is_leaf(),
+                "depth": depth,
+                "split_dim": node.split_dim,
+                "split_loc": float(node.split_loc) if not node.is_leaf() else None,
+                "split_time": float(node.split_time) if not node.is_leaf() else None,
+                "parent_time": float(node.parent_time),
+                "bbox_lower": bbox_lower,
+                "bbox_upper": bbox_upper,
+                "n_points": node.n_points(),
+            }
+            if node.is_leaf() and node.indices is not None:
+                train_idx = node.indices[node.indices < len(self.y)]
+                if len(train_idx) > 0:
+                    y_leaf = self.y[train_idx]
+                    row["y_mean"] = float(np.mean(y_leaf))
+                    row["y_std"] = float(np.std(y_leaf))
+                else:
+                    row["y_mean"] = None
+                    row["y_std"] = None
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    def debug_one(self, x):
+        """Trace the path of a single example through a representative tree from the forest.
+
+        Builds a fresh representative tree (using a deterministic RNG seed)
+        and traces the feature vector through it, showing split decisions
+        and leaf information.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+            Feature vector to trace.
+
+        Returns
+        -------
+        str
+            Human-readable string showing the decision path and final leaf stats.
+
+        Notes
+        -----
+        This uses a representative tree sampled from the same distribution as
+        the forest, NOT the exact tree from the ensemble.
+        This method does not affect the random state of the main RNG.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+
+        if self.X is None:
+            raise RuntimeError("Must call learn_initial_training_set first")
+
+        # Build a representative tree using a fixed seed
+        rng_debug = np.random.default_rng(self.rnd_state if self.rnd_state is not None else 0)
+        X_aug = np.vstack([self.X, x])
+        indices_all = np.arange(len(X_aug))
+        tree_repr = _sample_mondrian_tree(
+            rng_debug,
+            X_aug,
+            indices_all,
+            parent_time=0.0,
+            lifetime=self.lifetime,
+            verbose=0,
+            max_depth=self.max_depth,
+        )
+
+        # Trace the path
+        path_lines = []
+        current = tree_repr
+        depth = 0
+
+        while not current.is_leaf():
+            split_str = f"  {'  ' * depth}x[{current.split_dim}] <= {current.split_loc:.6f}"
+            if x[current.split_dim] <= current.split_loc:
+                path_lines.append(split_str + "  [TRUE → left]")
+                current = current.left
+            else:
+                path_lines.append(split_str + "  [FALSE → right]")
+                current = current.right
+            depth += 1
+
+        # Leaf info
+        leaf_str = f"  {'  ' * depth}LEAF: n_points={current.n_points()}"
+        if current.indices is not None:
+            train_idx = current.indices[current.indices < len(self.y)]
+            if len(train_idx) > 0:
+                y_leaf = self.y[train_idx]
+                leaf_str += f", y_mean={np.mean(y_leaf):.6f}, y_std={np.std(y_leaf):.6f}"
+        path_lines.append(leaf_str)
+
+        return "\n".join(path_lines)
+
+    def draw(self, ax=None, max_depth=None, backend="auto", **kwargs):
+        """Draw a node-link tree diagram of the last cached tree.
+
+        **Node types in the diagram**
+
+        - *Internal nodes* (orange): split decisions — ``x[i] ≤ threshold``.
+          Left branch follows ``≤``, right branch follows ``>``.
+        - *Leaf nodes* (blue): ``μ = v`` — the mean of training y-values in
+          this cell (the leaf's point prediction).  The second line shows
+          ``n=k  σ=s  CV=c``: count, standard deviation, and coefficient of
+          variation (σ/|μ|).  A small CV means a homogeneous leaf (tight
+          prediction intervals expected); a large CV means mixed y-values
+          (wide intervals expected).
+        - *"empty"* leaf: the Mondrian process created this rectangular
+          partition cell, but no training points landed in it.  This is
+          normal for small datasets or high lifetime values; such leaves
+          contribute a uniform conformal score that weakly widens intervals.
+
+        .. note::
+           The tree shown is the *augmented* tree built on ``{train ∪ x_test}``
+           during the most recent ``predict()`` or ``compute_p_value()`` call.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Target axes.  If ``None`` and the graphviz backend is active, a
+            :class:`graphviz.Digraph` is returned instead (renders as inline SVG
+            in Jupyter notebooks).
+        max_depth : int or None
+            Maximum depth to display (display-only; does not affect the model).
+        backend : {'auto', 'graphviz', 'matplotlib'}
+            Rendering backend.  ``'auto'`` (default) uses graphviz when available
+            and falls back to matplotlib.  ``'graphviz'`` raises
+            :class:`ImportError` with an install hint if the package is missing.
+            ``'matplotlib'`` forces the built-in renderer.
+            Install graphviz with ``pip install online-cp[viz]``.
+        **kwargs
+            Reserved for future style options.
+
+        Returns
+        -------
+        graphviz.Digraph or matplotlib.axes.Axes
+            A :class:`graphviz.Digraph` when graphviz is used and *ax* is
+            ``None``; otherwise a :class:`~matplotlib.axes.Axes`.
+
+        Raises
+        ------
+        RuntimeError
+            If no tree has been built yet.
+        """
+        if self._last_tree is None:
+            raise RuntimeError(
+                "No tree has been built yet. Call predict() or compute_p_value() first."
+            )
+
+        def label_fn(node, depth, *, collapsed=False):
+            n = node.n_points()
+            if node.is_leaf() or collapsed:
+                if n == 0:
+                    return "empty"
+                if node.indices is not None:
+                    train_idx = node.indices[node.indices < len(self.y)]
+                    if len(train_idx) > 0:
+                        mu = float(np.mean(self.y[train_idx]))
+                        sd = float(np.std(self.y[train_idx]))
+                        cv_str = f"  CV={sd/abs(mu):.2f}" if abs(mu) > 1e-9 else ""
+                        return f"μ = {mu:.3g}\nn={n}  σ={sd:.3g}{cv_str}"
+                return f"n={n}"
+            return f"x[{node.split_dim}] ≤\n{node.split_loc:.3g}"
+
+        return _render_tree(
+            self._last_tree, ax, label_fn, max_depth, backend,
+            title="Mondrian Tree (regressor)",
+        )
+
+    def draw_partition(self, ax=None, scatter=True, **kwargs):
+        """Draw the 2-D Mondrian box-partition of the last cached tree.
+
+        Each leaf is coloured by its training-point mean (``y_mean``).
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.
+        scatter : bool
+            If True (default), overlay training points coloured by their y value.
+        **kwargs
+            Currently unused; reserved for future style options.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+
+        Raises
+        ------
+        RuntimeError
+            If no tree has been built yet.
+        ValueError
+            If the number of features is not exactly 2.
+        """
+        if self._last_tree is None:
+            raise RuntimeError(
+                "No tree has been built yet. Call predict() or compute_p_value() first."
+            )
+        if self.X.shape[1] != 2:
+            raise ValueError(
+                f"draw_partition() requires exactly 2 features, got {self.X.shape[1]}. "
+                "The leaf bounding boxes only tile feature space exactly at d=2."
+            )
+        import matplotlib.cm as mcm
+        import matplotlib.colors as mcolors
+        import matplotlib.pyplot as plt
+
+        ax = _get_ax(ax)
+
+        y_min, y_max = float(self.y.min()), float(self.y.max())
+        norm = mcolors.Normalize(vmin=y_min, vmax=y_max)
+        cmap = mcm.get_cmap("coolwarm")
+
+        def leaf_color_fn(leaf):
+            if leaf.indices is None:
+                return "#cccccc"
+            train_idx = leaf.indices[leaf.indices < len(self.y)]
+            if len(train_idx) == 0:
+                return "#cccccc"
+            mu = float(np.mean(self.y[train_idx]))
+            return cmap(norm(mu))
+
+        scatter_X = self.X if scatter else None
+        scatter_y = self.y if scatter else None
+        _draw_partition(
+            self._last_tree, self.X, ax, leaf_color_fn,
+            scatter_X=scatter_X, scatter_y=scatter_y, scatter_cmap="coolwarm",
+        )
+
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        plt.colorbar(sm, ax=ax, label="y mean")
+        ax.set_xlabel("x[0]")
+        ax.set_ylabel("x[1]")
+        ax.set_title("Mondrian Partition (regressor)", fontsize=9)
+        return ax
+
+
+    def predict(
+        self,
+        x: NDArray,
+        epsilon: float | NDArray | None = None,
+        return_update: bool = False,
+    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple:
+        """Predict a conformal interval for test object x.
+
+        Uses a grid search followed by bisection to locate p-value crossings.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        epsilon : float or array-like, optional
+        return_update : bool
+
+        Returns
+        -------
+        ConformalPredictionInterval or MultiLevelPredictionInterval
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            result = self._make_result(epsilon, -np.inf, np.inf)
+            if return_update:
+                return result, {}
+            return result
+
+        # ---- Build all T trees ONCE ------------------------------------
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        seeds = self._tree_seeds()
+        # Cache seeds + test point for __getitem__ and representative-tree viz
+        self._last_seeds = seeds.copy()
+        self._last_x = x.copy()
+        _rng0 = np.random.default_rng(int(seeds[0]))
+        self._last_tree = _sample_mondrian_tree(_rng0, X_aug, np.arange(n + 1), 0.0, self.lifetime, max_depth=self.max_depth)
+        summaries = Parallel(n_jobs=self.n_jobs)(
+            delayed(_build_tree_summary_reg)(s, X_aug, self.y, n, self.lifetime, self.max_depth) for s in seeds
+        )
+
+        T = float(self.n_trees)
+        _TOL = 1e-9
+        # Draw ONE tau for the entire predict call (fixed-tau conformal predictor)
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+
+        def p_value_at(y_cand: float) -> float:
+            """Evaluate p(y_cand) using pre-built tree summaries and fixed tau."""
+            sum_train = np.zeros(n, dtype=float)
+            sum_test = 0.0
+            for base_ncm, ls_idx, ls_mu in summaries:
+                A = len(ls_idx)
+                B = ls_mu * A if A > 0 else 0.0
+                test_t = abs(A * y_cand - B) / (A + 1)
+                sum_test += test_t
+                ncm_t = base_ncm.copy()
+                if A > 0:
+                    y_star = self.y[ls_idx]
+                    ncm_t[ls_idx] = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+                sum_train += ncm_t
+            avg_train = sum_train / T
+            avg_test = sum_test / T
+            alpha_y = avg_test
+            gt = int(np.sum(avg_train > alpha_y + _TOL))
+            eq = int(np.sum(np.abs(avg_train - alpha_y) <= _TOL)) + 1  # +1 for test
+            return float((gt + tau * eq) / (n + 1))
+
+        # ---- Define search range ----------------------------------------
+        y_min, y_max = self.y.min(), self.y.max()
+        span = max(y_max - y_min, 1.0)
+        lo_bound = y_min - 2.0 * span
+        hi_bound = y_max + 2.0 * span
+
+        # ---- Grid evaluation (all with the same tau) --------------------
+        grid = np.linspace(lo_bound, hi_bound, self.grid_resolution)
+        grid_p = np.array([p_value_at(float(yc)) for yc in grid])
+
+        tol = self.bisection_tol
+
+        def bisect_left(y_out: float, y_in: float, threshold: float) -> float:
+            """Find crossing from outside→inside (y increases into valid region)."""
+            for _ in range(60):
+                if y_in - y_out < tol:
+                    break
+                mid = (y_out + y_in) / 2.0
+                if p_value_at(mid) > threshold:
+                    y_in = mid
+                else:
+                    y_out = mid
+            return (y_out + y_in) / 2.0
+
+        def bisect_right(y_in: float, y_out: float, threshold: float) -> float:
+            """Find crossing from inside→outside (y increases out of valid region)."""
+            for _ in range(60):
+                if y_out - y_in < tol:
+                    break
+                mid = (y_in + y_out) / 2.0
+                if p_value_at(mid) > threshold:
+                    y_in = mid
+                else:
+                    y_out = mid
+            return (y_in + y_out) / 2.0
+
+        def _interval_for_eps(eps_val: float) -> tuple[float, float]:
+            # Prediction set is {y : p(y) > epsilon} (ALRW2 convention)
+            threshold = eps_val
+            valid = grid_p > threshold
+
+            # Check if interval extends beyond grid boundaries
+            p_far_left = p_value_at(lo_bound - 10.0 * span)
+            p_far_right = p_value_at(hi_bound + 10.0 * span)
+
+            left_inf = p_far_left > threshold
+            right_inf = p_far_right > threshold
+
+            if not np.any(valid) and not left_inf and not right_inf:
+                # No valid region found — return degenerate interval at peak
+                mid = float(grid[np.argmax(grid_p)])
+                return mid, mid
+
+            valid_idx = np.where(valid)[0]
+
+            # Lower bound
+            if left_inf:
+                lo = -np.inf
+            elif len(valid_idx) == 0 or valid_idx[0] == 0:
+                # Valid starts at or before grid left edge — bisect outward
+                if grid_p[0] > threshold:
+                    lo = bisect_left(lo_bound - 10.0 * span, lo_bound, threshold)
+                else:
+                    lo = lo_bound  # best we can do without more probing
+            else:
+                lo = bisect_left(grid[valid_idx[0] - 1], grid[valid_idx[0]], threshold)
+
+            # Upper bound
+            if right_inf:
+                hi = np.inf
+            elif len(valid_idx) == 0 or valid_idx[-1] == len(grid) - 1:
+                if grid_p[-1] > threshold:
+                    hi = bisect_right(hi_bound, hi_bound + 10.0 * span, threshold)
+                else:
+                    hi = hi_bound
+            else:
+                hi = bisect_right(grid[valid_idx[-1]], grid[valid_idx[-1] + 1], threshold)
+
+            return lo, hi
+
+        eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+        if len(eps_arr) == 1 and not hasattr(epsilon, "__iter__"):
+            lo, hi = _interval_for_eps(float(eps_arr[0]))
+            result = self._construct_Gamma(lo, hi, float(eps_arr[0]))
+        else:
+            predictions = {}
+            for eps_val in eps_arr:
+                lo, hi = _interval_for_eps(float(eps_val))
+                predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+            result = MultiLevelPredictionInterval(predictions)
+
+        if return_update:
+            return result, {}
+        return result
+
+    @staticmethod
+    def _make_result(epsilon, lo: float, hi: float):
+        if hasattr(epsilon, "__iter__"):
+            return MultiLevelPredictionInterval(
+                {float(eps): ConformalPredictionInterval(lo, hi, float(eps)) for eps in epsilon}
+            )
+        return ConformalPredictionInterval(lo, hi, float(epsilon))

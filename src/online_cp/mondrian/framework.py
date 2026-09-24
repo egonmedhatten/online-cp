@@ -34,31 +34,16 @@ from typing import Any, Callable
 import numpy as np
 from numpy.typing import NDArray
 
-try:
-    from ._serialization import SerializableMixin
-except ImportError:
-    from _serialization import SerializableMixin
-
-try:
-    from .regressors import (
-        ConformalLassoRegressor,
-        ConformalPredictionInterval,
-        ConformalRegressor,
-        ConformalRidgeRegressor,
-        KernelConformalRidgeRegressor,
-        MultiLevelPredictionInterval,
-        _solve_lasso,
-    )
-except ImportError:
-    from regressors import (
-        ConformalLassoRegressor,
-        ConformalPredictionInterval,
-        ConformalRegressor,
-        ConformalRidgeRegressor,
-        KernelConformalRidgeRegressor,
-        MultiLevelPredictionInterval,
-        _solve_lasso,
-    )
+from online_cp._serialization import SerializableMixin
+from online_cp.regressors import (
+    ConformalLassoRegressor,
+    ConformalPredictionInterval,
+    ConformalRegressor,
+    ConformalRidgeRegressor,
+    KernelConformalRidgeRegressor,
+    MultiLevelPredictionInterval,
+    _solve_lasso,
+)
 
 __all__ = ["MondrianConformalRegressor", "MondrianConformalClassifier"]
 

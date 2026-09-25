@@ -1899,7 +1899,7 @@ class TestTreeVisualization:
         result.render(svg_path, format="svg", cleanup=True)
         svg_file = svg_path + ".svg"
         assert os.path.exists(svg_file)
-        with open(svg_file, "r") as f:
+        with open(svg_file) as f:
             content = f.read()
         # SVG should contain vector elements
         assert "<svg" in content or "<g>" in content
@@ -1923,7 +1923,7 @@ class TestTreeVisualization:
         svg_path = str(tmp_path / "tree_mpl.svg")
         ax.figure.savefig(svg_path, format="svg", dpi=300, bbox_inches="tight")
         assert os.path.exists(svg_path)
-        with open(svg_path, "r") as f:
+        with open(svg_path) as f:
             content = f.read()
         assert "<svg" in content
 

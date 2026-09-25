@@ -515,6 +515,7 @@ def _draw_tree(
     ax,
     node_label_fn,
     max_depth: int | None = None,
+    dpi: int = 150,
 ) -> None:
     """Draw a node-link tree diagram on *ax*.
 
@@ -528,8 +529,17 @@ def _draw_tree(
         ``node_label_fn(node, depth) -> str`` producing the label for each node.
     max_depth : int or None
         If given, collapse subtrees below this depth into leaf-like nodes.
-    """
+    dpi : int
+        Display DPI for rendering quality. Higher values produce sharper text
+        and lines (default 150 for high-resolution output).
 
+    Notes
+    -----
+    For publication-quality vector output, save the figure with ``bbox_inches='tight'``::
+
+        >>> ax = clf.draw(backend="matplotlib")  # doctest: +SKIP
+        >>> ax.figure.savefig("tree.svg", dpi=300, bbox_inches="tight")  # doctest: +SKIP
+    """
     positions = _node_x_positions(tree, max_depth=max_depth)
 
     def _draw_node(n: _MondrianNode, depth: int) -> None:
@@ -560,6 +570,9 @@ def _draw_tree(
 
     _draw_node(tree, 0)
     ax.axis("off")
+    # Set high DPI for better quality rendering
+    if hasattr(ax, 'figure'):
+        ax.figure.dpi = dpi
 
 
 def _partition_cells(node: _MondrianNode, lower: NDArray, upper: NDArray):
@@ -1069,6 +1082,7 @@ def _render_tree(
     max_depth: int | None,
     backend: str,
     title: str,
+    dpi: int = 150,
 ):
     """Render a Mondrian tree diagram using the chosen *backend*.
 
@@ -1098,6 +1112,20 @@ def _render_tree(
     graphviz.Digraph or matplotlib.axes.Axes
         Returns a :class:`graphviz.Digraph` when graphviz is used and *ax* is
         ``None``; otherwise returns the target :class:`~matplotlib.axes.Axes`.
+
+    Notes
+    -----
+    For publication-quality vector output with the graphviz backend, call
+    ``draw(backend="graphviz")`` with no ``ax`` argument to get a
+    :class:`graphviz.Digraph`, then use its ``.render()`` method (vector
+    output via SVG/PDF)::
+
+        >>> dg = clf.draw(backend="graphviz")  # doctest: +SKIP
+        >>> dg.render("mytree", format="svg", cleanup=True)  # doctest: +SKIP
+
+    When an ``ax`` is provided with the graphviz backend, the tree is embedded
+    as a raster image which may appear blurry when saved. For vector output
+    inside subplots, use ``backend="matplotlib"`` instead.
     """
     if backend == "graphviz":
         if not _has_graphviz():
@@ -1127,6 +1155,8 @@ def _render_tree(
 
         import matplotlib.image as mpimg
 
+        # Set DPI via graph attributes for higher resolution output
+        dg.attr(dpi=str(dpi))
         png_bytes = dg.pipe(format="png")
         img = mpimg.imread(io.BytesIO(png_bytes))
         ax = _get_ax(ax)
@@ -1136,7 +1166,7 @@ def _render_tree(
 
     # ---- matplotlib fallback ----
     ax = _get_ax(ax)
-    _draw_tree(tree, ax, node_label_fn, max_depth=max_depth)
+    _draw_tree(tree, ax, node_label_fn, max_depth=max_depth, dpi=dpi)
     ax.set_title(title, fontsize=9)
     return ax
 
@@ -1508,6 +1538,22 @@ class MondrianTree:
         See :meth:`ConformalMondrianTreeClassifier.draw
         <online_cp.classifiers.ConformalMondrianTreeClassifier.draw>` for the
         backend semantics. Uses a structural label (split test / leaf size).
+
+        Notes
+        -----
+        For publication-quality vector output:
+
+        * **Graphviz** (when ``ax=None``): Returns a :class:`graphviz.Digraph`
+          which can be saved as SVG/PDF without quality loss::
+
+              >>> dg = tree.draw(backend="graphviz")  # doctest: +SKIP
+              >>> dg.render("mytree", format="svg", cleanup=True)  # doctest: +SKIP
+
+        * **Matplotlib**: Use ``backend="matplotlib"`` and save with
+          ``bbox_inches='tight'``::
+
+              >>> ax = tree.draw(backend="matplotlib")  # doctest: +SKIP
+              >>> ax.figure.savefig("tree.svg", dpi=300, bbox_inches="tight")  # doctest: +SKIP
         """
         def label_fn(node, depth, *, collapsed=False):
             if node.is_leaf() or collapsed:

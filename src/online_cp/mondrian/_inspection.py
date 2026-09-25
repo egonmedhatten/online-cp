@@ -199,6 +199,26 @@ class _MondrianInspectionMixin:
         ------
         RuntimeError
             If no tree has been built yet.
+
+        Notes
+        -----
+        For publication-quality vector output:
+
+        * **Graphviz** (when ``ax=None``): Returns a :class:`graphviz.Digraph`
+          which can be saved as SVG/PDF without quality loss::
+
+              >>> dg = clf.draw(backend="graphviz")  # doctest: +SKIP
+              >>> dg.render("mytree", format="svg", cleanup=True)  # doctest: +SKIP
+
+        * **Matplotlib**: Use ``backend="matplotlib"`` and save with
+          ``bbox_inches='tight'``::
+
+              >>> ax = clf.draw(backend="matplotlib")  # doctest: +SKIP
+              >>> ax.figure.savefig("tree.svg", dpi=300, bbox_inches="tight")  # doctest: +SKIP
+
+        When an ``ax`` is provided with the graphviz backend, the tree is
+        embedded as a raster image which may appear blurry when saved. For
+        vector output inside subplots, use ``backend="matplotlib"`` instead.
         """
         self._require_tree()
 

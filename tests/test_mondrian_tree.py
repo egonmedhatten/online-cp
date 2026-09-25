@@ -8,6 +8,8 @@ Comprehensive test suite covering:
 - Edge cases (single point, empty predictions, etc.)
 """
 
+import os
+
 import numpy as np
 import pytest
 from sklearn.datasets import load_iris, make_blobs
@@ -1888,6 +1890,42 @@ class TestTreeVisualization:
         result = fitted_clf.draw(ax=ax, backend="graphviz")
         assert isinstance(result, matplotlib.axes.Axes)
         plt.close("all")
+
+    @pytest.mark.skipif(not _has_graphviz(), reason="graphviz not installed")
+    def test_graphviz_digraph_can_render_svg(self, fitted_clf, tmp_path):
+        """Graphviz Digraph can be rendered to SVG (vector format)."""
+        result = fitted_clf.draw(backend="graphviz")
+        svg_path = str(tmp_path / "test_tree")
+        result.render(svg_path, format="svg", cleanup=True)
+        svg_file = svg_path + ".svg"
+        assert os.path.exists(svg_file)
+        with open(svg_file, "r") as f:
+            content = f.read()
+        # SVG should contain vector elements
+        assert "<svg" in content or "<g>" in content
+
+    @pytest.mark.skipif(not _has_graphviz(), reason="graphviz not installed")
+    def test_graphviz_digraph_can_render_pdf(self, fitted_clf, tmp_path):
+        """Graphviz Digraph can be rendered to PDF (vector format)."""
+        result = fitted_clf.draw(backend="graphviz")
+        pdf_path = str(tmp_path / "test_tree")
+        result.render(pdf_path, format="pdf", cleanup=True)
+        pdf_file = pdf_path + ".pdf"
+        assert os.path.exists(pdf_file)
+        with open(pdf_file, "rb") as f:
+            header = f.read(4)
+        # PDF files start with %PDF
+        assert header == b"%PDF"
+
+    def test_matplotlib_draw_can_save_svg(self, fitted_clf, tmp_path):
+        """Matplotlib backend produces vector SVG output when saved."""
+        ax = fitted_clf.draw(backend="matplotlib")
+        svg_path = str(tmp_path / "tree_mpl.svg")
+        ax.figure.savefig(svg_path, format="svg", dpi=300, bbox_inches="tight")
+        assert os.path.exists(svg_path)
+        with open(svg_path, "r") as f:
+            content = f.read()
+        assert "<svg" in content
 
 
 # ===========================================================================

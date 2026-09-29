@@ -4,6 +4,7 @@ import pytest
 from online_cp.CPS import (
     DempsterHillConformalPredictiveSystem,
     KernelRidgePredictionMachine,
+    MondrianTreePredictionMachine,
     NearestNeighboursPredictionMachine,
     RidgePredictionMachine,
 )
@@ -271,6 +272,93 @@ class TestKernelRidgePredictionMachine:
         cpd = cps.predict_cpd(x_test)
         # CPD should be valid
         assert 0 <= cpd(0.0, tau=0.5) <= 1
+
+
+class TestMondrianTreePredictionMachine:
+    def test_cpd_monotone_in_tau(self):
+        """CPD(y, tau=0) <= CPD(y, tau=1) for all y."""
+        rng = np.random.default_rng(2024)
+        N = 50
+        X = rng.normal(size=(N, 4))
+        y = X.sum(axis=1) + rng.normal(scale=0.5, size=N)
+
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+        cps.learn_initial_training_set(X[:30], y[:30])
+
+        cpd = cps.predict_cpd(X[30])
+        y_test = np.linspace(y.min() - 2, y.max() + 2, 50)
+        for y_val in y_test:
+            assert cpd(y_val, tau=0) <= cpd(y_val, tau=1) + 1e-12
+
+    def test_cpd_bounded_zero_one(self):
+        """CPD values should be in [0, 1]."""
+        rng = np.random.default_rng(2024)
+        N = 50
+        X = rng.normal(size=(N, 4))
+        y = X.sum(axis=1) + rng.normal(scale=0.5, size=N)
+
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+        cps.learn_initial_training_set(X[:30], y[:30])
+
+        cpd = cps.predict_cpd(X[30])
+        y_test = np.linspace(y.min() - 5, y.max() + 5, 100)
+        for y_val in y_test:
+            val = cpd(y_val, tau=0.5)
+            assert -1e-10 <= val <= 1 + 1e-10
+
+    def test_coverage(self):
+        """Prediction sets should have valid coverage."""
+        rng = np.random.default_rng(42)
+        N = 100
+        X = rng.normal(size=(N, 4))
+        y = X.sum(axis=1) + rng.normal(scale=0.5, size=N)
+
+        epsilon = 0.1
+        cps = MondrianTreePredictionMachine(lifetime=1.0, epsilon=epsilon)
+        cps.learn_initial_training_set(X[:20], y[:20])
+
+        covered = 0
+        n_test = 60
+        for i in range(20, 20 + n_test):
+            tau = rng.uniform()
+            cpd, precomputed = cps.predict_cpd(X[i], return_update=True)
+            Gamma = cpd.predict_set(tau=tau, epsilon=epsilon)
+            covered += int(y[i] in Gamma)
+            cps.learn_one(X[i], y[i], precomputed=precomputed)
+
+        coverage = covered / n_test
+        assert coverage >= (1 - epsilon) - 0.10
+
+    def test_learn_one(self):
+        """learn_one should update the model correctly."""
+        rng = np.random.default_rng(0)
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+
+        # Start with empty model (use learn_one after learn_initial_training_set)
+        X = rng.normal(size=(5, 2))
+        y = X.sum(axis=1)
+
+        cps.learn_initial_training_set(X[:3], y[:3])
+        assert cps.X.shape == (3, 2)
+        assert len(cps.y) == 3
+
+        cps.learn_one(X[3], y[3])
+        assert cps.X.shape == (4, 2)
+        assert len(cps.y) == 4
+
+        cps.learn_one(X[4], y[4])
+        assert cps.X.shape == (5, 2)
+        assert len(cps.y) == 5
+
+    def test_empty_training_set(self):
+        """Should handle empty training set gracefully."""
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+
+        # Try to predict with empty training set
+        cpd = cps.predict_cpd(np.array([0.0, 0.0]))
+        # Should return a CPD that's valid (flat distribution)
+        pi0, pi1 = cpd(0.0)
+        assert 0.0 <= pi0 <= pi1 <= 1.0
 
 
 class TestMultiLevelCPD:

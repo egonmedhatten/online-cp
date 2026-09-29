@@ -34,6 +34,18 @@ from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
+
+# Lazy imports to avoid circular dependencies
+def _get_mondrian_tree():
+    """Lazy import of MondrianTree."""
+    from online_cp.mondrian.tree import MondrianTree
+    return MondrianTree
+
+def _get_find_leaf():
+    """Lazy import of _find_leaf."""
+    from online_cp.mondrian.tree import _find_leaf
+    return _find_leaf
+
 try:
     from ._serialization import SerializableMixin
 except ImportError:
@@ -44,6 +56,7 @@ __all__ = [
     "KernelRidgePredictionMachine",
     "NearestNeighboursPredictionMachine",
     "DempsterHillConformalPredictiveSystem",
+    "MondrianTreePredictionMachine",
 ]
 
 
@@ -1153,3 +1166,343 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
             return np.nextafter(self.Y[j_between], np.inf)
         else:
             return np.inf
+
+
+class MondrianTreePredictionMachine(ConformalPredictiveSystem):
+    r"""Conformal predictive system based on Mondrian trees with signed residuals.
+
+    This CPS uses the Mondrian tree partition and the signed residual as the
+    conformity measure:
+
+        α_i = y_i − μ_leaf(x_i)
+
+    where μ_leaf is the mean of **all** y-values (including the candidate) in
+    the leaf.  For Mondrian trees, the leaf structure depends only on the
+    features X (not on y), so the test point (x, y) always falls into the same
+    leaf for any candidate y.
+
+    Mathematical insight
+    --------------------
+    Let A = number of training points in ``leaf_star`` and B = their y-sum.
+    Under candidate y:
+
+    * Test signed residual:  ``(A·y − B) / (A+1)``    slope A/(A+1)
+    * Inside signed residual: ``((A+1)·y_j − B − y) / (A+1)``    slope ∓1/(A+1)
+
+    The difference α_n^y − α_i^y = y − y_i is strictly increasing in y (slope 1),
+    so the critical values are simply C_i = y_i (the training labels).  No
+    studentisation is needed.
+
+    This yields an O(n) conformal predictive distribution with knots at the
+    sorted training labels, making it extremely efficient.
+
+    Parameters
+    ----------
+    lifetime : float or {'sqrt_n', 'density'}
+        Mondrian tree depth budget L. Larger → more splits → smaller leaves.
+        Default 1.0.
+
+        Can also be a string for unsupervised automatic tuning (only X is
+        used; labels are never accessed):
+
+        - ``'sqrt_n'``: halt when the leaf count drops to ≤ √n.
+        - ``'density'``: choose τ maximising Σ_leaf n_leaf · log(n_leaf / V_leaf).
+    epsilon : float
+        Default significance level. Default 0.1.
+    rnd_state : int, optional
+        Seed for reproducibility.
+    verbose : int
+        Verbosity level (0 = silent).
+    max_depth : int or None
+        Hard depth cap. Nodes at depth >= max_depth become leaves regardless
+        of remaining lifetime. None = no cap.
+    feature_weights : {'variance'} or array-like of shape (d,) or None
+        Unsupervised feature importance for split dimension sampling. Labels
+        are never accessed.
+
+        - ``None`` (default): uniform — standard isotropic Mondrian.
+        - ``'variance'``: split probabilities ∝ population variance per
+          feature. High-variance dimensions are sampled more often.
+        - array of shape (d,): explicit non-negative weights (normalised
+          internally; need not sum to 1).
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "lifetime", "epsilon", "rnd_state", "verbose", "max_depth",
+        "feature_weights",
+    )
+    _SAVE_STATE: tuple = ("X", "y")
+
+    def __init__(
+        self,
+        lifetime: float | str = 1.0,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        max_depth: int | None = None,
+        feature_weights: str | NDArray | None = None,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density'."
+            )
+        if isinstance(feature_weights, str) and feature_weights not in ("variance",):
+            raise ValueError(
+                f"Unknown feature_weights string {feature_weights!r}. "
+                "Recognised value: 'variance'."
+            )
+        super().__init__(epsilon=epsilon)
+        self.lifetime = lifetime
+        self.feature_weights = feature_weights
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.max_depth = max_depth
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialize with training data.
+
+        Parameters
+        ----------
+        X : ndarray, shape (n, d)
+        y : ndarray, shape (n,)  — real-valued labels
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        y = np.asarray(y, dtype=float).ravel()
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have the same length")
+        self.X = X.copy()
+        self.y = y.copy()
+
+    def learn_one(self, x: NDArray, y: float, precomputed: dict | None = None) -> None:
+        """Incrementally add one observation.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y : float
+        precomputed : dict, optional
+            Not used. Present for API consistency.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, float(y))
+
+    def predict_cpd(self, x, return_update=False):
+        r"""Compute the conformal predictive distribution for test object x.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        return_update : bool
+            If True, return ``(cpd, precomputed)`` where ``precomputed`` is a
+            dict that can be passed to ``learn_one``. For Mondrian trees this
+            is currently empty but reserved for future incremental updates.
+
+        Returns
+        -------
+        MondrianPredictiveDistributionFunction
+            The conformal predictive distribution for x.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self._safe_size_check(self.X)
+
+        if n == 0:
+            # Empty training set → completely non-informative CPS
+            Y = np.array([-np.inf, np.inf])
+            cpd = MondrianPredictiveDistributionFunction(Y, np.array([0.0, 1.0]), np.array([0.0, 1.0]), epsilon=self.epsilon)
+            if return_update:
+                return cpd, {}
+            return cpd
+
+        # Lazy imports
+        MondrianTree = _get_mondrian_tree()
+        _find_leaf = _get_find_leaf()
+
+        # Build Mondrian tree on augmented data [X; x]
+        X_aug = np.vstack([self.X, x])
+        tree = MondrianTree.grow(
+            X_aug,
+            self.rnd_gen,
+            lifetime=self.lifetime,
+            x_test=x,
+            max_depth=self.max_depth,
+            feature_weights=self.feature_weights,
+            verbose=self.verbose,
+        ).root
+
+        # Find leaf containing x (leaf_star)
+        leaf_star = _find_leaf(tree, x)
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
+
+        A = len(leaf_star_train_idx)
+        float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
+
+        # Critical values C_i = y_i (training labels)
+        # The signed residual α_n^y - α_i^y = y - y_i is strictly increasing
+        # in y with slope 1, so the p-value jumps exactly at y = y_i
+        Y = np.zeros(n + 2)
+        Y[0] = -np.inf
+        Y[-1] = np.inf
+        Y[1:-1] = self.y.copy()
+        Y.sort()
+
+        # For Mondrian signed residual CPS:
+        # L[j] = (number of labels < Y[j]) / n
+        # U[j] = (number of labels <= Y[j]) / n
+        # For Y[0] = -inf: L[0] = 0, U[0] = 0
+        # For Y[-1] = +inf: L[-1] = 1, U[-1] = 1
+        L = np.zeros(len(Y))
+        U = np.zeros(len(Y))
+        L[-1] = 1.0
+        U[-1] = 1.0
+        if n > 0:
+            # For each breakpoint Y[j] (j=1..n), count how many training labels
+            # are strictly less than Y[j] (for L) and how many are <= Y[j] (for U)
+            Y[1:-1]
+            for j in range(1, n + 1):
+                y_j = Y[j]
+                L[j] = np.sum(self.y < y_j) / n
+                U[j] = np.sum(self.y <= y_j) / n
+
+        cpd = MondrianPredictiveDistributionFunction(Y, L, U, epsilon=self.epsilon)
+
+        if return_update:
+            return cpd, {}
+        else:
+            return cpd
+
+    def _safe_size_check(self, X):
+        """Helper to check if X is None or empty."""
+        if X is None:
+            return 0
+        return X.shape[0]
+
+
+class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
+    """Conformal predictive distribution for Mondrian signed residual CPS.
+
+    The distribution has knots at the sorted training labels. The CDF jumps
+    at each training label y_i, with jump size determined by how many labels
+    are equal to y_i.
+
+    Parameters
+    ----------
+    Y : ndarray
+        Sorted array with Y[0] = -inf, Y[-1] = +inf, and Y[1:-1] = sorted labels.
+    L : ndarray
+        Lower CDF bounds at each breakpoint.
+    U : ndarray
+        Upper CDF bounds at each breakpoint.
+    epsilon : float
+        Default significance level.
+    """
+
+    def __init__(self, Y, L, U, epsilon=default_epsilon):
+        super().__init__(epsilon=epsilon)
+        self.Y = Y
+        self.L = L
+        self.U = U
+
+    def _cdf_bounds(self, y):
+        """Compute lower and upper CDF bounds at y."""
+        if y == self.Y[0]:
+            return 0.0, 0.0
+        if y == self.Y[-1]:
+            return 1.0, 1.0
+        # Search in Y[1:-1] which contains the actual data points
+        left = np.searchsorted(self.Y[1:-1], y, side="left") + 1
+        right = np.searchsorted(self.Y[1:-1], y, side="right") + 1
+        if left < right:
+            # y matches one or more breakpoints (multiple occurrences in Y[1:-1])
+            # left and right are indices in Y (after +1 offset)
+            # Matches span from Y[left] to Y[right-1] (in Y indexing)
+            return self.L[left], self.U[right - 1]
+        else:
+            # y is exactly at a breakpoint (left == right after +1, meaning one occurrence)
+            # Or y is between breakpoints
+            i = left
+            return self.L[i], self.U[i]
+
+    def _compute_quantile(self, p, tau):
+        """Compute the p-quantile of the CPD."""
+        len(self.Y) - 2  # number of training labels
+
+        # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=1..n
+        between_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
+
+        # Check "at breakpoint" levels for j = 1..n
+        # Pi(Y[j], tau) = (1-tau)*L[j] + tau*U[j]
+        at_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
+
+        # Find first index where level >= p
+        between_idx = np.where(between_levels >= p)[0]
+        at_idx = np.where(at_levels >= p)[0]
+
+        best_y = np.inf
+        if len(at_idx) > 0:
+            j = at_idx[0] + 1  # +1 because at_levels[i] corresponds to Y[i+1]
+            best_y = self.Y[j]
+        if len(between_idx) > 0:
+            k = between_idx[0] + 1  # between_levels[i] corresponds to interval (Y[i+1], Y[i+2])
+            if k < len(self.Y) - 1:
+                candidate = np.nextafter(self.Y[k], np.inf)
+                if candidate < best_y:
+                    best_y = candidate
+            elif k == len(self.Y) - 1:
+                # Above all training labels, return just above last label
+                candidate = np.nextafter(self.Y[-2], np.inf)
+                if candidate < best_y:
+                    best_y = candidate
+
+        if best_y == np.inf:
+            return np.inf
+        return best_y
+
+    def plot(self, tau=None, ax=None):
+        """Plot the conformal predictive distribution.
+
+        Parameters
+        ----------
+        tau : float, optional
+            Tie-breaking variable for smoothed CDF. If None, plots both
+            bounds L(y) and U(y) with a shaded region.
+        ax : matplotlib.axes.Axes, optional
+            Axes object to draw on. If None, creates a new figure.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The figure object containing the plot.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = ax.figure
+
+        if tau is None:
+            ax.step(self.Y[1:-1], self.L[1:-1], label=r"$\Pi(y, 0)$", where="post")
+            ax.step(self.Y[1:-1], self.U[1:-1], label=r"$\Pi(y, 1)$", where="post")
+            ax.fill_between(self.Y[1:-1], self.L[1:-1], self.U[1:-1], step="post", alpha=0.5, color="green")
+            ax.legend()
+        else:
+            ax.step(self.Y[1:-1], (1 - tau) * self.L[1:-1] + tau * self.U[1:-1], label=r"$\Pi(y, \tau)$", where="post")
+            ax.legend()
+        ax.set_ylabel("cumulative probability")
+        ax.set_xlabel(r"$y$")
+        fig.tight_layout()
+        plt.close(fig)  # Prevent implicit display
+        return fig

@@ -52,6 +52,7 @@ from online_cp import (
     progressive_val,
 )
 from online_cp.classifiers import ConformalClassifier, ConformalPredictionSet
+from online_cp.CPS import MondrianTreePredictionMachine
 from online_cp.regressors import ConformalPredictionInterval, ConformalRegressor
 from online_cp.venn import _pava_inplace
 
@@ -957,6 +958,60 @@ def test_mondrian_partition_permutation_invariant():
     assert leancheck.check(
         prop_mondrian_partition_permutation_invariant, max_tests=_TESTS_MED, silent=True
     )
+
+
+# --------------------------------------------------------------------------- #
+# Property 28: MondrianTreePredictionMachine CPD satisfies CDF axioms         #
+# --------------------------------------------------------------------------- #
+
+_CPD_RNG_M = np.random.default_rng(7)
+_CPD_N_M, _CPD_D_M = 15, 2
+_CPD_X_M = _CPD_RNG_M.normal(size=(_CPD_N_M, _CPD_D_M))
+_CPD_Y_M = _CPD_X_M @ np.array([1.0, -0.5]) + 0.1 * _CPD_RNG_M.normal(size=_CPD_N_M)
+_CPD_XQ_M = np.array([0.1, 0.2])
+_CPD_MODEL_M = MondrianTreePredictionMachine(lifetime=1.0)
+_CPD_MODEL_M.learn_initial_training_set(_CPD_X_M, _CPD_Y_M)
+_CPD_M = _CPD_MODEL_M.predict_cpd(_CPD_XQ_M)
+
+
+def prop_mondrian_cpd_values_in_unit_interval(a: int, tau: UnitProb) -> bool:
+    y = float(a % 40 - 10)
+    p = _CPD_M(y, float(tau))
+    return bool(-1e-9 <= p <= 1.0 + 1e-9)
+
+
+def prop_mondrian_cpd_monotone_in_y(a: int, b: int, tau: UnitProb) -> bool:
+    y1 = float(a % 40 - 10)
+    gap = float(abs(b) % 20)
+    leancheck.precondition(gap >= 1e-9)
+    y2 = y1 + gap
+    return bool(_CPD_M(y1, float(tau)) <= _CPD_M(y2, float(tau)) + 1e-9)
+
+
+def prop_mondrian_cpd_boundary_conditions(tau: UnitProb) -> bool:
+    return bool(abs(_CPD_M(-np.inf, float(tau))) < 1e-9 and abs(_CPD_M(np.inf, float(tau)) - 1.0) < 1e-9)
+
+
+def prop_mondrian_cpd_quantile_lower_bound(p: PValue, tau: UnitProb) -> bool:
+    q = _CPD_M.quantile(float(p), float(tau))
+    leancheck.precondition(np.isfinite(q))
+    return bool(_CPD_M(q, float(tau)) >= float(p) - 1e-9)
+
+
+def test_mondrian_cpd_values_in_unit_interval():
+    assert leancheck.check(prop_mondrian_cpd_values_in_unit_interval, max_tests=_TESTS_FAST, silent=True)
+
+
+def test_mondrian_cpd_monotone_in_y():
+    assert leancheck.check(prop_mondrian_cpd_monotone_in_y, max_tests=_TESTS_FAST, silent=True)
+
+
+def test_mondrian_cpd_boundary_conditions():
+    assert leancheck.check(prop_mondrian_cpd_boundary_conditions, max_tests=_TESTS_FAST, silent=True)
+
+
+def test_mondrian_cpd_quantile_lower_bound():
+    assert leancheck.check(prop_mondrian_cpd_quantile_lower_bound, max_tests=_TESTS_FAST, silent=True)
 
 
 if __name__ == "__main__":

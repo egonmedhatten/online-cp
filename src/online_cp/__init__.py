@@ -75,6 +75,9 @@ from online_cp.CPS import (
     KernelRidgePredictionMachine as KernelRidgePredictionMachine,
 )
 from online_cp.CPS import (
+    MondrianTreePredictionMachine as MondrianTreePredictionMachine,
+)
+from online_cp.CPS import (
     NearestNeighboursPredictionMachine as NearestNeighboursPredictionMachine,
 )
 from online_cp.CPS import (

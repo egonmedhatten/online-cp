@@ -102,8 +102,8 @@ def main():
     # Load configs
     configs = get_configs(args.task)
 
-    print(f"# Online-CP Model Benchmark")
-    print(f"")
+    print("# Online-CP Model Benchmark")
+    print("")
     print(f"- Task: {args.task}")
     print(f"- Epsilon: {args.epsilon}")
     print(f"- Datasets: {len(datasets)}")

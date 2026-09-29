@@ -12,10 +12,10 @@ from typing import Any
 
 import numpy as np
 
-from online_cp.evaluate import progressive_val, progressive_val_venn
+from online_cp.evaluate import progressive_val
 from online_cp.metrics import (
-    BrierScore,
     CRPS,
+    BrierScore,
     ErrorRate,
     IntervalWidth,
     LogLoss,

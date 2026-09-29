@@ -39,6 +39,7 @@ import numpy as np
 from online_cp import (
     ConformalNearestNeighboursRegressor,
     ConformalRidgeRegressor,
+    MondrianTreePredictionMachine,
     OptimisticFTRLBarrierLegendreMartingale,
     RidgePredictionMachine,
     SimpleLegendreJumper,
@@ -436,6 +437,46 @@ def prop_mondrian_tree_clf_order_invariant_ties(keys: list[int]) -> bool:
 def test_mondrian_tree_clf_order_invariant_ties():
     assert leancheck.check(
         prop_mondrian_tree_clf_order_invariant_ties, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
+# A13 Mondrian CPS order-invariance with real-valued features
+#     The Mondrian partition is a bag function of X (permutation-invariant), so
+#     the conformal predictive distribution must not depend on training insertion
+#     order. Guard: predictions are identical across any training-row permutation.
+
+_A13_RNG = np.random.default_rng(0)
+_A13_N = 15
+_A13_X = _A13_RNG.normal(size=(_A13_N, 2))
+_A13_Y = _A13_X @ np.array([1.0, -0.5]) + 0.1 * _A13_RNG.normal(size=_A13_N)
+_A13_XQ = np.array([0.1, 0.2])
+
+
+def _fit_mtree_cps(order):
+    mps = MondrianTreePredictionMachine(lifetime=1.0, rnd_state=0)
+    mps.learn_initial_training_set(_A13_X[order], _A13_Y[order])
+    return mps
+
+
+def prop_mondrian_cps_order_invariant_ties(keys: list[int]) -> bool:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A13_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    ref = _fit_mtree_cps(list(range(_A13_N)))
+    out = _fit_mtree_cps(perm)
+    cpd_ref = ref.predict_cpd(_A13_XQ)
+    cpd_out = out.predict_cpd(_A13_XQ)
+    # Test CDF values at several quantile levels
+    for p in [0.05, 0.25, 0.5, 0.75, 0.95]:
+        q_ref = cpd_ref.quantile(p, tau=0.5)
+        q_out = cpd_out.quantile(p, tau=0.5)
+        if not np.isclose(q_ref, q_out):
+            return False
+    return True
+
+
+def test_mondrian_cps_order_invariant_ties():
+    assert leancheck.check(
+        prop_mondrian_cps_order_invariant_ties, max_tests=_TESTS_SLOW, silent=True
     )
 
 

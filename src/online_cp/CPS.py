@@ -1342,16 +1342,17 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
             verbose=self.verbose,
         ).root
 
-        # Find leaf containing x (leaf_star)
+        # Find leaf containing x (leaf_star).  For Mondrian trees the leaf
+        # depends only on X, so the same leaf is visited for every candidate y.
+        # The partition is required by the theory even though the signed-
+        # residual monotonicity makes the CPD depend only on the labels.
         leaf_star = _find_leaf(tree, x)
-        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]  # noqa: F841
 
-        A = len(leaf_star_train_idx)
-        float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
-
-        # Critical values C_i = y_i (training labels)
-        # The signed residual α_n^y - α_i^y = y - y_i is strictly increasing
-        # in y with slope 1, so the p-value jumps exactly at y = y_i
+        # Critical values C_i = y_i (the training labels).
+        # The signed-residual difference α_n^y − α_i^y = y − y_i is strictly
+        # increasing in y (slope 1), so the p-value jumps exactly at each y_i.
+        # Consequently the leaf mean B does not appear in the final CPD.
         Y = np.zeros(n + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
@@ -1367,14 +1368,12 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
         U = np.zeros(len(Y))
         L[-1] = 1.0
         U[-1] = 1.0
-        if n > 0:
-            # For each breakpoint Y[j] (j=1..n), count how many training labels
-            # are strictly less than Y[j] (for L) and how many are <= Y[j] (for U)
-            Y[1:-1]
-            for j in range(1, n + 1):
-                y_j = Y[j]
-                L[j] = np.sum(self.y < y_j) / n
-                U[j] = np.sum(self.y <= y_j) / n
+        # For each breakpoint Y[j] (j=1..n), count how many training labels
+        # are strictly less than Y[j] (for L) and how many are <= Y[j] (for U).
+        for j in range(1, n + 1):
+            y_j = Y[j]
+            L[j] = np.sum(self.y < y_j) / n
+            U[j] = np.sum(self.y <= y_j) / n
 
         cpd = MondrianPredictiveDistributionFunction(Y, L, U, epsilon=self.epsilon)
 
@@ -1391,32 +1390,63 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
 
 
 class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
-    """Conformal predictive distribution for Mondrian signed residual CPS.
+    r"""Conformal predictive distribution for the Mondrian signed-residual CPS.
 
-    The distribution has knots at the sorted training labels. The CDF jumps
-    at each training label y_i, with jump size determined by how many labels
-    are equal to y_i.
+    The CPD is a step function whose knots are at the sorted training labels
+    ``Y[1:-1]``.  At each knot ``Y[j]`` the lower and upper CDF bounds are
+
+    .. math::
+
+        L[j] = \frac{|\{i : y_i < Y[j]\}|}{n}, \qquad
+        U[j] = \frac{|\{i : y_i \le Y[j]\}|}{n},
+
+    where :math:`n` is the training-set size.  The use of strict ``<`` for
+    ``L`` and ``<=`` for ``U`` follows the interval-valued CPD definition in
+    [ALRW2 §7.2]: the lower bound excludes ties whereas the upper bound
+    includes them, so that :math:`L(y) \le U(y)` for every :math:`y`.
 
     Parameters
     ----------
     Y : ndarray
-        Sorted array with Y[0] = -inf, Y[-1] = +inf, and Y[1:-1] = sorted labels.
+        Sorted array of length ``n+2`` with ``Y[0] = -inf``, ``Y[-1] = +inf``,
+        and ``Y[1:-1]`` = the sorted training labels.
     L : ndarray
-        Lower CDF bounds at each breakpoint.
+        Lower CDF bounds, same length as ``Y``.
     U : ndarray
-        Upper CDF bounds at each breakpoint.
-    epsilon : float
+        Upper CDF bounds, same length as ``Y``.
+    epsilon : float, default 0.1
         Default significance level.
     """
 
     def __init__(self, Y, L, U, epsilon=default_epsilon):
+        """Initialise the CPD.
+
+        Parameters
+        ----------
+        Y : ndarray
+            Sorted knot locations with ``Y[0] = -inf``, ``Y[-1] = +inf``.
+        L : ndarray
+            Lower CDF bounds at each knot.
+        U : ndarray
+            Upper CDF bounds at each knot.
+        epsilon : float, optional
+            Default significance level.
+        """
         super().__init__(epsilon=epsilon)
         self.Y = Y
         self.L = L
         self.U = U
 
     def _cdf_bounds(self, y):
-        """Compute lower and upper CDF bounds at y."""
+        r"""Compute the lower and upper CDF bounds at ``y``.
+
+        Uses binary search (``np.searchsorted``) on ``Y[1:-1]`` to locate
+        ``y``.  When ``y`` coincides with one or more knots, the lower bound
+        is ``L[left]`` (first matching knot's ``L``) and the upper bound is
+        ``U[right-1]`` (last matching knot's ``U``).  When ``y`` lies strictly
+        between two knots, both bounds equal ``L[i] = U[i]`` for the bracket
+        index ``i``.
+        """
         if y == self.Y[0]:
             return 0.0, 0.0
         if y == self.Y[-1]:
@@ -1430,45 +1460,55 @@ class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunc
             # Matches span from Y[left] to Y[right-1] (in Y indexing)
             return self.L[left], self.U[right - 1]
         else:
-            # y is exactly at a breakpoint (left == right after +1, meaning one occurrence)
-            # Or y is between breakpoints
+            # y is between breakpoints
             i = left
             return self.L[i], self.U[i]
 
     def _compute_quantile(self, p, tau):
-        """Compute the p-quantile of the CPD."""
-        len(self.Y) - 2  # number of training labels
+        """Compute the p-quantile of the CPD.
 
-        # Check "between" levels: (1-tau)*L[k] + tau*U[k] for k=1..n
-        between_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
+        Returns the smallest ``y`` such that :math:`\\Pi(y, \\tau) \\ge p`.
 
-        # Check "at breakpoint" levels for j = 1..n
-        # Pi(Y[j], tau) = (1-tau)*L[j] + tau*U[j]
-        at_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
+        Two types of CDF level are checked:
 
-        # Find first index where level >= p
-        between_idx = np.where(between_levels >= p)[0]
-        at_idx = np.where(at_levels >= p)[0]
+        * **At breakpoint** ``Y[j]`` (``j = 1,\\dots,n``): the smoothed CDF
+          is :math:`(1-\\tau) L[j] + \\tau U[j]`.
+        * **Between** ``Y[j]`` and ``Y[j+1]`` (``j = 0,\\dots,n``): the CDF
+          is constant at :math:`(1-\\tau) L[j] + \\tau U[j]`.
 
-        best_y = np.inf
-        if len(at_idx) > 0:
-            j = at_idx[0] + 1  # +1 because at_levels[i] corresponds to Y[i+1]
-            best_y = self.Y[j]
-        if len(between_idx) > 0:
-            k = between_idx[0] + 1  # between_levels[i] corresponds to interval (Y[i+1], Y[i+2])
-            if k < len(self.Y) - 1:
-                candidate = np.nextafter(self.Y[k], np.inf)
-                if candidate < best_y:
-                    best_y = candidate
-            elif k == len(self.Y) - 1:
-                # Above all training labels, return just above last label
-                candidate = np.nextafter(self.Y[-2], np.inf)
-                if candidate < best_y:
-                    best_y = candidate
+        The quantile is whichever yields the smaller ``y``: the knot
+        ``Y[j_{\\text{at}}]`` or the value just above ``Y[j_{\\text{between}}]``.
+        Tie-breaking is consistent with :meth:`_cdf_bounds` — ties cause
+        ``L`` and ``U`` to differ but the smallest feasible ``y`` is always
+        returned.
+        """
+        n = len(self.Y) - 2  # number of training labels
 
-        if best_y == np.inf:
+        if p <= 0:
+            return -np.inf
+        if p > 1:
             return np.inf
-        return best_y
+
+        # At-breakpoint CDF values for j = 1..n.
+        at_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
+        at_idx = np.where(at_levels >= p)[0]
+        j_at = at_idx[0] + 1 if len(at_idx) > 0 else len(self.Y)
+
+        # Between-interval CDF values for j = 0..n.
+        between_levels = (1 - tau) * self.L[: n + 1] + tau * self.U[: n + 1]
+        between_idx = np.where(between_levels >= p)[0]
+        j_between = between_idx[0] if len(between_idx) > 0 else n + 1
+
+        if j_at <= j_between and j_at < len(self.Y):
+            # At-breakpoint reached first (or simultaneously)
+            return self.Y[j_at]
+        elif j_between < len(self.Y):
+            # Between-level reached first; quantile is just above Y[j_between]
+            if j_between == 0:
+                return -np.inf
+            return np.nextafter(self.Y[j_between], np.inf)
+        else:
+            return np.inf
 
     def plot(self, tau=None, ax=None):
         """Plot the conformal predictive distribution.
@@ -1476,18 +1516,16 @@ class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunc
         Parameters
         ----------
         tau : float, optional
-            Tie-breaking variable for smoothed CDF. If None, plots both
-            bounds L(y) and U(y) with a shaded region.
+            Smoothing variable in ``[0, 1]``.  If ``None``, plots both
+            bounds ``L(y)`` and ``U(y)`` with a shaded region.
         ax : matplotlib.axes.Axes, optional
-            Axes object to draw on. If None, creates a new figure.
+            Axes to draw on.  If ``None``, a new figure is created.
 
         Returns
         -------
         matplotlib.figure.Figure
-            The figure object containing the plot.
+            The figure object.
         """
-        import matplotlib.pyplot as plt
-
         if ax is None:
             fig, ax = plt.subplots()
         else:

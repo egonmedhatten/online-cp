@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **ConformalMondrianTreeRegressor** — replaced O(n²) batch p-value evaluation with event-driven O(n log n) knot sweep algorithm.
+  - Added `_build_knot_events()` method to generate knot-value + flag tuples with crossing-direction tags.
+  - Added `_pvalue_from_sweep()` method to perform left-to-right O(n) sweep updating rank tallies in O(1) amortised time.
+  - Knot events are tagged with +1 (entry) or -1 (exit) based on whether the outside-leaf nonconformity score crosses above or below the test score as the candidate y increases.
+  - The p-value p(y) is piecewise-constant with O(n) algebraic breakpoints where NCM ranks change; the event-driven sweep finds the valid region {y : p(y) > ε} in O(n log n) time.
+
+### Fixed
+
+- **Ruff Linting** — fixed import sorting (I001) and loop variable binding (B023) issues in tests.
+- **Mondrian graphviz fallback** — `draw()` now degrades gracefully to the matplotlib backend when the `graphviz` Python package is installed but the system `dot` binary is missing, instead of crashing inside `dot`.
+- **GitHub Pages Deployment** — fixed docs workflow to properly create virtual environment, install dependencies, and deploy documentation.
+
+---
+
 ## [0.3.1] — 2026-09-24
  
 ### Added

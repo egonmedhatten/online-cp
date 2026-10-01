@@ -2703,6 +2703,217 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         return (gt + tau * eq) / (n_train + 1)
 
     # ------------------------------------------------------------------
+    # Event-driven O(n log n) knot sweep
+    # ------------------------------------------------------------------
+    def _build_knot_events(
+        self,
+        A: int,
+        B: float,
+        ext_sorted: NDArray,
+        y_star: NDArray,
+    ) -> tuple[NDArray, int]:
+        """Build knot events with crossing-direction flags for the O(n log n) sweep.
+
+        Returns:
+            knots_events: sorted array of (knot_value, flag) tuples, where flag is +1
+                         when a point *enters* the {α_i > α_n} set as y increases through
+                         the knot, and -1 when it *exits*.
+            permanent_ties: count of training points j with α_j(y) ≡ α_n(y) for all y
+                           (only happens when A = 1, in which case the single inside
+                           point is permanently tied with the test point).
+
+        The algorithm matches mondrian_trees.tex Appendix reg-knots and Prop. reg-exact.
+        """
+        knots: list[tuple[float, int]] = []
+        permanent_ties = 0
+
+        # ------------------------------------------------------------------
+        # Outside-leaf points: α_i is constant (independent of y)
+        # Each outside point i generates two knots where α_i crosses α_n:
+        #   α_n(y) = |A·y - B| / (A+1)      (slope ±A/(A+1), vertex at B/A)
+        #   α_i is fixed
+        # Crossings at y = B/A ± ((A+1)/A)·α_i
+        # Lower root (y_lower = B/A - ((A+1)/A)·α_i): as y increases, α_n overtakes α_i
+        #   → for y < y_lower: α_n > α_i (test score higher)
+        #   → for y > y_lower: α_i > α_n (training score higher) → *enter* G_i
+        #   → tag y_lower with +1
+        # Upper root (y_upper = B/A + ((A+1)/A)·α_i): as y increases, α_n moves away
+        #   → for y < y_upper: α_i > α_n
+        #   → for y > y_upper: α_n > α_i → *exit* G_i
+        #   → tag y_upper with -1
+        # ------------------------------------------------------------------
+        n_out = ext_sorted.size
+        if n_out > 0:
+            fac = (A + 1) / A
+            lower_knots = (B / A) - fac * ext_sorted  # +1 flag
+            upper_knots = (B / A) + fac * ext_sorted  # -1 flag
+            for y_knot in lower_knots:
+                knots.append((float(y_knot), 1))  # entering
+            for y_knot in upper_knots:
+                knots.append((float(y_knot), -1))  # exiting
+
+        # ------------------------------------------------------------------
+        # Inside-leaf points: α_j(y) = |(A+1)·y_j - B - y| / (A+1)
+        # This is a V-shape with vertex at y = y_j (slope ∓1/(A+1))
+        # The test score α_n has vertex at y = B/A.
+        # ------------------------------------------------------------------
+        if A == 0:
+            # Empty leaf: no inside points. Should not happen here (handled earlier).
+            pass
+        elif A == 1:
+            # Singleton test leaf: the single inside point j has y_j = B/A (since A=1).
+            # Corollary cor:slope: α_j(y) ≡ α_n(y) for all y (permanent tie).
+            # No crossing knots — the inside point is always tied with the test point.
+            permanent_ties = 1
+        else:
+            # A > 1: each inside point generates two knots:
+            #   (i) y = y_j: test score vertex crosses inside score vertex
+            #       For y < y_j: α_n > α_j (if y_j > B/A) or α_j > α_n (if y_j < B/A)
+            #       At y = y_j: both scores have a kink
+            #       As y increases through y_j, α_n overtakes α_j → *enter* G_j → +1
+            #   (ii) y = (2B - (A+1)·y_j)/(A-1): reflection root where α_j = α_n again
+            #       As y increases through this, α_n moves away → *exit* G_j → -1
+            # See mondrian_trees.tex Appendix reg-knots, lines 907-926.
+            for y_j in y_star:
+                # Entry at y_j (test score overtakes inside score as y increases)
+                knots.append((float(y_j), 1))
+                # Exit at reflection root
+                refl = (2.0 * B - (A + 1) * y_j) / (A - 1)
+                knots.append((float(refl), -1))
+
+        if not knots:
+            # Degenerate: no outside points and A <= 1 (empty leaf or singleton)
+            # Singleton handled via permanent_ties, so this must be empty leaf.
+            # But empty leaf should be caught earlier. Return empty events.
+            return np.array([], dtype=[("value", float), ("flag", int)]), permanent_ties
+
+        # Sort by knot value, then by flag (process exits before entries to be safe)
+        # Actually, we want to aggregate flags at coincident knots, so sort only by value
+        knots.sort(key=lambda x: x[0])
+        knots_arr = np.array(knots, dtype=[("value", float), ("flag", int)])
+        return knots_arr, permanent_ties
+
+    def _pvalue_from_sweep(
+        self,
+        knots_events: NDArray,
+        A: int,
+        B: float,
+        ext_sorted: NDArray,
+        y_star: NDArray,
+        n_train: int,
+        tau: float,
+        permanent_ties: int,
+        epsilon: float,
+    ) -> tuple[float, float]:
+        """Left-to-right sweep to find p(y) > epsilon interval.
+
+        Returns (lower_bound, upper_bound) of the valid region.
+        Uses O(1) amortised update per knot → O(n) total for all p-value evals.
+        """
+        if knots_events.size == 0:
+            # No knots → p(y) is constant everywhere. This happens when A == 0
+            # (handled earlier) or A == 1 with no outside points.
+            # For A == 1, permanent_ties = 1, and there are no crossing knots.
+            # p(y) = (0 + tau * 1) / (n + 1) = tau / (n + 1)
+            p_const = tau / (n_train + 1)
+            if p_const > epsilon:
+                return -np.inf, np.inf
+            else:
+                # No valid region — return degenerate interval at peak
+                return float(B / A) if A > 0 else 0.0, float(B / A) if A > 0 else 0.0
+
+        # ------------------------------------------------------------------
+        # Baseline tally at y_start (far left of all knots)
+        # Pick y_start strictly less than first knot
+        y_start = knots_events[0]["value"] - 1.0
+        # Evaluate all scores at y_start
+        ncm_test_start = abs(A * y_start - B) / (A + 1)
+        # Outside scores (fixed)
+        greater_count = int(np.sum(ext_sorted > ncm_test_start))
+        # Inside scores
+        if A > 0 and y_star.size > 0:
+            for y_j in y_star:
+                ncm_j = abs((A + 1) * y_j - B - y_start) / (A + 1)
+                if ncm_j > ncm_test_start:
+                    greater_count += 1
+        # ------------------------------------------------------------------
+
+        # ------------------------------------------------------------------
+        # Sweep left-to-right, updating greater_count at each knot
+        # ------------------------------------------------------------------
+        # We'll evaluate p(y) at the midpoint of each open cell
+        # and track the first valid cell (for lower bound) and the last valid cell (for upper)
+        first_valid_idx = -1
+        last_valid_idx = -1
+        prev_knot = None
+
+        for i in range(len(knots_events) + 1):
+            # Determine the cell's right boundary (current knot) and left boundary (prev knot)
+            if i < len(knots_events):
+                knot_val = knots_events[i]["value"]
+                flag = knots_events[i]["flag"]
+            else:
+                knot_val = None  # rightmost end-cell
+
+            # Compute midpoint of current cell (for potential debugging/logging)
+            if prev_knot is None:
+                # Leftmost end-cell: extend marginally beyond first knot
+                cell_right = knots_events[0]["value"]
+                _ = cell_right - max(abs(cell_right), 1.0) * 10.0
+            elif knot_val is None:
+                # Rightmost end-cell
+                cell_left = prev_knot
+                _ = cell_left + max(abs(cell_left), 1.0) * 10.0
+            else:
+                cell_left = prev_knot
+                cell_right = knot_val
+                _ = (cell_left + cell_right) / 2.0
+
+            # Compute p-value for this cell
+            p_val = (greater_count + tau * permanent_ties) / (n_train + 1)
+
+            # Check validity
+            if p_val > epsilon:
+                if first_valid_idx == -1:
+                    first_valid_idx = i  # first valid cell index
+                last_valid_idx = i     # update last valid cell index
+
+            # Update for next iteration: apply flags at this knot (if any)
+            if knot_val is not None:
+                greater_count += flag
+                prev_knot = knot_val
+            elif prev_knot is not None:
+                # Already processed all knots, we're done
+                break
+            else:
+                prev_knot = knots_events[0]["value"]
+
+        # ------------------------------------------------------------------
+        # Extract interval from valid cells
+        # ------------------------------------------------------------------
+        if first_valid_idx == -1:
+            # No valid region — return degenerate interval at peak
+            # Peak is at y = B/A (test score vertex)
+            peak = B / A if A > 0 else 0.0
+            return float(peak), float(peak)
+
+        # Determine bounds from first and last valid cells
+        # Cell i corresponds to the open interval (knots[i-1], knots[i]) for i in 1..len(knots)
+        # Cell 0 is (-∞, knots[0])
+        # Cell len(knots) is (knots[-1], +∞)
+        if first_valid_idx == 0:
+            lo = -np.inf
+        else:
+            lo = float(knots_events[first_valid_idx - 1]["value"])
+
+        if last_valid_idx == len(knots_events):
+            hi = np.inf
+        else:
+            hi = float(knots_events[last_valid_idx]["value"])
+
+        return float(lo), float(hi)
+
+    # ------------------------------------------------------------------
     # compute_p_value
     # ------------------------------------------------------------------
 
@@ -2823,29 +3034,33 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # Sort and de-duplicate
         knots_arr = np.unique(np.array(knots, dtype=float))
 
-        # ---- Evaluate p-value at midpoints between consecutive knots ----
-        # Draw ONE tau for the entire predict call so that the piecewise-constant
-        # p(y) function is evaluated consistently (fixed-tau conformal predictor).
+        # ---- Event-driven sweep using knot events (O(n) amortised per knot) ----
         tau = self.rnd_gen.uniform(0.0, 1.0)
 
-        _MARGIN = max(abs(knots_arr[0]), abs(knots_arr[-1]), 1.0) * 10.0
-        midpoints = np.concatenate(
-            [
-                [knots_arr[0] - _MARGIN],
-                (knots_arr[:-1] + knots_arr[1:]) / 2.0,
-                [knots_arr[-1] + _MARGIN],
-            ]
+        # Build knot events with +1/-1 flags
+        knots_events, permanent_ties = self._build_knot_events(A, B, ext_sorted, y_star)
+
+        # Perform left-to-right sweep to find valid region
+        lo, hi = self._pvalue_from_sweep(
+            knots_events, A, B, ext_sorted, y_star, n, tau, permanent_ties, epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
         )
 
-        # Evaluate every midpoint with the SAME tau so the p-value profile is
-        # deterministic and the unimodal shape is preserved.
-        p_vals = self._pvalues_at(midpoints, A, B, ext_sorted, y_star, n, tau)
+        result = self._construct_Gamma(lo, hi, float(epsilon) if not hasattr(epsilon, "__iter__") else epsilon[0])
 
         if hasattr(epsilon, "__iter__"):
+            # Multi-level case: we need to compute p-values at knots for the full profile
+            # For now, fall back to the original logic for compatibility
+            _MARGIN = max(abs(knots_arr[0]), abs(knots_arr[-1]), 1.0) * 10.0
+            midpoints = np.concatenate(
+                [
+                    [knots_arr[0] - _MARGIN],
+                    (knots_arr[:-1] + knots_arr[1:]) / 2.0,
+                    [knots_arr[-1] + _MARGIN],
+                ]
+            )
+            p_vals = self._pvalues_at(midpoints, A, B, ext_sorted, y_star, n, tau)
             result = self._make_multi_result(epsilon, knots_arr, midpoints, p_vals)
-        else:
-            lo, hi = self._extract_interval(knots_arr, midpoints, p_vals, float(epsilon))
-            result = self._construct_Gamma(lo, hi, float(epsilon))
+
 
         if return_update:
             return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}

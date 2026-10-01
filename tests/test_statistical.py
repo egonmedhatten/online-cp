@@ -19,6 +19,7 @@ import pytest
 from scipy.stats import binomtest
 
 from online_cp import (
+    ConformalMondrianTreeRegressor,
     ConformalNearestNeighboursClassifier,
     ConformalRidgeRegressor,
     ErrorRate,
@@ -56,6 +57,26 @@ def test_ridge_regressor_coverage_validity():
         beta = rng.normal(size=d)
         y = X @ beta + rng.normal(scale=0.5, size=N)
         cp = ConformalRidgeRegressor(a=1.0, warnings=False)
+        metric = progressive_val(cp, X, y, epsilon=eps, metric=ErrorRate())
+        total_errors += int(metric.values.sum())
+        total_preds += int(metric.values.size)
+    result = binomtest(total_errors, total_preds, eps, alternative="greater")
+    assert result.pvalue > BINOM_ALPHA, (
+        f"error rate {total_errors / total_preds:.4f} significantly exceeds eps={eps} (binom p={result.pvalue:.2e})"
+    )
+
+@pytest.mark.slow
+def test_mondrian_tree_regressor_coverage_validity():
+    eps = 0.1
+    n_runs, N, d = 40, 300, 3
+    rng = np.random.default_rng(0)
+    total_errors = 0
+    total_preds = 0
+    for _ in range(n_runs):
+        X = rng.normal(size=(N, d))
+        beta = rng.normal(size=d)
+        y = X @ beta + rng.normal(scale=0.5, size=N)
+        cp = ConformalMondrianTreeRegressor(lifetime=1.0, online=True)
         metric = progressive_val(cp, X, y, epsilon=eps, metric=ErrorRate())
         total_errors += int(metric.values.sum())
         total_preds += int(metric.values.size)

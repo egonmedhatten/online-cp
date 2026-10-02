@@ -480,5 +480,136 @@ def test_mondrian_cps_order_invariant_ties():
     )
 
 
+# ======================================================================= #
+# A14 – Mondrian regressor p(y) quasi-convexity                          #
+#                                                                          #
+# The smoothed p-value function p(y) must be quasi-convex:               #
+# - Piecewise linear with O(n) knot points                               #
+# - Unimodal: increases to a single peak at y = B/A, then decreases      #
+# - Superlevel sets {y: p(y) > ε} must be intervals (possibly empty)     #
+# ======================================================================= #
+
+_A14_RNG = np.random.default_rng(42)
+_A14_N = 10
+_A14_X = _A14_RNG.normal(size=(_A14_N, 2))
+_A14_Y = _A14_X @ np.array([1.0, -0.5]) + 0.1 * _A14_RNG.normal(size=_A14_N)
+_A14_XQ = np.array([0.3, -0.2])
+
+
+def _fit_mtree_regr(order):
+    from online_cp.regressors import ConformalMondrianTreeRegressor
+
+    model = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+    model.learn_initial_training_set(_A14_X[order], _A14_Y[order])
+    return model
+
+
+def _fit_mforest_regr(order):
+    from online_cp.regressors import ConformalMondrianForestRegressor
+
+    model = ConformalMondrianForestRegressor(n_trees=5, lifetime=1.0, rnd_state=0)
+    model.learn_initial_training_set(_A14_X[order], _A14_Y[order])
+    return model
+
+
+def prop_mtree_regressor_pvalue_quasi_convex(keys: list[int]) -> bool:
+    """Mondrian tree: p(y) should be quasi-convex (superlevel sets are intervals).
+
+    For quasi-convexity, the key property is that for any epsilon, the set
+    {y: p(y) > epsilon} must be an interval (possibly empty or infinite).
+
+    We fix tau to test the deterministic piecewise-linear p(y|tau) function.
+    """
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A14_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    model_ref = _fit_mtree_regr(list(range(_A14_N)))
+    model_perm = _fit_mtree_regr(perm)
+
+    # Fix tau to test the deterministic p(y|tau) function
+    # The smoothed p-value with fixed tau is piecewise linear and quasi-convex
+    fixed_tau = 0.5
+
+    # Evaluate p(y) on a dense grid using the same tau
+    y_grid = np.linspace(-3, 3, 50)
+    p_ref = np.array([model_ref.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+    p_perm = np.array([model_perm.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+
+    # Check p-values in [0, 1]
+    if not (np.all(p_ref >= 0) and np.all(p_ref <= 1)):
+        return False
+    if not (np.all(p_perm >= 0) and np.all(p_perm <= 1)):
+        return False
+
+    # Check that both give identical results (permutation invariance)
+    if not np.allclose(p_ref, p_perm):
+        return False
+
+    # Check quasi-convexity: superlevel sets should be intervals (at most 2 transitions)
+    for epsilon in [0.1, 0.2, 0.3, 0.4]:
+        above = p_ref > epsilon
+        if not np.any(above):
+            continue
+        transitions = np.diff(above.astype(int))
+        num_transitions = np.sum(np.abs(transitions))
+        if num_transitions > 2:
+            return False
+
+    return True
+
+
+def test_mtree_regressor_pvalue_quasi_convex():
+    assert leancheck.check(
+        prop_mtree_regressor_pvalue_quasi_convex, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
+def prop_mforest_regressor_pvalue_quasi_convex(keys: list[int]) -> bool:
+    """Mondrian forest: p(y) should be quasi-convex (superlevel sets are intervals).
+
+    We fix tau to test the deterministic piecewise-linear p(y|tau) function.
+    """
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A14_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    model_ref = _fit_mforest_regr(list(range(_A14_N)))
+    model_perm = _fit_mforest_regr(perm)
+
+    # Fix tau to test the deterministic p(y|tau) function
+    fixed_tau = 0.5
+
+    # Evaluate p(y) on a dense grid using the same tau
+    y_grid = np.linspace(-3, 3, 50)
+    p_ref = np.array([model_ref.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+    p_perm = np.array([model_perm.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+
+    # Check p-values in [0, 1]
+    if not (np.all(p_ref >= 0) and np.all(p_ref <= 1)):
+        return False
+    if not (np.all(p_perm >= 0) and np.all(p_perm <= 1)):
+        return False
+
+    # Check that both give identical results (permutation invariance)
+    if not np.allclose(p_ref, p_perm):
+        return False
+
+    # Check quasi-convexity: superlevel sets should be intervals
+    for epsilon in [0.1, 0.2, 0.3, 0.4]:
+        above = p_ref > epsilon
+        if not np.any(above):
+            continue
+        # Find transitions
+        transitions = np.diff(above.astype(int))
+        num_transitions = np.sum(np.abs(transitions))
+        if num_transitions > 2:
+            return False
+
+    return True
+
+
+def test_mforest_regressor_pvalue_quasi_convex():
+    assert leancheck.check(
+        prop_mforest_regressor_pvalue_quasi_convex, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
 if __name__ == "__main__":
     leancheck.main(verbose=True, exit_on_failure=False)

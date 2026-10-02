@@ -2638,6 +2638,39 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         leaf_star = _find_leaf(tree, x)
         return tree, leaf_star, n
 
+    def _build_augmented_tree_with_rng(self, x: NDArray, rnd_gen: np.random.RandomState):
+        """Build (batch) or extend (online) the partition on [X_train; x] with a given random generator.
+
+        This is a variant of _build_augmented_tree that takes a random generator as input,
+        allowing the tree to be built deterministically without advancing self.rnd_gen.
+        This is essential for compute_p_value, where the tree must be the same for all
+        candidate y values.
+
+        Returns ``(root, leaf_star, n)``.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self.X.shape[0]
+        if self.online:
+            # For online mode, we can't easily support a custom rng without
+            # modifying the online tree structure. Fall back to using self.rnd_gen.
+            ext_tree = self._online_tree.extend(x, rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
+        else:
+            self._pending_tree = None
+            X_aug = np.vstack([self.X, x])
+            tree = MondrianTree.grow(
+                X_aug,
+                rnd_gen,
+                lifetime=self.lifetime,
+                x_test=x,
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
+        leaf_star = _find_leaf(tree, x)
+        return tree, leaf_star, n
+
     def _is_consistent_extension(self, cand, x) -> bool:
         """True iff ``cand`` is the persisted online tree extended by exactly ``x``.
 
@@ -2707,8 +2740,10 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             gt = gt + np.sum(d > _TOL, axis=1)
             eq = eq + np.sum(np.abs(d) <= _TOL, axis=1)
 
-        eq = eq + 1  # the test point always ties with itself
-        return (gt + eq) / (n_train + 1)
+        # eq now counts all points with alpha_i == alpha_n (excluding test point itself)
+        # Apply tau to the ties, and add 1 for the test point comparing to itself
+        p_values = (gt + tau * eq + tau) / (n_train + 1)
+        return p_values
 
     # ------------------------------------------------------------------
     # Event-driven O(n log n) knot sweep
@@ -2813,6 +2848,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         n_train: int,
         permanent_ties: int,
         epsilon: float,
+        tau: float,
     ) -> tuple[float, float]:
         """Left-to-right sweep to find p(y) > epsilon interval.
 
@@ -2823,8 +2859,8 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             # No knots → p(y) is constant everywhere. This happens when A == 0
             # (handled earlier) or A == 1 with no outside points.
             # For A == 1, permanent_ties = 1, and there are no crossing knots.
-            # p(y) = (0 + 1 * 1) / (n + 1) = 1 / (n + 1)
-            p_const = (1 + permanent_ties) / (n_train + 1)
+            # p(y) = (0 + tau * (1 + permanent_ties)) / (n + 1)
+            p_const = tau * (1 + permanent_ties) / (n_train + 1)
             if p_const > epsilon:
                 return -np.inf, np.inf
             else:
@@ -2879,7 +2915,8 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 _ = (cell_left + cell_right) / 2.0
 
             # Compute p-value for this cell
-            p_val = (greater_count + 1 + permanent_ties) / (n_train + 1)
+            # Apply tau to the ties (test point + any permanent ties)
+            p_val = (greater_count + tau * (1 + permanent_ties)) / (n_train + 1)
 
             # Check validity
             if p_val > epsilon:
@@ -2931,6 +2968,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         x: NDArray,
         y_cand: float,
         return_update: bool = False,
+        tau: float | None = None,
     ) -> float | tuple[float, dict]:
         """Compute conformal p-value for (x, y_cand).
 
@@ -2940,6 +2978,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         y_cand : float
         return_update : bool
             If True, also return a dict with tree info.
+        tau : float or None
+            Randomization variable for smoothed p-value. If None, draws from U(0,1).
+            For property testing and deterministic behavior, pass a fixed tau.
 
         Returns
         -------
@@ -2951,13 +2992,23 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             return (1.0, {}) if return_update else 1.0
 
         y_cand = float(y_cand)
-        tree, leaf_star, _ = self._build_augmented_tree(x)
+
+        # FIX: Use a deterministic seed based on the test point x
+        # This ensures the same tree is built for all candidate y values
+        # The seed must be deterministic based on x, not on self.rnd_gen state
+        # Use sum of x values (hashed) to create a reproducible seed
+        x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
+        local_rnd_gen = np.random.default_rng(x_seed)
+
+        tree, leaf_star, _ = self._build_augmented_tree_with_rng(x, local_rnd_gen)
         leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
         A = len(leaf_star_train_idx)
         B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
         ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+        if tau is None:
+            tau = self.rnd_gen.uniform(0.0, 1.0)
         p_val = float(
-            self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau=1.0)[0]
+            self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau)[0]
         )
 
         # Cache the tree for inspection utilities
@@ -3044,16 +3095,15 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         # ---- Event-driven sweep using knot events (O(n) amortised per knot) ----
         # Draw ONE tau for the entire predict call to ensure deterministic save/load.
-        # We don't use it for p-value calculation (fixed-tau=1.0 conformal predictor),
-        # but we consume it to maintain the same randomness consumption pattern.
-        tau = self.rnd_gen.uniform(0.0, 1.0)  # noqa: F841
+        # Use it for smoothed p-value calculation.
+        tau = self.rnd_gen.uniform(0.0, 1.0)
 
         # Build knot events with +1/-1 flags
         knots_events, permanent_ties = self._build_knot_events(A, B, ext_sorted, y_star)
 
         # Perform left-to-right sweep to find valid region
         lo, hi = self._pvalue_from_sweep(
-            knots_events, A, B, ext_sorted, y_star, n, permanent_ties, epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
+            knots_events, A, B, ext_sorted, y_star, n, permanent_ties, epsilon if not hasattr(epsilon, "__iter__") else epsilon[0], tau
         )
 
         result = self._construct_Gamma(lo, hi, float(epsilon) if not hasattr(epsilon, "__iter__") else epsilon[0])
@@ -3069,7 +3119,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                     [knots_arr[-1] + _MARGIN],
                 ]
             )
-            p_vals = self._pvalues_at(midpoints, A, B, ext_sorted, y_star, n, tau=1.0)
+            p_vals = self._pvalues_at(midpoints, A, B, ext_sorted, y_star, n, tau)
             result = self._make_multi_result(epsilon, knots_arr, midpoints, p_vals)
 
 
@@ -3278,20 +3328,38 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             t.X.shape[0] == base_n + 1 and np.array_equal(t.X[-1], xr) for t in cand
         )
 
-    def _forest_summaries(self, X_aug, x, n):
+    def _forest_summaries(self, X_aug, x, n, seeds: NDArray | None = None):
         """Per-tree ``(base_ncm, ls_idx, ls_mu)`` summaries + viz/reuse caches.
 
         Batch: T fresh trees from seeds (joblib). Online: extend each persistent
         tree and summarise, caching the extensions for ``learn_one`` reuse.
+
+        Parameters
+        ----------
+        X_aug : array-like, shape (n+1, d)
+            Augmented feature matrix with test point appended.
+        x : array-like, shape (d,)
+            Test point features.
+        n : int
+            Number of training points.
+        seeds : array-like or None
+            Seeds for each tree. If None, uses _tree_seeds().
         """
         if self.online:
-            pending = [t.extend(x, self.rnd_gen) for t in self._forest]
+            # In online mode, use deterministic seeds if provided
+            if seeds is None:
+                pending = [t.extend(x, self.rnd_gen) for t in self._forest]
+            else:
+                pending = [t.extend(x, np.random.default_rng(int(s))) for t, s in zip(self._forest, seeds)]
             self._pending_forest = pending
             self._last_seeds = None
             self._last_x = x.copy()
             self._last_tree = pending[0].root
             return [_summarize_tree_reg(t.root, self.y, n, x) for t in pending]
-        seeds = self._tree_seeds()
+
+        # Batch mode
+        if seeds is None:
+            seeds = self._tree_seeds()
         self._last_seeds = seeds.copy()
         self._last_x = x.copy()
         self._pending_forest = None
@@ -3345,6 +3413,45 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         T = float(self.n_trees)
         return sum_train_ncms / T, sum_test_ncm / T
 
+    def _compute_avg_ncms_with_seeds(self, x: NDArray, y_cand: float, seeds: NDArray) -> tuple[NDArray, float]:
+        """Compute averaged NCMs with deterministic seeds.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y_cand : float
+        seeds : array-like, shape (n_trees,)
+            Deterministic seeds for each tree.
+
+        Returns
+        -------
+        avg_train_ncms : ndarray, shape (n,)
+        avg_test_ncm : float
+        """
+        n = self.X.shape[0]
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        results = self._forest_summaries(X_aug, x, n, seeds=seeds)
+
+        sum_train_ncms = np.zeros(n, dtype=float)
+        sum_test_ncm = 0.0
+
+        for base_ncm, ls_train_idx, ls_mu_train in results:
+            A = len(ls_train_idx)
+            B = ls_mu_train * A if A > 0 else 0.0
+
+            test_ncm_t = abs(A * y_cand - B) / (A + 1)
+            sum_test_ncm += test_ncm_t
+
+            ncm_t = base_ncm.copy()
+            if A > 0:
+                y_star = self.y[ls_train_idx]
+                ncm_t[ls_train_idx] = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+
+            sum_train_ncms += ncm_t
+
+        T = float(self.n_trees)
+        return sum_train_ncms / T, sum_test_ncm / T
+
     # ------------------------------------------------------------------
     # compute_p_value
     # ------------------------------------------------------------------
@@ -3354,6 +3461,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         x: NDArray,
         y_cand: float,
         return_update: bool = False,
+        tau: float | None = None,
     ) -> float | tuple[float, dict]:
         """Compute conformal p-value for (x, y_cand).
 
@@ -3362,6 +3470,9 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         x : array-like, shape (d,)
         y_cand : float
         return_update : bool
+        tau : float or None
+            Randomization variable for smoothed p-value. If None, draws from U(0,1).
+            For property testing and deterministic behavior, pass a fixed tau.
 
         Returns
         -------
@@ -3372,10 +3483,19 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         if n == 0:
             return (1.0, {}) if return_update else 1.0
 
-        avg_train_ncms, avg_test_ncm = self._compute_avg_ncms(x, float(y_cand))
+        # FIX: Use deterministic seeds based on x to ensure the same forest for all y
+        # The seed for each tree must be deterministic based on x, not on self.rnd_gen
+        # Use a hash of x to create reproducible seeds for each tree
+        x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
+        seeds = np.array([x_seed + i for i in range(self.n_trees)])
+
+        # Compute NCMs with deterministic seeds
+        avg_train_ncms, avg_test_ncm = self._compute_avg_ncms_with_seeds(x, float(y_cand), seeds)
 
         all_ncms = np.append(avg_train_ncms, avg_test_ncm)
-        p_val = float(self._compute_p_value(all_ncms, tau=1.0))
+        if tau is None:
+            tau = self.rnd_gen.uniform(0.0, 1.0)
+        p_val = float(self._compute_p_value(all_ncms, tau))
 
         if return_update:
             return p_val, {"online_forest": getattr(self, "_pending_forest", None)}
@@ -3495,12 +3615,11 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         T = float(self.n_trees)
         _TOL = 1e-9
         # Draw ONE tau for the entire predict call to ensure deterministic save/load.
-        # We don't use it for p-value calculation (fixed-tau=1.0 conformal predictor),
-        # but we consume it to maintain the same randomness consumption pattern.
-        tau = self.rnd_gen.uniform(0.0, 1.0)  # noqa: F841
+        # Use it for smoothed p-value calculation.
+        tau = self.rnd_gen.uniform(0.0, 1.0)
 
         def p_value_at(y_cand: float) -> float:
-            """Evaluate p(y_cand) using pre-built tree summaries and fixed tau=1.0."""
+            """Evaluate p(y_cand) using pre-built tree summaries and smoothed tau."""
             sum_train = np.zeros(n, dtype=float)
             sum_test = 0.0
             for base_ncm, ls_idx, ls_mu in summaries:
@@ -3517,8 +3636,8 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             avg_test = sum_test / T
             alpha_y = avg_test
             gt = int(np.sum(avg_train > alpha_y + _TOL))
-            eq = int(np.sum(np.abs(avg_train - alpha_y) <= _TOL)) + 1  # +1 for test
-            return float((gt + eq) / (n + 1))
+            eq = int(np.sum(np.abs(avg_train - alpha_y) <= _TOL))  # exclude test point, apply tau below
+            return float((gt + tau * eq) / (n + 1))
 
         # ---- Define search range ----------------------------------------
         y_min, y_max = self.y.min(), self.y.max()

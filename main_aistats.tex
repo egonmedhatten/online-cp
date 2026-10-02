@@ -1,0 +1,1135 @@
+\documentclass[twoside]{article}
+
+\usepackage{aistats2027}
+
+% ---- Mathematics -----------------------------------------------------------
+\usepackage{amssymb, amsthm}
+\usepackage{bbm}
+\usepackage{mathtools}
+\usepackage{stmaryrd}
+\numberwithin{equation}{section}
+
+% ---- Graphics, tables ------------------------------------------------------
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{enumitem}
+
+% ---- Algorithms ------------------------------------------------------------
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\algtext*{EndFor}
+\algtext*{EndIf}
+% Unique hyperref anchors across multiple algorithms (visible numbering unchanged).
+\makeatletter
+\@ifundefined{theHALG@line}
+  {\newcommand{\theHALG@line}{\thealgorithm.\arabic{ALG@line}}}
+  {\renewcommand{\theHALG@line}{\thealgorithm.\arabic{ALG@line}}}
+\makeatother
+
+% ---- Bibliography ----------------------------------------------------------
+\usepackage[style=authoryear, natbib=true, sorting=none]{biblatex}
+\addbibresource{references.bib}
+
+% ---- Hyperlinks & clever cross-references (hyperref before cleveref) --------
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+
+% ---- Theorem-like environments (shared counter, numbered within section) ----
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\usepackage{todonotes}
+
+% ---- Notation: math operators and generic delimiter helpers ----------------
+\DeclareMathOperator{\ExpDist}{Exp}
+\DeclareMathOperator{\UnifDist}{U}
+\DeclareMathOperator{\BernDist}{Bernoulli}
+\newcommand{\set}[1]{\left\{#1\right\}}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+% If your paper is accepted, change the options for the package
+% aistats2027 as follows:
+%
+% \usepackage[accepted]{aistats2027}
+%
+% This option will print headings for the title of your paper and
+% headings for the authors names, plus a copyright note at the end of
+% the first column of the first page.
+
+% We also include a `preprint' option for non-anonymous preprints.
+% Change the options for the package aistats2027 as follows:
+%
+%\usepackage[preprint]{aistats2027}
+%
+% This option will print headings for the title of your paper and
+% headings for the authors names, but does not print the copyright and
+% venue note at the end of the first column of the first page.
+
+% Submissions have to follow US letter format.
+% In case your local TeX installation defaults to A4, you will need to
+% set papersize explicitly by activating the following three lines:
+% \special{papersize = 8.5in, 11in}
+% \setlength{\pdfpageheight}{11in}
+% \setlength{\pdfpagewidth}{8.5in}
+
+% If you use the natbib package, activate the following three lines:
+%\usepackage[round]{natbib}
+%\renewcommand{\bibname}{References}
+%\renewcommand{\bibsection}{\subsubsection*{\bibname}}
+
+% If you use BibTeX in apalike style, activate the following line:
+%\bibliographystyle{apalike}
+
+\begin{document}
+
+% If your paper is accepted and the title of your paper is very long,
+% the style will print as headings an error message. Use the following
+% command to supply a shorter title of your paper so that it can be
+% used as headings.
+%
+%\runningtitle{I use this title instead because the last one was very long}
+
+% If your paper is accepted and the number of authors is large, the
+% style will print as headings an error message. Use the following
+% command to supply a shorter version of the author names so that
+% they can be used as headings (for example, use only the surnames)
+%
+%\runningauthor{Surname 1, Surname 2, Surname 3, ...., Surname n}
+
+\twocolumn[
+
+\aistatstitle{Fast Exact Conformalization of Mondrian Trees}
+
+\aistatsauthor{ Johan Hallberg Szabadv\'ary \and Oskar Gustafsson }
+
+\aistatsaddress{ Stockholm University \and Halmstad University } ]
+
+\begin{abstract}
+  Full (transductive) conformal prediction provides finite-sample, distribution-free validity, but its cost, refitting the learner for every candidate label, has largely confined it to base learners with exploitable algebraic structure, such as linear models. We show that Mondrian trees supply precisely this structure. Because the Mondrian partition is sampled independently of the labels, conditioning on a sampled tree preserves exchangeability, so a full conformal predictor built on a Mondrian tree is exactly valid at every lifetime, with no data splitting. For regression, this label-independence makes the conformal p-value a piecewise-constant, quasi-concave function of the candidate label, and we exploit the quasi-concavity to compute the exact prediction interval in $O(n \log n)$ time, matching the per-query complexity of conformalized ridge regression but for a nonlinear, adaptively partitioning learner. The projectivity of the Mondrian process further yields a fully online predictor through incremental updates. We give unified constructions for classification and regression, extend both to Mondrian forests, and prove exact validity across all variants. To our knowledge, this is the first exact full conformalization of a tree-based learner.
+\end{abstract}
+
+\section{Introduction}\label{sec:introduction}
+
+    Conformal prediction (CP) \citep{alrw2} turns any point predictor into a \emph{confidence predictor}, a set-valued function whose output, for any significance level $\varepsilon$, satisfies a finite-sample, distribution-free validity guarantee. Assuming only exchangeability, the prediction set misses the true label with probability $\varepsilon$. To do so, a base learner scores each candidate label by how strongly it conforms to the observed data, and the set retains those labels whose nonconformity is unremarkable, as measured by a conformal p-value. \emph{Full} (transductive) CP refits the score for every candidate label, giving exact validity but at a steep computational cost that has confined it to base learners with exploitable structure, such as linear models. \emph{Inductive} (split) CP fits the scoring function once and calibrates on a held-out set, buying tractability at the cost of data splitting and weaker validity.
+
+    Partition-based learners sit awkwardly in this picture. Full CP with a CART tree \citep{breiman1984classification} remains exactly valid in principle, but CART places its cells by reading the labels; thus, the fitted partition and the entire score change with each candidate label. The conformal p-value then has no exploitable structure, and the tree must be rebuilt from scratch for every candidate label. The Mondrian process of \citet{roy2009mondrian} offers a way out: a distribution over nested, axis-aligned partitions of object space sampled \emph{without reference to the labels}, governed by a single lifetime $\lambda$. Restricting the Mondrian process to a finite dataset yields a \emph{Mondrian tree} \citep{lakshminarayanan2014mondrian}. This label independence is a property that full CP can exploit, but a label-adaptive learner, such as CART, cannot. Because the Mondrian partition remains fixed as the candidate label varies, the regression prediction set can be computed exactly.
+
+    We develop exact \emph{conformalized Mondrian trees} for both classification and regression, and prove their correctness. The Mondrian partition is a symmetric function of the objects, drawn through auxiliary randomness independent of the data, and never consults the labels. Conditioning on a sampled tree leaves the examples exchangeable and turns any leaf-local score into an ordinary symmetric nonconformity measure. The exact validity of the full CP follows for every lifetime without sample splitting by integrating over the tree randomness (\Cref{thm:tree-validity}). For regression, the label independence allows us to write the conformal p-value in a closed form as a function of the candidate label: it is piecewise constant with $O(n)$ breakpoints at explicit algebraic locations, and quasi-concave, so that the prediction set is an interval that can be computed exactly in $O(n\log n)$ time.
+
+    To the best of our knowledge, this is the first exact full conformalization of a tree-based learner. Prior CP for trees or forests relies on data splitting or out-of-bag calibration \citep{papadopoulos2002inductive, johansson2014regression}, forgoing either exact validity or a closed-form set. Moreover, because a nonconformity measure must be symmetric in its arguments, most online learners cannot serve as base learners for full CP. This is unfortunate, as full CP is essentially an online procedure; conformalizing Mondrian trees partly resolves this.
+
+    \paragraph{Contributions.}
+    \begin{enumerate}[label=\textup{(\roman*)}, leftmargin=*, nosep]
+        \item 
+        We give a unified construction of full conformalized Mondrian trees---a classifier and a regressor---through \emph{leaf-local} nonconformity measures  (\Cref{def:leaf-local}), and prove exact finite-sample validity for both, at every lifetime $\lambda \ge 0$, with no data splitting (\Cref{thm:tree-validity,prop:cls-validity}); by the projectivity of the Mondrian process the predictor runs \emph{fully online}, at the $O(n\log n)$ per-query complexity of full conformalized ridge regression (\Cref{prop:online-validity}).
+        \item 
+        For the regressor, we show that the conformal p-value, as a function of the candidate label is piecewise constant with $O(n)$ knots at closed-form points, and quasi-concave (\Cref{prop:reg-exact}). This property yields an exact prediction interval, computable in time $O(n\log n)$ (\Cref{alg:reg-solver}).
+        \item 
+        We extend both the classifier and the regressor to \emph{Mondrian forests} and show that averaging the per-tree nonconformity scores keeps the p-value exactly valid for any number of trees $M \geq 1$ (\Cref{prop:forest-validity}). The classifier retains an exact algorithm, whereas quasi-concavity may fail under averaging for the regressor, so the exact knot solver no longer applies. Coverage stays exactly valid regardless, being a property of the p-value; the reported interval is then a grid-based approximation of the exact prediction set rather than a certified superset (\Cref{rem:forest-exactness}).
+    \end{enumerate}
+    All results come with a reference implementation in the open-source [removed for anonymous submission] Python package, and \Cref{sec:illustration} reproduces the theory on small synthetic problems; the emphasis is on provable correctness rather than empirical benchmarking.
+
+    \paragraph{Related work.}
+    Conformal prediction originates with Vovk, Gammerman, and Shafer. The standard reference is the monograph \citet{alrw2}. The validity of our constructions rests on the smoothed form \citep[Prop. 2.4]{alrw2}, which we refine to allow a nonconformity measure that depends on data-independent auxiliary randomness; here, the Mondrian tree. The exact regression solver is in the spirit of homotopy methods that trace the p-value as the candidate label varies, as \citet{lei2019fast} did for the Lasso and \citet{ndiaye2019homotopy, ndiaye2022rootfinding} for regularised empirical risk minimisation more broadly. There, the piecewise structure comes from an optimisation path, whereas here it comes from the fixed Mondrian partition, which makes the breakpoints explicit.
+
+    Mondrian trees and forests were introduced by \citet{lakshminarayanan2014mondrian} and analysed by \citet{mourtada2020minimax, mourtada2021amf} and \citet{cattaneo2026inference}. These works study the estimation and inference for the regression function, whereas we use the Mondrian partition solely as a label-independent device for exact conformal validity.
+
+    Beyond the transductive setting, inductive (or split) CP \citep{papadopoulos2002inductive, lei2018distribution} and the jackknife+/CV+ family \citep{barber2021jackknife} offer computational efficiency at the cost of weaker forms of validity. CP has been combined with random forests through out-of-bag calibration \citep{johansson2014regression}, which, unlike our method, does not yield an exact transductive prediction interval. The symmetry that our construction exploits separates Mondrian trees from other online tree-based learners, whose splits depend on the order of arrival \citep{domingos2000mining, saffari2009online, gomes2017adaptive}.
+
+\section{Background}\label{sec:background}
+
+    Let $\mathbf{X}$ and $\mathbf{Y}$ be two measurable spaces, called the \emph{object space} and the \emph{label space}, respectively. Their Cartesian product $\mathbf{Z}:=\mathbf{X}\times\mathbf{Y}$ is called the \emph{example space}. An \emph{example} is a pair $z:=(x,y)\in\mathbf{Z}$, which consists of an \emph{object} $x\in\mathbf{X}$ and its \emph{label} $y\in\mathbf{Y}$; $|\mathbf{Y}|<\infty$ for classification, and $\mathbf{Y}=\mathbb{R}$ for regression. We adopt the standard assumption that $\mathbf{Z}$ is a standard Borel space. Examples arrive one at a time with the object being observed before the label, resulting in the sequence
+    \begin{equation}\label{eq:reality-output}
+        (x_1,y_1), (x_2,y_2),\dots
+    \end{equation}
+    We assume that the sequence \eqref{eq:reality-output} is drawn from a probability distribution $P$ on $\mathbf{Z}^{\infty}$ that is \emph{exchangeable}, meaning that the distribution of the sequence is invariant under any permutation of the indices (see \citet[A.5]{alrw2} for details). 
+    A \emph{nonconformity measure} is a measurable mapping $A:\mathbf{Z}^{(*)}\times\mathbf{Z}\to\overline{\mathbb{R}}$ which assigns to each bag $\sigma$ and each example $z$ a numerical score indicating how different the example $z$ is within the bag (we will always assume $z\in\sigma$)\footnote{It is also possible to define conformity measures whose purpose is to score similarity.}. Here, $\mathbf{Z}^{(*)}$ is the set of all bags (multisets) of elements of $\mathbf{Z}$. Because a bag is unordered, $A$ is automatically symmetric in $\sigma$. 
+    Given a sequence of observed examples $z_1,\dots,z_{n-1}$, and a test object $x_n$, full CP forms, for each candidate label $y\in\mathbf{Y}$, the \emph{augmented bag}
+    \begin{equation}
+        \sigma = \lbag z_1,\dots,z_{n-1},(x_n,y)\rbag,
+    \end{equation}
+    computes the scores $\alpha_i := A(\sigma,z_i)$ for $i=1,\dots,n$ (adopting the convention that $z_n := (x_n,y)$), and the \emph{smoothed p-value}
+    \begin{equation}\label{eq:pvalue}
+        p(y) := \frac{\abs{\set{i : \alpha_i > \alpha_n}} + \tau\,\abs{\set{i : \alpha_i = \alpha_n}}}{n},
+    \end{equation}
+    where $\tau \sim \UnifDist[0,1]$ is drawn independently of the data. The \emph{smoothed conformal predictor} at significance level $\varepsilon \in (0,1)$ is $\Gamma^{\varepsilon}(x_n) = \set{y \in \mathbf{Y} : p(y) > \varepsilon}$.
+
+    We say that a conformal predictor is \emph{exactly valid} if, for every exchangeable probability distribution $P$ on $\mathbf{Z}^{\infty}$ and every significance level $\varepsilon\in(0,1)$, the sequence of error events, $y_i\notin\Gamma^{\varepsilon}(x_i)$, is an IID sequence of Bernoulli random variables with parameter $\varepsilon$. 
+    \begin{proposition}[Exact validity, {\citealp[Prop.~2.4]{alrw2}}]\label{prop:smoothed-validity}
+        All smoothed conformal predictors are exactly valid.
+    \end{proposition}
+    The guarantee is \emph{marginal}: the probability averages over the training set, the test example and $\tau$, and need not hold conditionally on a particular training set or test object.
+
+    \subsection{Randomised nonconformity measures}\label{sec:bg-randomised}
+
+        Our scores are built from a Mondrian tree sampled through auxiliary randomness that is independent of the data. Therefore, we allow the nonconformity measure to depend on such randomness, which is a slight modification of the standard definition that leaves the validity intact.
+
+        \begin{definition}[Randomised nonconformity measure]\label{def:randomised-ncm}
+            Let $\Omega$ be a random element of a probability space $(\Theta, \mathcal{F}, \mu)$ drawn independently of the examples and of $\tau$. A \emph{randomised nonconformity measure} is a map $A \colon \mathbf{Z}^{(*)} \times \mathbf{Z} \times \Theta \to \overline{\mathbb{R}}$, $(\sigma, z, \Omega) \mapsto A\!\left(\sigma, z ; \Omega\right)$, such that for each fixed $\Omega$ the map $A(\cdot, \cdot; \Omega)$ is a nonconformity measure.
+        \end{definition}
+
+        \begin{proposition}[Validity under auxiliary randomness]\label{prop:randomised-validity}
+            The randomised smoothed conformal predictor determined by a randomised nonconformity measure is exactly valid.
+        \end{proposition}
+            
+        \begin{proof}
+            Condition on $\Omega = \Omega_0$. Since $\Omega$ is independent of the data, the examples remain exchangeable given $\Omega_0$ and $A(\cdot, \cdot; \Omega_0)$ is an ordinary symmetric nonconformity measure, so \Cref{prop:smoothed-validity} gives conditional error probability $\varepsilon$; integrating over $\Omega \sim \mu$ preserves the equality.
+        \end{proof}
+
+        \Cref{prop:randomised-validity} is the engine of \Cref{sec:trees}: it reduces the validity of every predictor here to the single requirement that, for each frozen tree, the induced score is a symmetric function of the bag.
+
+    \subsection{The Mondrian process and Mondrian trees}\label{sec:bg-mondrian}
+        \citet{roy2009mondrian} introduced the Mondrian process $\mathrm{MP}(\lambda, C)$: a
+distribution over nested, axis-aligned partitions of a box $C \subset \mathbb{R}^{d}$
+governed by a \emph{lifetime} $\lambda \ge 0$. It grows a binary tree of nested boxes,
+splitting a box at a rate equal to its half-perimeter, choosing the split dimension
+proportional to side length and the split location uniformly, and stopping when the
+lifetime is exhausted. Restricting the process to a finite data set gives a
+\emph{Mondrian tree} \citep{lakshminarayanan2014mondrian}; we write
+$\mathrm{MT}(\lambda, \cdot)$ for its law, $\Pi(\Omega)$ for the induced partition into
+leaves, and $\ell(x)$ for the leaf containing $x$, deferring the recursive sampler to
+\Cref{app:proofs} (\Cref{alg:mondrian-sampler}). The one property we need is that the
+cuts are drawn \emph{without reading the labels}, and depend on the objects only through
+their bounding boxes; a symmetric function of the data.
+
+\begin{remark}[A disambiguation]\label{rem:disambig}
+Conformal prediction \emph{on} a Mondrian tree, our subject, should not be confused
+with the established \emph{Mondrian conformal predictor} \citep[Section 4.6]{alrw2}, a
+conditional construction that fixes a taxonomy in advance to obtain a
+conditional guarantee. The two share only the name; in both cases inspired by the Dutch painter Piet Mondrian. We use a Mondrian \emph{tree}
+as a base learner, not a Mondrian \emph{taxonomy} for conditioning. The two are in
+fact compatible rather than rival: one may condition a conformalized Mondrian tree with
+a Mondrian taxonomy to obtain conditional coverage. \Cref{app:mondrian} expands the
+distinction, records the compatibility, and recalls the painter.
+\end{remark}
+
+
+\section{Conformal prediction with Mondrian trees}\label{sec:trees}
+
+We specialise \Cref{prop:randomised-validity} to a Mondrian-tree base learner. The
+validity of the resulting full conformal classifier and regressor rests on a single
+structural fact, and the regressor admits an exact, finite-time interval.
+
+\subsection{Construction and exact validity}\label{sec:trees-construction}
+
+Fix a lifetime $\lambda \ge 0$. For a test object $x_n$ and each candidate
+$y$, draw a single Mondrian tree $T(\Omega) \sim
+\mathrm{MT}(\lambda, \cdot)$ on the augmented objects $\set{x_1, \dots,
+x_{n-1}, x_n}$, with $\Omega$ independent of the data. Because the
+cuts never read the labels, the tree, the partition, and in particular the
+\emph{test leaf} $\ell_{\star} \coloneqq \ell(x_n)$ depend on $x_n$ but
+\emph{not} on the candidate $y$: one tree serves every candidate, and only
+the per-leaf label statistics vary with $y$.
+
+\begin{definition}[Leaf-local nonconformity measure]\label{def:leaf-local}
+A randomised nonconformity measure $A(\cdot, \cdot; \Omega)$ is
+\emph{leaf-local} if
+\begin{equation}\label{eq:leaf-local}
+  A\!\left(\sigma, z_i ; \Omega\right)
+  = \phi\bigl(z_i,\,
+      \lbag z_j \in \sigma : \ell(x_j) = \ell(x_i) \rbag\bigr)
+\end{equation}
+for a fixed map $\phi$ symmetric in its second (multiset) argument.
+\end{definition}
+
+\begin{lemma}[Exchangeability of the Mondrian partition]\label{lem:mondrian-exch}
+For each fixed $\Omega$, the partition $\Pi(\Omega)$ of a finite object
+set is a permutation-invariant function of that set and is independent of the
+labels.
+\end{lemma}
+
+\begin{theorem}[Exact validity of conformal Mondrian trees]\label{thm:tree-validity}
+Let $A(\cdot, \cdot; \Omega)$ be any leaf-local nonconformity measure built on
+a Mondrian tree with $\Omega$ drawn independently of the data. If $z_1,
+\dots, z_n$ are exchangeable, then the associated randomised smoothed
+conformal predictor is exactly valid.
+\end{theorem}
+
+\begin{proof}
+By \Cref{prop:randomised-validity} it suffices that, for each fixed $\Omega$,
+$A(\cdot, \cdot; \Omega)$ is symmetric in the bag. By \Cref{lem:mondrian-exch}
+the leaf assignment, and hence every leaf-multiset in \eqref{eq:leaf-local}, is
+permutation-invariant; since $\phi$ is symmetric in its multiset argument, so is the
+score.
+\end{proof}
+
+\begin{remark}\label{rem:hyperparams}
+Validity holds for \emph{every} lifetime $\lambda \ge 0$ and requires no split
+into proper-training and calibration sets. The hyperparameters govern the
+\emph{efficiency} of the predictor, never its validity.
+\end{remark}
+
+\begin{remark}[Order-independence]\label{rem:order}
+Exact validity hinges on the score being a symmetric function of the bag,
+which is a genuine restriction on the base learner. An online predictor whose state
+depends on the order of arrivals---a streaming decision tree that refines its
+splits as data accrue \citep{domingos2000mining}, an online random forest
+\citep{saffari2009online}, or a stochastic-gradient model---induces an order-dependent, hence non-symmetric, nonconformity measure, and the
+exchangeability argument fails. The Mondrian tree evades this because its partition
+is drawn independently of both the order and the labels (\Cref{lem:mondrian-exch}),
+which is what lets a genuinely online learner support exact full conformal
+prediction.
+\end{remark}
+
+\begin{proposition}[Online construction]\label{prop:online-validity}
+The predictor can be run fully online: the augmented tree is maintained by the projective
+update $\mathrm{ExtendMondrianBlock}$ \citep{roy2009mondrian, lakshminarayanan2014mondrian}---inserting an object touches only the $O(\mathrm{depth})$ nodes on its path---rather
+than regrown from scratch, and this leaves the predictor exactly valid.
+\end{proposition}
+
+\begin{proof}
+Read $\Omega$ as a draw of the Mondrian process; its restriction to any finite object set
+is the permutation-invariant partition of \Cref{lem:mondrian-exch}, so $A(\cdot,\cdot;\Omega)$
+is a randomised nonconformity measure and \Cref{prop:randomised-validity} gives exact
+validity. Batch growth and $\mathrm{ExtendMondrianBlock}$ are two samplers of this
+restriction: by projectivity of the Mondrian process the incrementally grown tree has the
+same law as the batch tree on the augmented objects, so the online and batch predictors
+coincide in law and share the guarantee.
+\end{proof}
+
+\subsection{Classification}\label{sec:trees-classification}
+
+For $\mathbf{Y} = \set{1, \dots, K}$, write $N_k^{\ell}$ for the number
+of augmented examples in leaf $\ell$ with label $k$ and $N^{\ell}$ for the
+leaf size. The classifier scores each example by one minus the Laplace-smoothed
+posterior of its own label,
+\begin{equation}\label{eq:cls-ncm}
+  \alpha_i = 1 - \widehat{p}_{\ell(x_i)}(y_i),
+  \qquad
+  \widehat{p}_{\ell}(k)
+    = \frac{N_k^{\ell} + \kappa}{N^{\ell} + K \kappa},
+\end{equation}
+with Laplace parameter $\kappa \ge 0$; the posterior is taken over the augmented
+leaf, so the test example's score is $1 - \widehat{p}_{\ell_{\star}}(y)$.
+
+\begin{proposition}[Classifier]\label{prop:cls-validity}
+For every $\kappa \ge 0$ the score \eqref{eq:cls-ncm} is leaf-local, so the
+Mondrian-tree classifier is exactly valid, with $\kappa$ affecting only
+efficiency. A query computes the p-values of all $K$ candidates in
+$O(K^2)$ time.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+The posterior $\widehat{p}_{\ell}(k)$ depends on the leaf only through its class
+counts, a symmetric function of the leaf multiset, so \eqref{eq:cls-ncm} has the
+form \eqref{eq:leaf-local}; \Cref{thm:tree-validity} applies for every $\kappa$.
+Adding $(x_n, y)$ changes leaf counts only in $\ell_{\star}$, where at most
+$K$ distinct post-update scores arise, so the rank tallies of
+\eqref{eq:pvalue} update in $O(K)$ per candidate; the details are in
+\Cref{app:proofs}.
+\end{proof}
+
+\subsection{Regression}\label{sec:trees-regression}
+
+For $\mathbf{Y} = \mathbb{R}$ the regressor scores each example by its absolute deviation
+from the leaf mean,
+\begin{equation}\label{eq:reg-ncm}
+  \alpha_i = \abs{y_i - \mu_{\ell(x_i)}},
+  \qquad
+  \mu_{\ell} = \frac{1}{N^{\ell}} \sum_{z_j \in \ell} y_j,
+\end{equation}
+the mean over the augmented leaf; this is leaf-local, so \Cref{thm:tree-validity}
+again gives exact validity. The point of interest is computational. Write
+\begin{equation}\label{eq:reg-mean}
+\begin{gathered}
+  m_{\star} = \#\set{\text{training points in } \ell_{\star}}, \\
+  S_{\star} = \sum_{i \in \ell_{\star}} y_i,
+  \qquad
+  \bar{y}_{\star} = S_{\star} / m_{\star},
+\end{gathered}
+\end{equation}
+so under candidate $y$ the augmented test-leaf mean is
+$\mu_{\star}(y) = (S_{\star} + y)/(m_{\star} + 1)$.
+
+\begin{proposition}[Structure of the regression p-value and its prediction set]\label{prop:reg-exact}
+Fix the test object, the tree with test leaf $\ell_{\star}$, and a smoothing value
+$\tau$; let $m_{\star}$, $S_{\star}$ and $\bar{y}_{\star} = S_{\star}/m_{\star}$ be as in
+\eqref{eq:reg-mean}. As functions of the candidate label $y$:
+\begin{enumerate}[label=\textup{(\roman*)}, leftmargin=*, nosep]
+  \item \emph{Piecewise-linear scores.} The test score is
+    $\alpha_n(y) = \abs{m_{\star}\,y - S_{\star}}/(m_{\star}+1)$, each inside score
+    $j \in \ell_{\star}$ is $\alpha_j(y) = \abs{(m_{\star}+1)y_j - S_{\star} - y}/(m_{\star}+1)$,
+    and each outside score $i \notin \ell_{\star}$ is constant; these are $V$-shaped, with
+    outward slopes $\pm m_{\star}/(m_{\star}+1)$ for the test score and $\mp 1/(m_{\star}+1)$
+    for each inside score.
+  \item \emph{Piecewise-constant p-value with $O(n)$ knots.} $y \mapsto p(y)$ is
+    piecewise constant, with breakpoints in the knot set
+    $\mathcal{K} = \mathcal{K}_{\mathrm{out}} \cup \mathcal{K}_{\mathrm{in}}$,
+    \begin{align}
+      \mathcal{K}_{\mathrm{out}}
+        &= \Bigl\{\bar{y}_{\star} \pm \tfrac{m_{\star}+1}{m_{\star}}\alpha_i
+            : i \notin \ell_{\star}\Bigr\}, \label{eq:knots-out}\\
+      \mathcal{K}_{\mathrm{in}}
+        &= \set{y_j : j \in \ell_{\star}} \cup
+           \Bigl\{\tfrac{2S_{\star} - (m_{\star}+1)y_j}{m_{\star}-1}
+            : j \in \ell_{\star}\Bigr\}, \label{eq:knots-in}
+    \end{align}
+    the second set in \eqref{eq:knots-in} present only when $m_{\star} > 1$; hence
+    $\abs{\mathcal{K}} \le 2n$ and $p$ is constant on each open interval between
+    consecutive knots.
+  \item \emph{Contiguity.} If $m_{\star} \ge 1$, the prediction set
+    $\Gamma^{\varepsilon}(x_n) = \set{y : p(y) > \varepsilon}$ is an interval (possibly empty, a
+    single point, or unbounded); if $m_{\star} = 0$, the test leaf holds no training point
+    and the implementation returns $\overline{\mathbb{R}}$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Part~\textup{(i)} is the algebra of the augmented leaf mean
+$\mu_{\star}(y) = (S_{\star}+y)/(m_{\star}+1)$ (\Cref{app:reg-pwl}). The p-value changes
+only where the test score's rank among the training scores changes, i.e.\ where some
+$\alpha_i(y)$ crosses $\alpha_n(y)$; solving these crossings gives the knots of
+part~\textup{(ii)} (\Cref{app:reg-knots}). For part~\textup{(iii)}, each crossing set
+$G_i = \set{y : \alpha_i(y) > \alpha_n(y)}$ is an interval containing the common point
+$\bar{y}_{\star}$, so $\sum_i \mathbbm{1}\set{y \in G_i}$ is quasi-concave; between knots
+the smoothing count is constant, hence $p$ is quasi-concave and each super-level set is an
+interval (\Cref{app:reg-contiguity}).
+\end{proof}
+
+Contiguity makes the following solver exact: the valid region is a single
+interval, recovered from the finitely many constancy cells of \Cref{prop:reg-exact}.
+
+\begin{algorithm}[t]
+\caption{Exact conformal regression interval for a Mondrian tree.}
+\label{alg:reg-solver}
+\begin{algorithmic}[1]
+\Require test object $x_n$, level $\varepsilon$, tree $T(\Omega)$ on the
+  augmented objects
+\State locate the test leaf $\ell_{\star}$; compute $m_{\star}, S_{\star}$ as in
+  \eqref{eq:reg-mean}
+\If{$m_{\star} = 0$}
+  \State \Return $[-\infty, +\infty]$ \Comment{empty leaf: abstain}
+\EndIf
+\State assemble the knots \eqref{eq:knots-out}--\eqref{eq:knots-in}; sort and
+  de-duplicate
+\State draw a single $\tau \sim \UnifDist[0,1]$
+\For{each open cell between consecutive knots, and the two end-cells}
+  \State evaluate $p(y)$ at an interior point via \eqref{eq:pvalue}
+\EndFor
+\State \Return the convex hull of the cells with $p(y) > \varepsilon$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{proposition}[Correctness and complexity]\label{prop:reg-solver}
+\Cref{alg:reg-solver} returns exactly $\set{y : p(y) > \varepsilon}$,
+evaluating the p-value at $O(n)$ points and running in $O(n \log
+n)$ time, dominated by sorting the knots, with no grid and no tolerance
+parameter beyond floating-point comparison.
+\end{proposition}
+
+\section{Mondrian forests}\label{sec:forests}
+
+A single Mondrian tree splits the object space along a handful of random cuts, so its
+leaf statistics can be noisy; the standard remedy is to ensemble. Draw $M$
+trees $T_1(\Omega_1), \dots, T_{M}(\Omega_{M})$
+independently on the augmented objects. Given any leaf-local measure
+$A^{\mathrm{tree}}$, the \emph{forest nonconformity measure} averages it over the
+ensemble,
+\begin{equation}\label{eq:forest-ncm}
+  \alpha_i
+    = \frac{1}{M} \sum_{t=1}^{M}
+      A^{\mathrm{tree}}(\sigma, z_i ; \Omega_t).
+\end{equation}
+
+\begin{proposition}[Validity of Mondrian forests]\label{prop:forest-validity}
+For every $M \ge 1$ the forest measure \eqref{eq:forest-ncm} is a randomised
+nonconformity measure, so the smoothed conformal predictor it defines is exactly
+valid for every $\lambda \ge 0$.
+\end{proposition}
+
+\begin{proof}
+Fix $\Omega = (\omega_1, \dots, \omega_{M})$. Each summand is symmetric in
+$\sigma$ by \Cref{lem:mondrian-exch}, and a convex combination of symmetric
+measures is symmetric; thus \eqref{eq:forest-ncm} meets \Cref{def:randomised-ncm}
+with randomness $\Omega$ independent of the data, and \Cref{prop:randomised-validity}
+applies.
+\end{proof}
+
+\begin{remark}[What ensembling buys]\label{rem:forest-efficiency}
+Validity is independent of $M$: ensembling cannot improve coverage, which is
+already exact. Its role is \emph{efficiency}; averaging independent leaf
+posteriors or leaf means reduces the variance of the scores and smooths ties,
+typically yielding smaller prediction sets.
+\end{remark}
+
+The forest classifier instantiates \eqref{eq:forest-ncm} with the Laplace measure
+\eqref{eq:cls-ncm} and remains exactly valid for every $M$ and $\kappa$,
+with a query cost of $O(M K^2)$: the single-tree update of
+\Cref{prop:cls-validity} is run on each tree and the posteriors averaged. The forest
+regressor instantiates it with the absolute-residual measure \eqref{eq:reg-ncm};
+its p-value is still piecewise constant, now with $O(n M)$ knots, but
+the exact solver does not survive the average.
+
+\begin{remark}[Exactness is a single-tree phenomenon]\label{rem:forest-exactness}
+The contiguity proof turned on every crossing set $G_i$ containing the common centre
+$\bar{y}_{\star}$, the single test-leaf mean. A forest has $M$ test
+leaves with distinct means, so the averaged test score is a sum of $M$
+absolute-value ``V''s with different vertices, whose super-level sets need not be
+intervals; the prediction set may be disconnected and no analogue of
+part~(iii) of \Cref{prop:reg-exact} holds, so the exact knot solver of \Cref{alg:reg-solver}
+does not apply. Coverage is nonetheless exactly valid, since by
+\Cref{prop:forest-validity} this is a property of the averaged p-value and does not
+depend on how the prediction set is reported. Inverting the averaged p-value has no
+known exact finite algorithm; the implementation approximates
+$\set{y : p(y) > \varepsilon}$ on a grid, refines the detected boundaries by bisection,
+and returns their convex hull. This is a numerical approximation whose accuracy is
+governed by the grid resolution: taking the convex hull fills interior gaps, but a
+coarse grid can miss a thin outlying cell, so the reported interval is not guaranteed
+to contain the exact super-level set.
+\end{remark}
+
+\section{EMPRICAL VALIDATION}\label{sec:illustration}
+
+We illustrate the theory on small synthetic problems and two real datasets; the purpose is a visual
+confirmation, not benchmarking. All figures are produced by the accompanying
+implementation and are reproducible from fixed seeds.\todo{Fix some reproducible scripts.}
+
+\Cref{fig:mechanism} shows the exact regression mechanism. Panel~(a) is a Mondrian
+box partition on $n = 30$ points in $[0,1]^2$ with the test object marked;
+because the cuts never read the labels (\Cref{lem:mondrian-exch}), this same
+partition serves every candidate label. Panel~(b) shows the corresponding tree, whose
+axis-aligned cuts are drawn without reading the labels. Panel~(c) plots, for a
+one-dimensional regression problem ($y = \sin 2\pi x + \text{noise}$), the conformal
+p-value \eqref{eq:pvalue} against the candidate $y$ for a fixed tree and
+$\tau$: it is piecewise constant, changing only at the algebraic knots of
+\Cref{prop:reg-exact} (vertical lines), and quasi-concave, so the prediction set is
+the single shaded interval it guarantees: the exact output of
+\Cref{alg:reg-solver}.
+
+\begin{figure*}[t]
+  \centering
+  \begin{subfigure}[b]{0.30\textwidth}
+    \includegraphics[width=\linewidth]{fig_partition.pdf}
+    \caption{}\label{fig:mechanism-part}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.33\textwidth}
+    \includegraphics[width=\linewidth]{fig_tree.pdf}
+    \caption{}\label{fig:mechanism-tree}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.34\textwidth}
+    \includegraphics[width=\linewidth]{fig_pvalue.pdf}
+    \caption{}\label{fig:mechanism-pvalue}
+  \end{subfigure}
+  \caption{The exact regression mechanism. \textbf{(a)} A Mondrian box partition
+    $\Pi(\Omega)$, leaves shaded by majority label, with the test object
+    (star); the partition depends on $x_n$ but not on its candidate label.
+    \textbf{(b)} The corresponding tree, whose axis-aligned cuts are drawn without
+    reading the labels. \textbf{(c)} The conformal p-value as a function of the
+    candidate label: piecewise constant with knots at the algebraic points of
+    \Cref{prop:reg-exact} (vertical lines) and quasi-concave, so the prediction set
+    (shaded) is the single interval it guarantees.}
+  \label{fig:mechanism}
+\end{figure*}
+
+\Cref{fig:validity} confirms exact validity and quantifies efficiency. Each
+predictor is run online on an exchangeable stream: at step $t$ we form the
+p-value of the true label and then learn the example; by
+\Cref{thm:tree-validity,prop:forest-validity} this p-value is uniform, so the
+frequency of $\set{p \le \varepsilon}$ should equal $\varepsilon$. Panel~(a) plots this
+frequency against $\varepsilon$ for regression and classification: both the single tree and
+the $M = 8$ forest track the diagonal. Panel~(b) sweeps the lifetime
+$\lambda$ and the forest size $M$: empirical coverage stays flat at the
+nominal level while the mean interval width falls, confirming that validity is
+hyperparameter-free and efficiency is what the hyperparameters buy
+(\Cref{rem:hyperparams,rem:forest-efficiency}).
+
+\begin{figure*}[t]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{fig_coverage.pdf}
+    \caption{}\label{fig:validity-cov}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{fig_efficiency.pdf}
+    \caption{}\label{fig:validity-eff}
+  \end{subfigure}
+  \caption{Validity and efficiency on exchangeable streams. \textbf{(a)} The
+    frequency of $\set{p \le \varepsilon}$ matches the nominal level (dotted diagonal)
+    for single trees and forests, in regression and classification. \textbf{(b)}
+    Coverage (right axis) is flat at the nominal level while mean interval width
+    (left axis) shrinks with the lifetime $\lambda$ and forest size $M$.}
+  \label{fig:validity}
+\end{figure*}
+
+Finally, \Cref{tab:exact} compares three ways of inverting the regression p-value
+into an interval on the synthetic stream ($\varepsilon = 0.1$, $\lambda = 2$), averaged
+over $8$ seeds $\times\,150$ online steps. The exact and grid arms invert the
+\emph{same} fixed p-value function; ``gap to exact'' is the largest endpoint
+discrepancy between a grid interval and the exact one on the same tree. The exact
+solver is the only column that is at once valid, free of a resolution parameter, and
+as tight as the finest grid: a coarse grid ($R = 50$) biases the endpoints inward and
+pulls coverage below nominal, while matching the exact interval needs a fine grid ($R =
+1000$) at several times the cost; split conformal stays valid but inflates the
+interval.
+
+\begin{table*}[t]
+  \centering
+  \small
+  \input{figures/table_exact.tex}
+  \caption{Exact knot solver versus grid evaluation (two resolutions) and split
+    conformal on the synthetic regression stream ($\varepsilon = 0.1$, $\lambda = 2$);
+    standard errors in parentheses.}
+  \label{tab:exact}
+\end{table*}
+
+\subsection{Real data}\label{sec:ill-real}
+
+We repeated the coverage measurement on two low-dimensional UCI regression datasets: \textsc{airfoil} \citep{airfoil_self-noise_291} ($d = 5$, $n = 1503$) and \textsc{concrete} \citep{concrete_compressive_strength_165}
+($d = 8$, $n = 1030$), each shuffled so the stream is exchangeable, at level
+$\varepsilon=0.1$. Over five shuffles (\Cref{tab:realdata}), the three conformal predictors
+(exact single tree, forest, and split conformal) all track the nominal level, their
+coverage never off by more than $0.015$, confirming exact validity beyond the synthetic
+setting. The \emph{native} Mondrian forest, the same base learner used directly (each
+leaf's empirical residual quantile, without conformal calibration), is narrower than all
+three on both datasets, but not for free: it under-covers mildly on \textsc{airfoil}
+($0.021$) and severely on \textsc{concrete} ($0.193$, more than twelve times the largest
+conformal gap), with nothing to flag the difference in advance. Among the conformal
+predictors the forest is tightest on both, while split conformal pays a visible width
+penalty on \textsc{concrete} for its held-out calibration fold.
+
+\begin{table*}[t]
+  \centering
+  \small
+  \input{figures/table_realdata.tex}
+  \caption{Coverage and mean interval width (five shuffles; standard errors
+    in parentheses) on two exchangeable UCI regression streams at significance level
+    $\varepsilon = 0.1$. The conformal predictors attain the nominal level on both
+    datasets (coverage within $0.015$ of nominal); the native
+    forest is narrower throughout but under-covers on both, mildly on
+    \textsc{airfoil} and severely on \textsc{concrete}.}
+  \label{tab:realdata}
+\end{table*}
+
+\subsection{Ridge parity, nonlinear gain}\label{sec:ill-ridge}
+
+\Cref{tab:nonlinear} isolates the efficiency claim on an exchangeable nonlinear stream
+($y = \sin(2\pi x_1 / 3) + \tfrac12 x_2 + \text{noise}$; $\varepsilon = 0.1$, $100$ initial
+points and $200$ online steps, $8$ seeds). All four predictors attain nominal coverage.
+The exactly valid Mondrian tree is about a third narrower than conformalized ridge
+regression \citep[Alg. 2.4]{alrw2}, which shares its $O(n\log n)$ per-query complexity but,
+being linear, cannot fit the signal, and narrower than inductive conformal with its
+held-out fold, all at sub-millisecond per-query cost. The point is not a speed record but a
+frontier: exact full conformal prediction for a nonlinear, adaptively partitioning learner
+at the per-query complexity of conformalized ridge regression.
+
+\begin{table}[t]
+  \centering
+  \small
+  \input{figures/table_nonlinear.tex}
+  \caption{Online coverage, mean interval width, and per-query time on an exchangeable
+    nonlinear regression stream at significance level $\varepsilon = 0.1$ ($8$ seeds;
+    standard errors in parentheses). All predictors are valid; the exactly valid Mondrian
+    tree is markedly tighter than the linear conformal ridge and than split conformal.}
+  \label{tab:nonlinear}
+\end{table}
+
+\section{Discussion}\label{sec:discussion}
+
+The obstruction to full conformal prediction with a partitioning learner is circular:
+placing the cells requires reading the labels, so the score, and with it the whole
+prediction set, shifts with every candidate label. Mondrian trees break the circle by
+drawing their partition before any label is seen and holding it fixed as the candidate
+varies. This label-independence is the engine behind all our results: it turns a nonlinear,
+adaptively partitioning, genuinely online learner into an exactly valid full conformal
+predictor with a closed-form regression interval, a combination previously reserved for
+linear models.
+
+\paragraph{Online updating.}
+Because the Mondrian process is projective \citep{roy2009mondrian,
+lakshminarayanan2014mondrian}, the predictor runs fully online (\Cref{prop:online-validity}):
+the test object enters the maintained tree in $O(\mathrm{depth})$ rather than regrowing it,
+after which the knot solver of \Cref{sec:trees-regression} returns the exact interval in
+$O(n \log n)$, the per-query cost of full conformalized ridge regression
+\citep{nouretdinov2001rrcm, vovk2009online, alrw2} but for a nonlinear base learner.
+Carrying the p-value breakpoints across steps, so the interval is updated rather than
+recomputed, is a natural refinement.
+
+\paragraph{Efficiency and statistical optimality.}
+Validity holds for every lifetime $\lambda$ and forest size $M$; these buy efficiency, never
+coverage (\Cref{rem:hyperparams,rem:forest-efficiency}). This invites a principled choice of
+$\lambda$: with a lifetime growing polynomially in $n$, \citet{mourtada2020minimax} make
+Mondrian trees minimax-optimal for Lipschitz regression and forests optimal over smoother
+classes, and \citet{mourtada2021amf} aggregate over lifetimes online. Coupling such a
+schedule with our exactly valid scores would give finite-sample validity and near-optimal
+width at once.
+
+\paragraph{The forest regressor.}
+Ensembling is where exactness and efficiency part ways. The classifier averages cleanly, so
+the forest classifier stays exact at cost $O(MK^2)$. The regression p-value stays exactly
+valid but loses quasi-concavity, being a sum of $M$ absolute-value ``V''s with distinct
+vertices whose super-level set may be disconnected (\Cref{rem:forest-exactness}); the knot
+solver then no longer certifies the reported interval, which falls back to a grid
+approximation. Coverage is untouched, being a property of the p-value rather than of how the
+set is reported. Whether the averaged forest p-value admits an exact finite inversion, or a
+certified enclosure of its super-level set, is the main open algorithmic question.
+
+\paragraph{Scope.}
+Like all axis-aligned tree methods, Mondrian partitions cut on single coordinates and suit
+low- to moderate-dimensional problems, as in our real-data streams. Feature weighting,
+random projections, or oblique label-independent cuts are the natural route to higher
+dimensions, left to future work.
+
+\paragraph{Conditional validity and other targets.}
+Our guarantee is marginal, but conditional coverage is within reach: the leaf-local score is
+a bona fide (randomised) nonconformity measure, so it drops into the Mondrian conformal
+predictors of \citet[\S4.6]{alrw2}, which control the error rate within each taxonomy
+category (\Cref{app:mondrian}).
+
+\subsubsection*{AI Use Statement}
+
+% AUTHORS: verify this reflects your actual workflow before submission; the AI Use
+% Statement is a misconduct-sensitive disclosure and is your responsibility.
+% We used generative AI tools at several stages of this work: to implement the methods
+% (the reference software was written with substantial AI assistance), to help develop and
+% write the proofs and to check their correspondence with the implementation, to generate
+% the synthetic data used in the illustrations, and to draft, condense, and edit the
+% manuscript for clarity, including the formatting of references. All AI-assisted work has
+% been reviewed by the authors: the proofs were checked line by line, the theoretical
+% claims were verified against the reference implementation, and the code was tested for
+% correctness. We take full responsibility for the final content of this work, including
+% all text, claims, and artefacts produced with the aid of generative AI.
+
+In this work, we used generative AI tools to formulate mathematical claims, assist in the writing of proofs, design experiments, implement methods, and generate synthetic datasets. We did not use generative AI tools for supporting qualitative data analysis, and translating or cleaning datasets were not applicable to this work. Additionally, we used generative AI tools for drafting parts of the research paper, editing the research paper to improve readability, and creating software code.
+
+We reviewed all AI-assisted work. The theoretical premise originated with the lead author, while the LLMs were directed to build an initial transductive implementation and translate the codebase into an early manuscript draft. The co-author subsequently assisted in compressing the text, refining the exposition, and expanding the analysis. All LLM-generated code in the accompanying package was verified and tested for correctness by the authors. Furthermore, the authors mathematically audited, re-derived, and verified all LLM-assisted proofs, line by line, to ensure absolute correctness. We take responsibility for the final content of this work, including the text, claims, and artefacts produced with the aid of generative AI.
+
+\printbibliography
+
+\clearpage
+\onecolumn
+\section*{Reproducibility Checklist}
+\todo[inline]{Update this once the final version is done.}
+\begin{enumerate}
+
+  \item For all models and algorithms presented, check if you include:
+  \begin{enumerate}
+    \item A clear description of the mathematical setting, assumptions, algorithm,
+      and/or model. \textbf{Yes} (\Cref{sec:background,sec:trees,sec:forests}).
+    \item An analysis of the properties and complexity (time, space, sample size)
+      of any algorithm. \textbf{Yes} (\Cref{prop:cls-validity,prop:reg-solver} and
+      \Cref{sec:forests}).
+    \item (Optional) Anonymised source code, with specification of all dependencies.
+      \textbf{Yes} (supplementary material).
+  \end{enumerate}
+
+  \item For any theoretical claim, check if you include:
+  \begin{enumerate}
+    \item Statements of the full set of assumptions of all theoretical results.
+      \textbf{Yes} (exchangeability; \Cref{prop:smoothed-validity,thm:tree-validity}).
+    \item Complete proofs of all theoretical results. \textbf{Yes} (main text and
+      \Cref{app:proofs}).
+    \item Clear explanations of any assumptions. \textbf{Yes} (\Cref{sec:background}).
+  \end{enumerate}
+
+  \item For all figures and tables that present empirical results, check if you
+    include:
+  \begin{enumerate}
+    \item The code, data, and instructions needed to reproduce the main experimental
+      results. \textbf{Yes} (supplementary material).
+    \item All the training details. \textbf{Yes} (\Cref{sec:illustration} and the
+      figure and table captions).
+    \item A clear definition of the specific measure or statistics and error bars.
+      \textbf{Yes} (standard errors over seeds; \Cref{tab:exact}).
+    \item A description of the computing infrastructure used. \textbf{Yes} (a single
+      CPU; \Cref{app:proofs}).
+  \end{enumerate}
+
+  \item If you are using existing assets or curating/releasing new assets:
+  \begin{enumerate}
+    \item Citations of the creator. \textbf{Yes}.
+    \item The license information of the assets. \textbf{Yes} (supplementary
+      material).
+    \item New assets either in the supplemental material or as a URL. \textbf{Yes}
+      (anonymised repository).
+    \item Information about consent from data providers/curators. \textbf{Not
+      Applicable} (synthetic data).
+    \item Discussion of sensible content. \textbf{Not Applicable}.
+  \end{enumerate}
+
+  \item If you used crowdsourcing or conducted research with human subjects:
+  \begin{enumerate}
+    \item The full text of instructions given to participants and screenshots.
+      \textbf{Not Applicable}.
+    \item Descriptions of potential participant risks. \textbf{Not Applicable}.
+    \item The estimated hourly wage and total amount spent. \textbf{Not Applicable}.
+  \end{enumerate}
+
+\end{enumerate}
+
+\appendix
+\section{Proofs and algorithmic details}\label{app:proofs}
+
+\paragraph{Roadmap.}
+The results depend on one another in the following order. \Cref{lem:mondrian-exch}
+--- the Mondrian partition is a label-independent, permutation-invariant function of
+the objects --- rests on the sampler of \Cref{app:sampler} and, through
+\Cref{prop:randomised-validity}, underlies every validity claim: it yields
+\Cref{thm:tree-validity} for trees and, by convexity, \Cref{prop:forest-validity} for
+forests. The classifier complexity of \Cref{prop:cls-validity} is proved in
+\Cref{app:cls}. \Cref{prop:reg-exact} is proved in three parts: the scores
+are piecewise linear (part~(i), \Cref{app:reg-pwl}), so the p-value is
+piecewise constant with explicit knots (part~(ii), \Cref{app:reg-knots}); the
+crossing sets share a common point, making the p-value quasi-concave and the
+prediction set an interval (part~(iii), \Cref{app:reg-contiguity}); and
+the solver therefore returns that interval in near-linear time (\Cref{prop:reg-solver},
+\Cref{app:reg-solver}). All experiments were run on a single CPU.
+
+\subsection{The Mondrian sampler}\label{app:sampler}
+
+Restricted to a finite object set, the Mondrian process is sampled by the recursion of
+\Cref{alg:mondrian-sampler}. Each node owns the bounding box of the objects that reach
+it; the box enters only through its coordinatewise minima and maxima, and the routing
+test $x_\delta \le s$ sends each object to a child by its own coordinates. The labels
+are never read---which is the content of \Cref{lem:mondrian-exch}.
+
+\begin{algorithm}[t]
+\caption{\textsc{SampleMondrianBlock}: recursive Mondrian sampler on a finite object set.}
+\label{alg:mondrian-sampler}
+\begin{algorithmic}[1]
+\Require objects $X$ reaching the current node, remaining lifetime $\lambda$
+\State form the bounding box $\prod_{k=1}^{d} [a_k, b_k]$ of $X$ \Comment{coordinatewise min/max}
+\State draw a holding time $E \sim \ExpDist\!\bigl(\textstyle\sum_{k=1}^{d} (b_k - a_k)\bigr)$
+\If{$E > \lambda$ or $\abs{X} \le 1$}
+  \State \Return a leaf holding $X$
+\EndIf
+\State draw a split dimension $\delta$ with $\mathbb{P}(\delta = k) \propto b_k - a_k$
+\State draw a split location $s \sim \UnifDist[a_\delta, b_\delta]$
+\State $X_L \gets \set{x \in X : x_\delta \le s}$, \quad $X_R \gets \set{x \in X : x_\delta > s}$
+\State grow \textsc{SampleMondrianBlock}$(X_L, \lambda - E)$ and \textsc{SampleMondrianBlock}$(X_R, \lambda - E)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{proof}[Proof of \Cref{lem:mondrian-exch}]
+The objects enter the sampler only through per-node bounding boxes---coordinatewise minima and maxima, symmetric in the objects---and through the
+routing test $x_\delta \le s$, which assigns each object to a child
+by its own coordinates; the split parameters are functions of the box and of
+$\Omega$ alone. Hence, given $\Omega$, the partition is unchanged under
+permutations and does not depend on the labels.
+\end{proof}
+
+\subsection{Classifier validity and the $O(K^2)$ update (\Cref{prop:cls-validity})}\label{app:cls}
+
+\begin{proof}[Proof of \Cref{prop:cls-validity}]
+The Laplace-smoothed posterior $\widehat{p}_{\ell}(k) = (N_k^{\ell} + \kappa)/(N^{\ell} + K\kappa)$
+depends on the leaf only through its class counts $(N_1^{\ell}, \dots, N_K^{\ell})$, a
+symmetric function of the leaf multiset; hence $\alpha_i = 1 - \widehat{p}_{\ell(x_i)}(y_i)$
+has the leaf-local form \eqref{eq:leaf-local}, and \Cref{thm:tree-validity} gives exact
+validity for every $\kappa \ge 0$.
+
+For the query cost, fix the test object and its tree, and let $N_k^{\star,\mathrm{tr}}$ and
+$N^{\star,\mathrm{tr}} = \sum_k N_k^{\star,\mathrm{tr}}$ be the training-only class counts
+and size of the test leaf $\ell_\star$. Adding the candidate $(x_n, y)$ increments the
+count of class $y$ and the size of $\ell_\star$ by one and leaves every other leaf
+unchanged, so each example outside $\ell_\star$ keeps the score it had before the
+candidate was introduced. Inside $\ell_\star$, all training examples of a given class $j$
+share the single value
+\begin{equation}\label{eq:cls-inside-score}
+  1 - \frac{N_j^{\star,\mathrm{tr}} + \mathbbm{1}\set{j = y} + \kappa}
+           {N^{\star,\mathrm{tr}} + 1 + K\kappa},
+\end{equation}
+and the test example scores $1 - (N_y^{\star,\mathrm{tr}} + 1 + \kappa)/(N^{\star,\mathrm{tr}} + 1 + K\kappa)$;
+thus at most $K$ distinct inside scores arise, one per class. Precompute, from the fixed
+outside scores, the two rank tallies of \eqref{eq:pvalue} --- the number of scores
+strictly greater than, and equal to, the test score. For each candidate $y$ only the $K$
+inside values \eqref{eq:cls-inside-score} change; evaluating them and weighting each by
+its known class multiplicity $N_j^{\star,\mathrm{tr}}$ updates both tallies, and hence
+$p(y)$, in $O(K)$ time. Ranging over the $K$ candidates gives $O(K^2)$ in total.
+\end{proof}
+
+\subsection{Piecewise-linear scores and slope domination (\Cref{prop:reg-exact}, part~(i))}\label{app:reg-pwl}
+
+\begin{proof}[Proof of \Cref{prop:reg-exact}, part~(i)]
+Under candidate $y$ the augmented test leaf $\ell_\star$ holds its $m_\star$ training
+points together with $(x_n, y)$, so its mean is $\mu_\star(y) = (S_\star + y)/(m_\star + 1)$.
+\textup{(i)} The test point scores
+\[
+  \alpha_n(y) = \abs{y - \mu_\star(y)}
+    = \Bigl\lvert \tfrac{(m_\star+1)y - S_\star - y}{m_\star+1} \Bigr\rvert
+    = \frac{\abs{m_\star y - S_\star}}{m_\star + 1},
+\]
+a $V$ in $y$ with outward slopes $\pm m_\star/(m_\star+1)$ and vertex at $\bar{y}_\star = S_\star/m_\star$.
+\textup{(ii)} A training point $j \in \ell_\star$ scores
+\[
+  \alpha_j(y) = \abs{y_j - \mu_\star(y)}
+    = \frac{\abs{(m_\star+1)y_j - S_\star - y}}{m_\star + 1},
+\]
+a $V$ with slopes $\mp 1/(m_\star+1)$. \textup{(iii)} If $i \notin \ell_\star$ then the
+leaf of $x_i$ does not contain the test point, so its mean, and hence $\alpha_i$, do not
+depend on $y$.
+\end{proof}
+
+\begin{corollary}[Slope domination]\label{cor:slope}
+Fix $m_\star \ge 1$. As $y \to \pm\infty$ the test score $\alpha_n(y)$ grows with slope
+magnitude $m_\star/(m_\star+1)$, which is at least the slope magnitude $1/(m_\star+1)$ of
+every inside score and exceeds the zero slope of every outside score, strictly when
+$m_\star > 1$. Hence each crossing set $G_i = \set{y : \alpha_i(y) > \alpha_n(y)}$ is
+bounded. When $m_\star = 1$ the unique inside point $j$ has $S_\star = y_j$, so
+$\alpha_j \equiv \alpha_n$ and $G_j = \emptyset$.
+\end{corollary}
+
+\begin{proof}
+The slope magnitudes are read off \Cref{prop:reg-exact}, part~(i). For $i \notin \ell_\star$,
+$\alpha_i$ is constant while $\alpha_n(y) \to \infty$, so $G_i$ is bounded. For
+$j \in \ell_\star$ with $m_\star > 1$, $\alpha_j$ has strictly smaller outwards slope than
+$\alpha_n$, so $\alpha_j(y) - \alpha_n(y) \to -\infty$ and $G_j$ is bounded. If
+$m_\star = 1$ the single training point in $\ell_\star$ is $j$ itself, whence
+$S_\star = y_j$ and $\alpha_j(y) = \abs{y - y_j}/2 = \alpha_n(y)$.
+\end{proof}
+
+\subsection{Regression knots (\Cref{prop:reg-exact}, part~(ii))}\label{app:reg-knots}
+
+\begin{proof}[Proof of \Cref{prop:reg-exact}, part (ii)]
+The p-value \eqref{eq:pvalue} changes only where the rank of the test score among the
+training scores changes, i.e.\ at candidates $y$ where some $\alpha_i(y)$ crosses
+$\alpha_n(y)$. We locate these crossings for outside and inside points in turn.
+
+\paragraph{Outside-leaf knots.}
+For $i \notin \ell_\star$ the score $\alpha_i$ is constant, and by
+\Cref{prop:reg-exact}, part~(i), the crossing $\alpha_n(y) = \alpha_i$ reads $\abs{m_\star y - S_\star} = (m_\star+1)\alpha_i$,
+so
+\begin{equation}\label{eq:cross-out}
+  y = \frac{S_\star \pm (m_\star + 1)\alpha_i}{m_\star}
+    = \bar{y}_\star \pm \frac{m_\star + 1}{m_\star}\,\alpha_i,
+\end{equation}
+which is the outside knot set \eqref{eq:knots-out}.
+
+\paragraph{Inside-leaf knots.}
+Fix $j \in \ell_\star$. By \Cref{prop:reg-exact}, part~(i), clearing the common denominator
+$m_\star + 1$, the crossing equation $\alpha_j(y) = \alpha_n(y)$ reads
+\begin{equation}\label{eq:cross-abs}
+  \abs{(m_\star + 1)y_j - S_\star - y}
+  = \abs{m_\star\,y - S_\star}.
+\end{equation}
+Write $u = (m_\star + 1)y_j - S_\star - y$ and $v = m_\star\,y - S_\star$. Squaring
+\eqref{eq:cross-abs} and using $u^2 - v^2 = (u-v)(u+v)$,
+\begin{align}
+  u - v &= (m_\star + 1)(y_j - y), \label{eq:u-minus-v}\\
+  u + v &= (m_\star - 1)y + (m_\star + 1)y_j - 2S_\star,
+    \label{eq:u-plus-v}
+\end{align}
+so \eqref{eq:cross-abs} is equivalent to
+\begin{equation}\label{eq:cross-factored}
+  (m_\star + 1)(y_j - y)
+  \bigl[(m_\star - 1)y + (m_\star + 1)y_j - 2S_\star\bigr] = 0.
+\end{equation}
+Since $m_{\star}+1>0$, the solutions are $y=y_j$ and, when $m_{\star}>1$, $y=(2S_\star-(m_{\star}+1)y_j)/(m_{\star}-1)=:r_j$. When $m_{\star}=1$, the test leaf contains only the single training point $j$, meaning $S_\star=y_j$. Consequently, the bracketed term $[(m_{\star}-1)y+(m_{\star}+1)y_j-2S_\star]$ vanishes for all $y$, and no isolated second knot arises; this matches the inside knot set. Each training point contributes at most two knots,
+so $\abs{\mathcal{K}} \le 2n$. 
+\end{proof}
+
+\subsection{Contiguity of the prediction set (\Cref{prop:reg-exact}, part~(iii))}\label{app:reg-contiguity}
+
+\begin{lemma}[Coverage of intervals through a common point]\label{lem:quasiconcave}
+Let $I_1, \dots, I_n \subseteq \mathbb{R}$ be intervals and suppose a point $c$
+lies in every nonempty $I_k$. Then $g(y) = \sum_k \mathbbm{1}\set{y \in I_k}$
+is non-decreasing on $(-\infty, c]$ and non-increasing on $[c, \infty)$.
+\end{lemma}
+
+\begin{proof}
+Take $y < y' \le c$. For any $k$, if $y \notin I_k$, then $\mathbbm{1}\{y \in I_k\} = 0 \le \mathbbm{1}\{y' \in I_k\}$. If instead $y \in I_k$, since $c \in I_k$ and $I_k$ is an interval, the segment $[y, c]$ is contained in $I_k$. Because $y'$ lies in this segment, $y' \in I_k$ as well, meaning $\mathbbm{1}\{y \in I_k\} = 1 \le 1 = \mathbbm{1}\{y' \in I_k\}$. Summing over all $k$ gives $g(y) \le g(y')$. The argument for $[c, \infty)$ is symmetric.
+\end{proof}
+
+\begin{proof}[Proof of \Cref{prop:reg-exact}, part~(iii)]
+Assume $m_\star \ge 1$ and let $G_i = \set{y : \alpha_i(y) > \alpha_n(y)}$. By
+\Cref{lem:quasiconcave} it suffices to show that every $G_i$ is an interval and that the
+single point $\bar{y}_\star = S_\star/m_\star$ belongs to each nonempty one.
+
+\paragraph{Outside points.}
+For $i \notin \ell_\star$ the score $\alpha_i$ is constant (\Cref{prop:reg-exact},
+part~(i)), while $\alpha_n(y) = \abs{m_\star y - S_\star}/(m_\star+1)$. Since $m_\star+1 > 0$,
+\[
+  \alpha_i > \alpha_n(y)
+  \iff \abs{m_\star y - S_\star} < (m_\star+1)\alpha_i
+  \iff \abs{\,y - \bar{y}_\star\,} < \frac{m_\star+1}{m_\star}\,\alpha_i,
+\]
+the last step dividing by $m_\star > 0$. Hence
+$G_i = \bigl(\bar{y}_\star - \tfrac{m_\star+1}{m_\star}\alpha_i,\;
+\bar{y}_\star + \tfrac{m_\star+1}{m_\star}\alpha_i\bigr)$, an open interval centred at
+$\bar{y}_\star$, which therefore contains $\bar{y}_\star$ whenever it is nonempty.
+
+\paragraph{Inside points.}
+Fix $j \in \ell_\star$ and recall from \eqref{eq:cross-abs} the shorthands
+$u = (m_\star+1)y_j - S_\star - y$ and $v = m_\star y - S_\star$, so that
+$\alpha_j(y) = \abs{u}/(m_\star+1)$ and $\alpha_n(y) = \abs{v}/(m_\star+1)$. The two scores
+are nonnegative and share the positive denominator $m_\star+1$, so
+\begin{equation}\label{eq:score-compare}
+  \alpha_j(y) > \alpha_n(y)
+  \iff \abs{u} > \abs{v}
+  \iff u^2 - v^2 > 0
+  \iff (u-v)(u+v) > 0 .
+\end{equation}
+Substituting \eqref{eq:u-minus-v}--\eqref{eq:u-plus-v} into $(u-v)(u+v)$ and dividing by the
+positive factor $m_\star+1$ turns \eqref{eq:score-compare} into
+\begin{equation}\label{eq:Gj-parabola}
+  \alpha_j(y) > \alpha_n(y)
+  \iff (y_j - y)\bigl[(m_\star-1)y + (m_\star+1)y_j - 2S_\star\bigr] > 0 .
+\end{equation}
+If $m_\star = 1$ then $S_\star = y_j$, so the bracket
+$(m_\star-1)y + (m_\star+1)y_j - 2S_\star = 2y_j - 2y_j = 0$ vanishes for every $y$; the
+right-hand side of \eqref{eq:Gj-parabola} is then identically $0$, the strict inequality
+$0 > 0$ never holds, and $G_j = \emptyset$, in agreement with \Cref{cor:slope}. Assume
+henceforth $m_\star > 1$. The right-hand side of
+\eqref{eq:Gj-parabola} is then a quadratic in $y$ with leading coefficient
+$-(m_\star-1) < 0$, a downward parabola, whose roots, read off the factorisation
+\eqref{eq:cross-factored}, are $y_j$ and
+\[
+  r_j = \frac{2S_\star - (m_\star+1)y_j}{m_\star-1} .
+\]
+A downward parabola is positive exactly between its roots, so $G_j$ is the open interval
+with endpoints $y_j$ and $r_j$ (empty precisely when they coincide).
+
+It remains to locate $\bar{y}_\star$ relative to $y_j$ and $r_j$. Put
+$D_j := m_\star y_j - S_\star = m_\star(y_j - \bar{y}_\star)$. Directly from
+$\bar{y}_\star = S_\star/m_\star$,
+\begin{equation}\label{eq:key-identity-yj}
+  y_j - \bar{y}_\star
+    = y_j - \frac{S_\star}{m_\star}
+    = \frac{m_\star y_j - S_\star}{m_\star}
+    = \frac{D_j}{m_\star},
+\end{equation}
+and, placing $r_j - \bar{y}_\star$ over the common denominator $m_\star(m_\star-1)$,
+\begin{equation}\label{eq:key-identity-rj}
+\begin{aligned}
+  r_j - \bar{y}_\star
+    &= \frac{2S_\star - (m_\star+1)y_j}{m_\star-1} - \frac{S_\star}{m_\star}
+     = \frac{m_\star\bigl[2S_\star - (m_\star+1)y_j\bigr] - (m_\star-1)S_\star}
+            {m_\star(m_\star-1)} \\[2pt]
+    &= \frac{(m_\star+1)S_\star - m_\star(m_\star+1)y_j}{m_\star(m_\star-1)}
+     = -\frac{(m_\star+1)\,D_j}{m_\star(m_\star-1)} ,
+\end{aligned}
+\end{equation}
+where the third equality collects the numerator as
+$2m_\star S_\star - m_\star(m_\star+1)y_j - m_\star S_\star + S_\star
+ = (m_\star+1)(S_\star - m_\star y_j)$. Because $m_\star > 1$, the coefficients
+$1/m_\star$ in \eqref{eq:key-identity-yj} and $(m_\star+1)/\bigl(m_\star(m_\star-1)\bigr)$
+in \eqref{eq:key-identity-rj} are strictly positive; hence $y_j - \bar{y}_\star$ and
+$r_j - \bar{y}_\star$ carry opposite signs whenever $D_j \neq 0$. In that case
+$\bar{y}_\star$ lies strictly between the two roots, so $\bar{y}_\star \in G_j$; and when
+$D_j = 0$ the roots coincide at $y_j = r_j = \bar{y}_\star$, giving $G_j = \emptyset$.
+Either way $G_j$ is an interval that contains $\bar{y}_\star$ when nonempty.
+
+\paragraph{From the crossing sets to the p-value.}
+Every $G_i$ is thus an interval containing the common point $\bar{y}_\star$ whenever it is
+nonempty, so \Cref{lem:quasiconcave} (with $c = \bar{y}_\star$) makes
+$g(y) := \sum_{i \neq n} \mathbbm{1}\set{y \in G_i}$ non-decreasing on
+$(-\infty, \bar{y}_\star]$ and non-increasing on $[\bar{y}_\star, \infty)$; that is, $g$ is
+quasi-concave. This $g$ is exactly the count of training scores strictly exceeding
+$\alpha_n(y)$, the first term of the numerator of \eqref{eq:pvalue}. For the tie term,
+note that at any $y$ that is not a knot the only indices with $\alpha_i(y) = \alpha_n(y)$
+are those with $\alpha_i \equiv \alpha_n$ (an equality at a non-knot point would be a
+crossing, hence a knot); this permanently-tied set is the same for every cell, so the tie
+count $\abs{\set{i : \alpha_i(y) = \alpha_n(y)}}$ equals a fixed constant $c_0$ off the
+knots. Therefore $p(y) = \bigl(g(y) + \tau c_0\bigr)/n$ at every non-knot $y$: a positive
+affine function of the quasi-concave $g$, so $p$ is itself quasi-concave and every
+super-level set $\set{y : p(y) > \varepsilon}$ is an interval. Finally, if $m_\star = 0$ the
+test leaf holds no training point, $\alpha_n \equiv 0$ carries no local information, and
+returning $\overline{\mathbb{R}}$ is conservative and hence preserves validity.
+\end{proof}
+
+\subsection{Solver correctness and complexity (\Cref{prop:reg-solver})}\label{app:reg-solver}
+
+\begin{proof}[Proof of \Cref{prop:reg-solver}]
+By \Cref{prop:reg-exact}, part~(ii), the p-value is constant on each open interval between
+consecutive knots, so evaluating it at one interior point of every cell (and of the two
+unbounded end-cells) determines it everywhere. By \Cref{prop:reg-exact}, part~(iii), the valid
+set $\set{y : p(y) > \varepsilon}$ is a single interval, hence it is exactly the convex hull
+of the cells on which the evaluated p-value exceeds $\varepsilon$; if no cell qualifies
+the set is empty, and if the test leaf is empty ($m_\star = 0$) the routine returns
+$\overline{\mathbb{R}}$. There are at most $2n$ knots (\Cref{prop:reg-exact}, part~(ii)), hence
+$O(n)$ cells; sorting them costs $O(n \log n)$. Each cell p-value can be read directly
+in $O(n)$, or, sweeping the sorted cells left to right, obtained in $O(1)$ amortised
+time by updating the rank tallies of \eqref{eq:pvalue}, which change by $O(1)$ at each
+knot; the latter makes all evaluations $O(n)$ in total, so the sort dominates and the
+running time is $O(n \log n)$. The only numerical operation is the floating-point
+comparison $p(y) > \varepsilon$; no grid or tolerance is introduced.
+\end{proof}
+
+\section{The two ``Mondrians'': base learner versus conditioning device}\label{app:mondrian}
+
+The word ``Mondrian'' already carries a technical meaning in conformal prediction,
+distinct from the one it has here. \Cref{rem:disambig} flagged the clash; we now spell it
+out, show that the two notions are not rivals but compose cleanly, and recall the painter
+whose grids lent both their name.
+
+\subsection{Two meanings of the word}\label{app:mondrian-two}
+
+\paragraph{Mondrian conformal prediction: a conditioning device.}
+In \citet[\S4.6]{alrw2} a \emph{Mondrian taxonomy} is a measurable map
+$\kappa \colon \mathbb{N} \times \mathbf{Z} \to \mathbf{K}$ into an at most countable set of
+\emph{categories} whose preimages are rectangles $A \times B$ in the (index, example)
+plane. It labels each example with a category, possibly depending on the example's ordinal
+position, and the associated \emph{Mondrian conformal predictor} forms its p-value
+\eqref{eq:pvalue} using only the examples that share the test example's category. The
+payoff is \emph{category-conditional} validity: the miscoverage rate is $\varepsilon$ within
+each category separately, not merely on average. Here ``Mondrian'' names the rectangular
+blocks $A \times B$ carved out of the index--example plane, and the construction is a
+device for \emph{conditioning} an otherwise marginal guarantee.
+
+\paragraph{Conformal prediction with Mondrian trees: a base learner.}
+This paper uses ``Mondrian'' in an unrelated sense: the Mondrian \emph{process} of
+\citet{roy2009mondrian} and the Mondrian \emph{trees} of
+\citet{lakshminarayanan2014mondrian} furnish the leaf-local nonconformity measure
+\eqref{eq:leaf-local} inside an ordinary, marginally valid conformal predictor. The
+relevant partition $\Pi(\Omega)$ lives in \emph{object} space, is drawn from auxiliary
+randomness independent of the labels (\Cref{lem:mondrian-exch}), and only ever supplies a
+score; no category-conditional claim is made. In short, one ``Mondrian'' partitions the
+index--example plane to \emph{condition} the guarantee, the other partitions object space
+to \emph{score} the examples; they act at different stages of the pipeline, which is why
+the two must not be conflated.
+
+\subsection{The two constructions compose}\label{app:mondrian-compose}
+
+Because they occupy different stages, the two are fully compatible. A Mondrian conformal
+predictor is agnostic to \emph{which} nonconformity measure it ranks within a category; it
+asks only for a symmetric (here, randomised) nonconformity measure, which is exactly what
+\Cref{thm:tree-validity} certifies our leaf-local Mondrian-tree score to be. Feeding that
+score into the taxonomy-conditional machinery of \citet[\S4.6]{alrw2}, so that the smoothed
+p-value \eqref{eq:pvalue} is computed using only the augmented examples in the test
+example's category, yields a predictor that is at once built on a nonlinear, adaptively
+partitioning base learner and \emph{category-conditionally} valid, holding the error rate at
+$\varepsilon$ within each category rather than only on average. The construction needs no new
+argument.
+
+The resulting object is, unavoidably, a Mondrian conformalized Mondrian-tree predictor, a
+mouthful that is the very reason we hold the two senses of the word rigidly apart in the
+main text. The point is not the name but the fact: the exact, label-independent structure
+that makes a Mondrian tree a good base learner is untouched by wrapping it in a taxonomy for
+conditioning. This is the concrete form of the partition-based route to conditional
+guarantees noted in \Cref{sec:discussion}.
+
+\subsection{The painter}\label{app:mondrian-painter}
+
+Both senses of the word honour the Dutch painter Piet Mondrian (1872--1944). A leading
+figure of the \emph{De~Stijl} movement, Mondrian's mature style, which he called
+\emph{Neoplasticism}, pared painting down to horizontal and vertical black lines enclosing
+rectangular blocks of white, grey, and the three primary colours
+(\Cref{fig:mondrian-painting}). That axis-aligned grid is the visual template on which both
+\citet{roy2009mondrian}, naming a process that recursively cuts space along single axes,
+and \citet{alrw2}, naming taxonomies whose categories are rectangles, drew. The lineage is
+purely nominal: nothing in either construction depends on the painter beyond the evocative
+image of a plane cut into rectangles by axis-parallel lines. It is a pleasing coincidence
+that a method whose whole point is an \emph{exact} treatment of axis-aligned partitions
+should trace its name to an artist who spent two decades refining precisely that motif.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.5\linewidth]{mondrian_composition_a.jpg}
+  \caption{\emph{Composition~A} (1920) by Piet Mondrian (1872--1944). The axis-aligned
+    grid of black lines bounding rectangular colour blocks is a visual echo of the
+    axis-parallel partitions drawn by the Mondrian process (\Cref{sec:bg-mondrian}) and of
+    the rectangular taxonomies of \citet[\S4.6]{alrw2}, both of which take their name from
+    these works. Galleria Nazionale d'Arte Moderna e Contemporanea, Rome; public domain.}
+  \label{fig:mondrian-painting}
+\end{figure}
+
+\end{document}

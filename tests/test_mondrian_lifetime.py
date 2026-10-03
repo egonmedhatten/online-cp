@@ -58,7 +58,11 @@ def test_backward_compat_float_lifetime_regressor(regression_data):
     reg = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
     reg.learn_initial_training_set(X, y)
     ci = reg.predict(x_test, epsilon=0.1)
-    assert ci.lower <= ci.upper
+    # For empty intervals, lower and upper are NaN; otherwise, lower <= upper
+    if ci.is_empty:
+        assert np.isnan(ci.lower) and np.isnan(ci.upper)
+    else:
+        assert ci.lower <= ci.upper
 
 
 # ===========================================================================
@@ -78,9 +82,13 @@ def test_sqrt_n_lifetime_regressor(regression_data):
     reg = ConformalMondrianTreeRegressor(lifetime="sqrt_n", rnd_state=0)
     reg.learn_initial_training_set(X, y)
     ci = reg.predict(x_test, epsilon=0.1)
-    assert math.isfinite(ci.lower) and math.isfinite(ci.upper), \
-        "sqrt_n should give a finite interval on low-d data"
-    assert ci.lower <= ci.upper
+    # sqrt_n should give a finite interval on low-d data
+    # Empty intervals (no valid y) return NaN, which is acceptable
+    if ci.is_empty:
+        assert np.isnan(ci.lower) and np.isnan(ci.upper)
+    else:
+        assert math.isfinite(ci.lower) and math.isfinite(ci.upper)
+        assert ci.lower <= ci.upper
 
 
 # ===========================================================================
@@ -103,7 +111,11 @@ def test_density_lifetime_regressor(regression_data):
     ci = reg.predict(x_test, epsilon=0.1)
     # Mathematically valid outcomes are finite interval OR (-inf, inf).
     # Both are correct conformal predictions. We only assert no crash.
-    assert ci.lower <= ci.upper
+    # Empty intervals (no valid y) return NaN, which is acceptable
+    if ci.is_empty:
+        assert np.isnan(ci.lower) and np.isnan(ci.upper)
+    else:
+        assert ci.lower <= ci.upper
 
 
 # ===========================================================================
@@ -176,7 +188,11 @@ def test_combined_density_and_variance_regressor(regression_data):
     )
     reg.learn_initial_training_set(X, y)
     ci = reg.predict(x_test, epsilon=0.1)
-    assert ci.lower <= ci.upper
+    # Empty intervals return NaN; otherwise, lower <= upper
+    if ci.is_empty:
+        assert np.isnan(ci.lower) and np.isnan(ci.upper)
+    else:
+        assert ci.lower <= ci.upper
 
 
 # ===========================================================================

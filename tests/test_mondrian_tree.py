@@ -1052,7 +1052,11 @@ class TestConformalMondrianForestRegressor:
         x_test = np.array([0.5])
         iv = reg.predict(x_test, epsilon=0.1)
         # Degenerate case: very sparse tree → high uncertainty
-        assert iv.lower <= iv.upper
+        # For empty intervals, lower and upper are NaN; otherwise, lower <= upper
+        if iv.is_empty:
+            assert np.isnan(iv.lower) and np.isnan(iv.upper)
+        else:
+            assert iv.lower <= iv.upper
 
     def test_multi_epsilon(self, sinusoid_data):
         X, y = sinusoid_data

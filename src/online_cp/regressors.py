@@ -100,16 +100,31 @@ class ConformalPredictionInterval:
         self.upper = upper
         self.epsilon = epsilon
 
+    @property
+    def is_empty(self) -> bool:
+        """True if the interval is empty (no y satisfies p(y) > epsilon)."""
+        return (self.lower > self.upper) or (np.isnan(self.lower) and np.isnan(self.upper))
+
     def __contains__(self, y: float) -> bool:
+        """True if y is in the prediction set."""
+        if self.is_empty:
+            return False
         return self.lower <= y <= self.upper
 
     def width(self) -> float:
+        """Width of the prediction interval."""
+        if self.is_empty:
+            return 0.0
         return self.upper - self.lower
 
     def __repr__(self):
+        if self.is_empty:
+            return "()"
         return repr((self.lower, self.upper))
 
     def __str__(self):
+        if self.is_empty:
+            return "()"
         return f"({self.lower}, {self.upper})"
 
 
@@ -132,6 +147,11 @@ class MultiLevelPredictionInterval:
         """Sorted list of significance levels."""
         return list(self._predictions.keys())
 
+    @property
+    def is_empty(self) -> bool:
+        """True if the prediction set is empty at any level."""
+        return any(interval.is_empty for interval in self._predictions.values())
+
     def __getitem__(self, eps: float) -> ConformalPredictionInterval:
         return self._predictions[eps]
 
@@ -143,6 +163,8 @@ class MultiLevelPredictionInterval:
 
     def __contains__(self, y: float) -> bool:
         """True if y is covered at all levels."""
+        if self.is_empty:
+            return False
         return all(y in interval for interval in self._predictions.values())
 
     def coverage(self, y: float) -> dict[float, bool]:
@@ -2816,7 +2838,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             #       As y increases through y_j, α_n overtakes α_j → *enter* G_j → +1
             #   (ii) y = (2B - (A+1)·y_j)/(A-1): reflection root where α_j = α_n again
             #       As y increases through this, α_n moves away → *exit* G_j → -1
-            # See mondrian_trees.tex Appendix reg-knots, lines 907-926.
             for y_j in y_star:
                 # The valid crossing region G_j is bounded by the min and max roots
                 refl = (2.0 * B - (A + 1) * y_j) / (A - 1)
@@ -2838,6 +2859,59 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         knots_arr = np.array(knots, dtype=[("value", float), ("flag", int)])
         return knots_arr, permanent_ties
 
+    def _evaluate_pvalue_at_point(self, y, A, B, ext_sorted, y_star, n_train, tau, permanent_ties):
+        """Evaluate smoothed conformal p-value at an arbitrary y (not just cell midpoints).
+
+        This is used to check knot locations exactly, where p(y) may spike due to
+        tie-breaking with tau, potentially making a singleton valid even if
+        neighboring cells are invalid.
+
+        Parameters
+        ----------
+        y : float
+            Candidate label at which to evaluate p-value.
+        A : int
+            Number of training points in test leaf.
+        B : float
+            Sum of y-values in test leaf.
+        ext_sorted : ndarray
+            Sorted nonconformity scores of training points outside test leaf.
+        y_star : ndarray
+            y-values of training points inside test leaf.
+        n_train : int
+            Number of training points.
+        tau : float
+            Randomization variable in [0, 1] for smoothed p-value.
+        permanent_ties : int
+            Count of points permanently tied with test point (A == 1 case).
+
+        Returns
+        -------
+        float
+            Smoothed conformal p-value at y.
+        """
+        # Test nonconformity score: alpha_n(y) = |A*y - B| / (A+1)
+        ncm_test = abs(A * y - B) / (A + 1)
+
+        # Count outside points with alpha_i > ncm_test
+        gt = int(np.sum(ext_sorted > ncm_test))
+
+        # Count outside points with alpha_i == ncm_test (for tie-breaking)
+        _TOL = 1e-9
+        eq = int(np.sum(np.abs(ext_sorted - ncm_test) <= _TOL))
+
+        # Add contributions from inside points (in leaf_star)
+        if A > 0 and y_star.size > 0:
+            # Inside scores: alpha_j(y) = |(A+1)*y_j - B - y| / (A+1)
+            inside_ncm = np.abs((A + 1) * y_star - B - y) / (A + 1)
+            gt += int(np.sum(inside_ncm > ncm_test))
+            eq += int(np.sum(np.abs(inside_ncm - ncm_test) <= _TOL))
+
+        # p-value = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1)
+        # The +1 is for the test point itself comparing to itself
+        p_val = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1)
+        return p_val
+
     def _pvalue_from_sweep(
         self,
         knots_events: NDArray,
@@ -2849,23 +2923,25 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         permanent_ties: int,
         epsilon: float,
         tau: float,
-    ) -> tuple[float, float]:
+    ) -> tuple[float, float, list]:
         """Left-to-right sweep to find p(y) > epsilon interval.
 
-        Returns (lower_bound, upper_bound) of the valid region.
+        Returns (lower_bound, upper_bound, valid_knots) where valid_knots is a
+        list of knot values where p(y) > epsilon (singleton valid regions).
         Uses O(1) amortised update per knot → O(n) total for all p-value evals.
         """
+        # Edge case: no knots (A == 0 with no outside points, or A == 1 with no outside points)
         if knots_events.size == 0:
-            # No knots → p(y) is constant everywhere. This happens when A == 0
-            # (handled earlier) or A == 1 with no outside points.
-            # For A == 1, permanent_ties = 1, and there are no crossing knots.
-            # p(y) = (0 + tau * (1 + permanent_ties)) / (n + 1)
+            # No knots → p(y) is constant everywhere
+            # For A == 0: p = tau / (n+1) (no points to compare)
+            # For A == 1 with permanent_ties: p = (0 + tau * (1 + 1)) / (n+1) = 2*tau/(n+1)
             p_const = tau * (1 + permanent_ties) / (n_train + 1)
             if p_const > epsilon:
-                return -np.inf, np.inf
+                return -np.inf, np.inf, []
             else:
                 # No valid region — return degenerate interval at peak
-                return float(B / A) if A > 0 else 0.0, float(B / A) if A > 0 else 0.0
+                peak = B / A if A > 0 else 0.0
+                return float(peak), float(peak), [float(peak)]
 
         # ------------------------------------------------------------------
         # Baseline tally at y_start (far left of all knots)
@@ -2888,9 +2964,12 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # ------------------------------------------------------------------
         # We'll evaluate p(y) at the midpoint of each open cell
         # and track the first valid cell (for lower bound) and the last valid cell (for upper)
+        # Also track valid knots (singletons at boundary points)
         first_valid_idx = -1
         last_valid_idx = -1
+        valid_knots: list[float] = []
         prev_knot = None
+        prev_knot_idx = -1  # index of previous knot in knots_events
 
         for i in range(len(knots_events) + 1):
             # Determine the cell's right boundary (current knot) and left boundary (prev knot)
@@ -2918,16 +2997,28 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             # Apply tau to the ties (test point + any permanent ties)
             p_val = (greater_count + tau * (1 + permanent_ties)) / (n_train + 1)
 
-            # Check validity
+            # Check validity of cell interior
             if p_val > epsilon:
                 if first_valid_idx == -1:
                     first_valid_idx = i  # first valid cell index
                 last_valid_idx = i     # update last valid cell index
 
+            # Check validity of the knot itself (if not the first knot)
+            # Evaluate p(y) exactly at the knot location
+            if knot_val is not None and prev_knot is not None:
+                # We're at knot i, which is the boundary between cell i-1 and cell i
+                # Check if this knot is valid
+                knot_p_val = self._evaluate_pvalue_at_point(
+                    knot_val, A, B, ext_sorted, y_star, n_train, tau, permanent_ties
+                )
+                if knot_p_val > epsilon:
+                    valid_knots.append(float(knot_val))
+
             # Update for next iteration: apply flags at this knot (if any)
             if knot_val is not None:
                 greater_count += flag
                 prev_knot = knot_val
+                prev_knot_idx = i
             elif prev_knot is not None:
                 # Already processed all knots, we're done
                 break
@@ -2935,29 +3026,57 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 prev_knot = knots_events[0]["value"]
 
         # ------------------------------------------------------------------
-        # Extract interval from valid cells
+        # Extract interval from valid cells, incorporating valid knots
         # ------------------------------------------------------------------
-        if first_valid_idx == -1:
-            # No valid region — return degenerate interval at peak
-            # Peak is at y = B/A (test score vertex)
-            peak = B / A if A > 0 else 0.0
-            return float(peak), float(peak)
+        if first_valid_idx == -1 and not valid_knots:
+            # No valid region at all — return empty interval
+            return np.nan, np.nan, []
 
-        # Determine bounds from first and last valid cells
-        # Cell i corresponds to the open interval (knots[i-1], knots[i]) for i in 1..len(knots)
-        # Cell 0 is (-∞, knots[0])
-        # Cell len(knots) is (knots[-1], +∞)
+        # Build the exact prediction set as union of valid cells and valid knots
+        # Valid cells: cell i corresponds to open interval (knots[i-1], knots[i]) for i=1..len
+        # Cell 0 is (-∞, knots[0]), cell len(knots) is (knots[-1], +∞)
+        
+        # If we have valid knots but no valid cells, return singleton(s)
+        if first_valid_idx == -1:
+            # All cells invalid, only knots valid
+            if len(valid_knots) == 1:
+                return valid_knots[0], valid_knots[0], valid_knots
+            else:
+                # Multiple disjoint singletons — return the smallest enclosing interval
+                # (conservative but valid)
+                return min(valid_knots), max(valid_knots), valid_knots
+
+        # Determine bounds from first and last valid cells, incorporating valid knots
+        lo = None
+        hi = None
+
         if first_valid_idx == 0:
+            # Cell 0 is (-∞, knots[0])
             lo = -np.inf
+            # Check if knot[0] is valid (was already added to valid_knots above)
         else:
             lo = float(knots_events[first_valid_idx - 1]["value"])
 
         if last_valid_idx == len(knots_events):
+            # Rightmost end-cell is valid
             hi = np.inf
         else:
             hi = float(knots_events[last_valid_idx]["value"])
 
-        return float(lo), float(hi)
+        # If lo is a valid knot but not part of a valid cell, adjust to singleton
+        if valid_knots and lo is not None and hi is not None:
+            lo_knot = float(knots_events[first_valid_idx - 1]["value"]) if first_valid_idx > 0 else None
+            hi_knot = float(knots_events[last_valid_idx]["value"]) if last_valid_idx < len(knots_events) else None
+            
+            # If lo_knot is valid and the cell to its left is invalid, lo should be singleton
+            if lo_knot in valid_knots and first_valid_idx > 0:
+                # The knot is valid but the cell to its left is not
+                # This is a singleton at the left boundary
+                pass  # Keep lo as is, valid_knots will record it
+
+        return float(lo) if lo is not None else float(knots_events[0]["value"]), \
+               float(hi) if hi is not None else float(knots_events[-1]["value"]), \
+               valid_knots
 
     # ------------------------------------------------------------------
     # compute_p_value
@@ -2993,20 +3112,25 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         y_cand = float(y_cand)
 
-        # FIX: Use a deterministic seed based on the test point x
+        # FIX: Use a deterministic seed based on the test point x for tree building
         # This ensures the same tree is built for all candidate y values
-        # The seed must be deterministic based on x, not on self.rnd_gen state
-        # Use sum of x values (hashed) to create a reproducible seed
         x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
-        local_rnd_gen = np.random.default_rng(x_seed)
+        tree_rnd_gen = np.random.default_rng(x_seed)
+        
+        # tau must be INDEPENDENT of the tree, drawn from a separate source
+        # If tau is not provided, draw it from a deterministic but SEPARATE source
+        if tau is None:
+            # Use a different deterministic seed for tau (independent of tree)
+            tau_seed = (x_seed * 2654435761) % (2**32)  # Prime multiplier for decorrelation
+            tau_rnd_gen = np.random.default_rng(tau_seed)
+            tau = tau_rnd_gen.uniform(0.0, 1.0)
 
-        tree, leaf_star, _ = self._build_augmented_tree_with_rng(x, local_rnd_gen)
+        tree, leaf_star, _ = self._build_augmented_tree_with_rng(x, tree_rnd_gen)
         leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
         A = len(leaf_star_train_idx)
         B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
         ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
-        if tau is None:
-            tau = self.rnd_gen.uniform(0.0, 1.0)
+        # tau was already set above if None
         p_val = float(
             self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau)[0]
         )
@@ -3062,9 +3186,32 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         A = len(leaf_star_train_idx)
         B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
 
+        # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
+        # Use it for smoothed p-value calculation. This must be done BEFORE any A==0 checks.
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+        
         # ---- A = 0: empty leaf → total epistemic uncertainty -----------
         if A == 0:
-            result = self._make_result(epsilon, -np.inf, np.inf)
+            ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+            
+            # Since test score is 0, rank depends entirely on outside scores >= 0
+            gt = int(np.sum(ext_sorted > 0))
+            eq = int(np.sum(ext_sorted == 0))
+            p_const = (gt + tau * (eq + 1)) / (n + 1)
+            
+            eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+            predictions = {}
+            for eps_val in eps_arr:
+                if p_const > eps_val:
+                    predictions[float(eps_val)] = self._construct_Gamma(-np.inf, np.inf, float(eps_val))
+                else:
+                    predictions[float(eps_val)] = self._construct_Gamma(np.nan, np.nan, float(eps_val))
+                    
+            if hasattr(epsilon, "__iter__"):
+                result = MultiLevelPredictionInterval(predictions)
+            else:
+                result = predictions[float(eps_arr[0])]
+                
             if return_update:
                 return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
             return result
@@ -3093,34 +3240,33 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # Sort and de-duplicate
         knots_arr = np.unique(np.array(knots, dtype=float))
 
-        # ---- Event-driven sweep using knot events (O(n) amortised per knot) ----
-        # Draw ONE tau for the entire predict call to ensure deterministic save/load.
-        # Use it for smoothed p-value calculation.
-        tau = self.rnd_gen.uniform(0.0, 1.0)
-
         # Build knot events with +1/-1 flags
         knots_events, permanent_ties = self._build_knot_events(A, B, ext_sorted, y_star)
 
         # Perform left-to-right sweep to find valid region
-        lo, hi = self._pvalue_from_sweep(
-            knots_events, A, B, ext_sorted, y_star, n, permanent_ties, epsilon if not hasattr(epsilon, "__iter__") else epsilon[0], tau
+        lo, hi, valid_knots = self._pvalue_from_sweep(
+            knots_events, A, B, ext_sorted, y_star, n, permanent_ties,
+            epsilon if not hasattr(epsilon, "__iter__") else epsilon[0], tau
         )
 
-        result = self._construct_Gamma(lo, hi, float(epsilon) if not hasattr(epsilon, "__iter__") else epsilon[0])
-
-        if hasattr(epsilon, "__iter__"):
-            # Multi-level case: we need to compute p-values at knots for the full profile
-            # For now, fall back to the original logic for compatibility
-            _MARGIN = max(abs(knots_arr[0]), abs(knots_arr[-1]), 1.0) * 10.0
-            midpoints = np.concatenate(
-                [
-                    [knots_arr[0] - _MARGIN],
-                    (knots_arr[:-1] + knots_arr[1:]) / 2.0,
-                    [knots_arr[-1] + _MARGIN],
-                ]
+        # Build result with correct topology
+        eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+        predictions = {}
+        
+        for eps_val in eps_arr:
+            lo, hi, valid_knots = self._pvalue_from_sweep(
+                knots_events, A, B, ext_sorted, y_star, n, permanent_ties, float(eps_val), tau
             )
-            p_vals = self._pvalues_at(midpoints, A, B, ext_sorted, y_star, n, tau)
-            result = self._make_multi_result(epsilon, knots_arr, midpoints, p_vals)
+            
+            if len(valid_knots) == 1 and lo == hi == valid_knots[0]:
+                predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+            else:
+                predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+                
+        if hasattr(epsilon, "__iter__"):
+            result = MultiLevelPredictionInterval(predictions)
+        else:
+            result = predictions[float(eps_arr[0])]
 
 
         if return_update:
@@ -3144,9 +3290,8 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         threshold = epsilon
         valid = p_vals > threshold
         if not np.any(valid):
-            # No candidate passes — return degenerate interval at peak
-            mid = midpoints[np.argmax(p_vals)]
-            return mid, mid
+            # No candidate passes — return empty interval
+            return np.nan, np.nan
         # Knot boundaries: the valid midpoints index into intervals between knots.
         # Interval i spans [knots[i-1], knots[i]] with midpoint midpoints[i].
         # midpoints[0] < knots[0] → left-open interval, midpoints[-1] > knots[-1] → right-open.
@@ -3488,13 +3633,19 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         # Use a hash of x to create reproducible seeds for each tree
         x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
         seeds = np.array([x_seed + i for i in range(self.n_trees)])
+        
+        # tau is drawn ONCE in predict() and passed to compute_p_value
+        # If tau is not provided, draw it from a SEPARATE deterministic source
+        # Tau must be independent of the tree-building process
+        if tau is None:
+            # Use a different deterministic seed for tau (independent of tree seeds)
+            tau_seed = (x_seed * 2654435761) % (2**32)  # Prime multiplier for decorrelation
+            tau = np.random.default_rng(tau_seed).uniform(0.0, 1.0)
 
         # Compute NCMs with deterministic seeds
         avg_train_ncms, avg_test_ncm = self._compute_avg_ncms_with_seeds(x, float(y_cand), seeds)
 
         all_ncms = np.append(avg_train_ncms, avg_test_ncm)
-        if tau is None:
-            tau = self.rnd_gen.uniform(0.0, 1.0)
         p_val = float(self._compute_p_value(all_ncms, tau))
 
         if return_update:
@@ -3645,8 +3796,16 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         lo_bound = y_min - 2.0 * span
         hi_bound = y_max + 2.0 * span
 
+        # Extract test-leaf means from each tree (ls_mu from summaries)
+        # These are the exact locations where p(y) may have kinks
+        leaf_means = np.array([ls_mu for _, _, ls_mu in summaries])
+        
         # ---- Grid evaluation (all with the same tau) --------------------
         grid = np.linspace(lo_bound, hi_bound, self.grid_resolution)
+        # Inject leaf means into grid to eliminate blind spots
+        grid = np.concatenate([grid, leaf_means])
+        # Sort and remove duplicates
+        grid = np.unique(grid)
         grid_p = np.array([p_value_at(float(yc)) for yc in grid])
 
         tol = self.bisection_tol
@@ -3688,9 +3847,8 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             right_inf = p_far_right > threshold
 
             if not np.any(valid) and not left_inf and not right_inf:
-                # No valid region found — return degenerate interval at peak
-                mid = float(grid[np.argmax(grid_p)])
-                return mid, mid
+                # No valid region found — return empty interval
+                return np.nan, np.nan
 
             valid_idx = np.where(valid)[0]
 

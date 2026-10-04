@@ -2969,7 +2969,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         last_valid_idx = -1
         valid_knots: list[float] = []
         prev_knot = None
-        prev_knot_idx = -1  # index of previous knot in knots_events
 
         for i in range(len(knots_events) + 1):
             # Determine the cell's right boundary (current knot) and left boundary (prev knot)
@@ -3018,7 +3017,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             if knot_val is not None:
                 greater_count += flag
                 prev_knot = knot_val
-                prev_knot_idx = i
             elif prev_knot is not None:
                 # Already processed all knots, we're done
                 break
@@ -3035,7 +3033,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # Build the exact prediction set as union of valid cells and valid knots
         # Valid cells: cell i corresponds to open interval (knots[i-1], knots[i]) for i=1..len
         # Cell 0 is (-∞, knots[0]), cell len(knots) is (knots[-1], +∞)
-        
+
         # If we have valid knots but no valid cells, return singleton(s)
         if first_valid_idx == -1:
             # All cells invalid, only knots valid
@@ -3066,8 +3064,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # If lo is a valid knot but not part of a valid cell, adjust to singleton
         if valid_knots and lo is not None and hi is not None:
             lo_knot = float(knots_events[first_valid_idx - 1]["value"]) if first_valid_idx > 0 else None
-            hi_knot = float(knots_events[last_valid_idx]["value"]) if last_valid_idx < len(knots_events) else None
-            
+
             # If lo_knot is valid and the cell to its left is invalid, lo should be singleton
             if lo_knot in valid_knots and first_valid_idx > 0:
                 # The knot is valid but the cell to its left is not
@@ -3116,7 +3113,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # This ensures the same tree is built for all candidate y values
         x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
         tree_rnd_gen = np.random.default_rng(x_seed)
-        
+
         # tau must be INDEPENDENT of the tree, drawn from a separate source
         # If tau is not provided, draw it from a deterministic but SEPARATE source
         if tau is None:
@@ -3189,16 +3186,16 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
         # Use it for smoothed p-value calculation. This must be done BEFORE any A==0 checks.
         tau = self.rnd_gen.uniform(0.0, 1.0)
-        
+
         # ---- A = 0: empty leaf → total epistemic uncertainty -----------
         if A == 0:
             ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
-            
+
             # Since test score is 0, rank depends entirely on outside scores >= 0
             gt = int(np.sum(ext_sorted > 0))
             eq = int(np.sum(ext_sorted == 0))
             p_const = (gt + tau * (eq + 1)) / (n + 1)
-            
+
             eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
             predictions = {}
             for eps_val in eps_arr:
@@ -3206,12 +3203,12 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                     predictions[float(eps_val)] = self._construct_Gamma(-np.inf, np.inf, float(eps_val))
                 else:
                     predictions[float(eps_val)] = self._construct_Gamma(np.nan, np.nan, float(eps_val))
-                    
+
             if hasattr(epsilon, "__iter__"):
                 result = MultiLevelPredictionInterval(predictions)
             else:
                 result = predictions[float(eps_arr[0])]
-                
+
             if return_update:
                 return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
             return result
@@ -3237,8 +3234,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         if A > 1:
             knots.extend(((2.0 * B - (A + 1) * y_star) / (A - 1)).tolist())
 
-        # Sort and de-duplicate
-        knots_arr = np.unique(np.array(knots, dtype=float))
+        # Sort and de-duplicate (for potential future use)
 
         # Build knot events with +1/-1 flags
         knots_events, permanent_ties = self._build_knot_events(A, B, ext_sorted, y_star)
@@ -3252,17 +3248,17 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # Build result with correct topology
         eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
         predictions = {}
-        
+
         for eps_val in eps_arr:
             lo, hi, valid_knots = self._pvalue_from_sweep(
                 knots_events, A, B, ext_sorted, y_star, n, permanent_ties, float(eps_val), tau
             )
-            
+
             if len(valid_knots) == 1 and lo == hi == valid_knots[0]:
                 predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
             else:
                 predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
-                
+
         if hasattr(epsilon, "__iter__"):
             result = MultiLevelPredictionInterval(predictions)
         else:
@@ -3633,7 +3629,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         # Use a hash of x to create reproducible seeds for each tree
         x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
         seeds = np.array([x_seed + i for i in range(self.n_trees)])
-        
+
         # tau is drawn ONCE in predict() and passed to compute_p_value
         # If tau is not provided, draw it from a SEPARATE deterministic source
         # Tau must be independent of the tree-building process
@@ -3790,103 +3786,152 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             eq = int(np.sum(np.abs(avg_train - alpha_y) <= _TOL))  # exclude test point, apply tau below
             return float((gt + tau * eq) / (n + 1))
 
-        # ---- Define search range ----------------------------------------
-        y_min, y_max = self.y.min(), self.y.max()
-        span = max(y_max - y_min, 1.0)
-        lo_bound = y_min - 2.0 * span
-        hi_bound = y_max + 2.0 * span
+        # ---- Exact Vectorized Topological Solver -----------------------
+        M = len(summaries)
+        A_arr = np.zeros(M, dtype=int)
+        B_arr = np.zeros(M, dtype=float)
+        base_ncm_arr = np.zeros((M, n))
+        inside_mask = np.zeros((M, n), dtype=bool)
 
-        # Extract test-leaf means from each tree (ls_mu from summaries)
-        # These are the exact locations where p(y) may have kinks
-        leaf_means = np.array([ls_mu for _, _, ls_mu in summaries])
-        
-        # ---- Grid evaluation (all with the same tau) --------------------
-        grid = np.linspace(lo_bound, hi_bound, self.grid_resolution)
-        # Inject leaf means into grid to eliminate blind spots
-        grid = np.concatenate([grid, leaf_means])
-        # Sort and remove duplicates
-        grid = np.unique(grid)
-        grid_p = np.array([p_value_at(float(yc)) for yc in grid])
+        test_vertices = []
+        for m, (base_ncm, ls_idx, ls_mu) in enumerate(summaries):
+            A = len(ls_idx)
+            A_arr[m] = A
+            if A > 0:
+                B_arr[m] = ls_mu * A
+                test_vertices.append(ls_mu)
+                inside_mask[m, ls_idx] = True
+            base_ncm_arr[m] = base_ncm
 
-        tol = self.bisection_tol
+        test_vertices = np.unique(test_vertices)
 
-        def bisect_left(y_out: float, y_in: float, threshold: float) -> float:
-            """Find crossing from outside→inside (y increases into valid region)."""
-            for _ in range(60):
-                if y_in - y_out < tol:
-                    break
-                mid = (y_out + y_in) / 2.0
-                if p_value_at(mid) > threshold:
-                    y_in = mid
-                else:
-                    y_out = mid
-            return (y_out + y_in) / 2.0
+        # 1. Collect all topological kinks
+        all_kinks = list(test_vertices)
+        for m in range(M):
+            A = A_arr[m]
+            B = B_arr[m]
+            if A > 0:
+                in_idx = inside_mask[m]
+                if np.any(in_idx):
+                    kinks = (A + 1) * self.y[in_idx] - B
+                    all_kinks.extend(kinks.tolist())
 
-        def bisect_right(y_in: float, y_out: float, threshold: float) -> float:
-            """Find crossing from inside→outside (y increases out of valid region)."""
-            for _ in range(60):
-                if y_out - y_in < tol:
-                    break
-                mid = (y_in + y_out) / 2.0
-                if p_value_at(mid) > threshold:
-                    y_in = mid
-                else:
-                    y_out = mid
-            return (y_in + y_out) / 2.0
+        all_kinks = np.unique(all_kinks)
+        if len(all_kinks) == 0:
+            all_kinks = np.array([0.0])
 
-        def _interval_for_eps(eps_val: float) -> tuple[float, float]:
-            # Prediction set is {y : p(y) > epsilon} (ALRW2 convention)
-            threshold = eps_val
-            valid = grid_p > threshold
+        margin = 1.0 if len(all_kinks) == 1 else (all_kinks[-1] - all_kinks[0]) * 0.1 + 1.0
+        Y_kinks = np.concatenate([[all_kinks[0] - margin], all_kinks, [all_kinks[-1] + margin]])
+        K_len = len(Y_kinks)
 
-            # Check if interval extends beyond grid boundaries
-            p_far_left = p_value_at(lo_bound - 10.0 * span)
-            p_far_right = p_value_at(hi_bound + 10.0 * span)
+        # 2. Vectorized evaluation of D(y) over all kinks
+        test_ncm = np.abs(A_arr[:, None] * Y_kinks[None, :] - B_arr[:, None]) / (A_arr[:, None] + 1)
+        avg_test_ncm = np.mean(test_ncm, axis=0)
 
-            left_inf = p_far_left > threshold
-            right_inf = p_far_right > threshold
+        sum_train_ncm = np.zeros((n, K_len))
+        for m in range(M):
+            A = A_arr[m]
+            B = B_arr[m]
+            sum_train_ncm += base_ncm_arr[m][:, None]
+            if A > 0:
+                in_idx = inside_mask[m]
+                if np.any(in_idx):
+                    y_star = self.y[in_idx]
+                    sum_train_ncm[in_idx, :] -= base_ncm_arr[m][in_idx, None]
+                    sum_train_ncm[in_idx, :] += np.abs((A + 1) * y_star[:, None] - B - Y_kinks[None, :]) / (A + 1)
+        avg_train_ncm = sum_train_ncm / M
 
-            if not np.any(valid) and not left_inf and not right_inf:
-                # No valid region found — return empty interval
-                return np.nan, np.nan
+        D = avg_train_ncm - avg_test_ncm[None, :]
 
-            valid_idx = np.where(valid)[0]
+        # 3. Find true zero-crossings strictly between kinks
+        D_left = D[:, :-1]
+        D_right = D[:, 1:]
+        cross_mask = ((D_left > 1e-11) & (D_right < -1e-11)) | ((D_left < -1e-11) & (D_right > 1e-11))
 
-            # Lower bound
-            if left_inf:
-                lo = -np.inf
-            elif len(valid_idx) == 0 or valid_idx[0] == 0:
-                # Valid starts at or before grid left edge — bisect outward
-                if grid_p[0] > threshold:
-                    lo = bisect_left(lo_bound - 10.0 * span, lo_bound, threshold)
-                else:
-                    lo = lo_bound  # best we can do without more probing
-            else:
-                lo = bisect_left(grid[valid_idx[0] - 1], grid[valid_idx[0]], threshold)
-
-            # Upper bound
-            if right_inf:
-                hi = np.inf
-            elif len(valid_idx) == 0 or valid_idx[-1] == len(grid) - 1:
-                if grid_p[-1] > threshold:
-                    hi = bisect_right(hi_bound, hi_bound + 10.0 * span, threshold)
-                else:
-                    hi = hi_bound
-            else:
-                hi = bisect_right(grid[valid_idx[-1]], grid[valid_idx[-1] + 1], threshold)
-
-            return lo, hi
-
-        eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
-        if len(eps_arr) == 1 and not hasattr(epsilon, "__iter__"):
-            lo, hi = _interval_for_eps(float(eps_arr[0]))
-            result = self._construct_Gamma(lo, hi, float(eps_arr[0]))
+        cross_i, cross_k = np.where(cross_mask)
+        if len(cross_i) > 0:
+            d1 = D_left[cross_i, cross_k]
+            d2 = D_right[cross_i, cross_k]
+            y1 = Y_kinks[cross_k]
+            y2 = Y_kinks[cross_k + 1]
+            roots = y1 - d1 * (y2 - y1) / (d2 - d1)
+            Y_eval = np.unique(np.concatenate([Y_kinks, roots]))
         else:
-            predictions = {}
-            for eps_val in eps_arr:
-                lo, hi = _interval_for_eps(float(eps_val))
-                predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+            Y_eval = Y_kinks
+
+        Y_mid = (Y_eval[:-1] + Y_eval[1:]) / 2
+
+        # 4. Pure Vectorized P-Value Evaluator
+        def eval_p_values(y_cands):
+            if len(y_cands) == 0:
+                return np.array([])
+
+            t_ncm = np.abs(A_arr[:, None] * y_cands[None, :] - B_arr[:, None]) / (A_arr[:, None] + 1)
+            a_test = np.mean(t_ncm, axis=0)
+
+            a_train = np.zeros((n, len(y_cands)))
+            for m in range(M):
+                A = A_arr[m]
+                B = B_arr[m]
+                a_train += base_ncm_arr[m][:, None]
+                if A > 0:
+                    in_idx = inside_mask[m]
+                    if np.any(in_idx):
+                        y_star = self.y[in_idx]
+                        a_train[in_idx, :] -= base_ncm_arr[m][in_idx, None]
+                        a_train[in_idx, :] += np.abs((A + 1) * y_star[:, None] - B - y_cands[None, :]) / (A + 1)
+            a_train /= M
+
+            gt = np.sum(a_train > a_test[None, :] + 1e-11, axis=0)
+            eq = np.sum(np.abs(a_train - a_test[None, :]) <= 1e-11, axis=0)
+            return (gt + tau * eq) / (n + 1)
+
+        # 5. Evaluate exactly on all topological regions and boundaries
+        p_eval = eval_p_values(Y_eval)
+        p_mid = eval_p_values(Y_mid)
+
+        # 6. Extract bounds
+        eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+        predictions = {}
+
+        for eps_val in eps_arr:
+            valid_eval = p_eval > eps_val
+            valid_mid = p_mid > eps_val
+
+            lo, hi = np.nan, np.nan
+
+            if len(valid_eval) > 0:
+                if valid_eval[0]:
+                    lo = -np.inf
+                if valid_eval[-1]:
+                    hi = np.inf
+
+            if np.isnan(lo):
+                first_mid = np.where(valid_mid)[0]
+                first_eval = np.where(valid_eval)[0]
+                min_y = np.inf
+                if len(first_mid) > 0:
+                    min_y = min(min_y, Y_eval[first_mid[0]])
+                if len(first_eval) > 0:
+                    min_y = min(min_y, Y_eval[first_eval[0]])
+                lo = min_y if min_y != np.inf else np.nan
+
+            if np.isnan(hi):
+                last_mid = np.where(valid_mid)[0]
+                last_eval = np.where(valid_eval)[0]
+                max_y = -np.inf
+                if len(last_mid) > 0:
+                    max_y = max(max_y, Y_eval[last_mid[-1] + 1])
+                if len(last_eval) > 0:
+                    max_y = max(max_y, Y_eval[last_eval[-1]])
+                hi = max_y if max_y != -np.inf else np.nan
+
+            predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+
+        if hasattr(epsilon, "__iter__"):
             result = MultiLevelPredictionInterval(predictions)
+        else:
+            result = predictions[float(eps_arr[0])]
 
         if return_update:
             return result, {"online_forest": getattr(self, "_pending_forest", None)}

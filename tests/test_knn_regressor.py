@@ -3,7 +3,7 @@ import pytest
 
 from online_cp.regressors import (
     ConformalNearestNeighboursRegressor,
-    MultiLevelPredictionInterval,
+    MultiLevelPredictionSet,
 )
 
 
@@ -153,14 +153,14 @@ class TestConformalNearestNeighboursRegressor:
         assert np.allclose(cp.D, cp2.D)
 
     def test_multi_level_epsilon(self, nonlinear_dataset):
-        """Array-valued epsilon should return MultiLevelPredictionInterval."""
+        """Array-valued epsilon should return MultiLevelPredictionSet."""
         X, y = nonlinear_dataset
         cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
         cp.learn_initial_training_set(X[:30], y[:30])
 
         epsilons = np.array([0.05, 0.1, 0.2])
         result = cp.predict(X[30], epsilon=epsilons)
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert len(result) == 3
         # Wider intervals at lower epsilon
         assert result[0.05].width() >= result[0.1].width()

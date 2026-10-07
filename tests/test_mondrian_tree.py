@@ -17,7 +17,7 @@ from sklearn.datasets import load_iris, make_blobs
 from online_cp.classifiers import (
     ConformalMondrianForestClassifier,
     ConformalMondrianTreeClassifier,
-    ConformalPredictionSet,
+    DiscretePredictionSet,
     MultiLevelPredictionSet,
 )
 from online_cp.mondrian import MondrianTree
@@ -134,7 +134,7 @@ class TestConformalMondrianTreeClassifier:
             clf.predict(x_bad)
 
     def test_predict_returns_conformal_prediction_set(self, iris_data):
-        """Test that predict returns ConformalPredictionSet for scalar epsilon."""
+        """Test that predict returns DiscretePredictionSet for scalar epsilon."""
         X, y = iris_data
         X_train, y_train = X[:60], y[:60]
 
@@ -142,7 +142,7 @@ class TestConformalMondrianTreeClassifier:
         clf.learn_initial_training_set(X_train, y_train)
 
         result = clf.predict(X[60])
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
         assert hasattr(result, 'elements')
 
     def test_predict_multi_level_epsilon(self, iris_data):
@@ -170,7 +170,7 @@ class TestConformalMondrianTreeClassifier:
         result = clf.predict(X[60], return_p_values=True)
         assert isinstance(result, tuple)
         assert len(result) == 2
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert isinstance(result[1], dict)
         assert set(result[1].keys()) == set(clf.label_space)
 
@@ -189,7 +189,7 @@ class TestConformalMondrianTreeClassifier:
         result = clf.predict(X[60], return_update=True)
         assert isinstance(result, tuple)
         assert len(result) == 2
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert isinstance(result[1], dict)
         assert 'tree' in result[1]
         assert 'leaf_star' in result[1]
@@ -238,7 +238,7 @@ class TestConformalMondrianTreeClassifier:
 
         result = clf.predict(X[60], epsilon=0.5)
         # With epsilon=0.5, set should typically be non-empty (but allow for rare cases)
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
 
     def test_first_prediction_includes_all_labels(self, iris_data):
         """Test that first prediction with minimal training includes labels."""
@@ -250,7 +250,7 @@ class TestConformalMondrianTreeClassifier:
 
         result = clf.predict(X[1], epsilon=0.3)
         # With single training point and moderate epsilon, set should be non-empty
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
 
     def test_compute_p_value_single_label(self, iris_data):
         """Test compute_p_value for a single label."""
@@ -379,7 +379,7 @@ class TestConformalMondrianTreeClassifier:
 
         # With lifetime=inf, leaves can become singleton
         result = clf.predict(X[0], return_p_values=True)
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert all(0 <= p <= 1 for p in result[1].values())
 
     def test_lifetime_parameter(self):
@@ -398,8 +398,8 @@ class TestConformalMondrianTreeClassifier:
         result_shallow = clf_shallow.predict(X[0])
         result_deep = clf_deep.predict(X[0])
 
-        assert isinstance(result_shallow, ConformalPredictionSet)
-        assert isinstance(result_deep, ConformalPredictionSet)
+        assert isinstance(result_shallow, DiscretePredictionSet)
+        assert isinstance(result_deep, DiscretePredictionSet)
 
     def test_arbitrary_label_space(self):
         """Test that arbitrary labels (not just 0,1,2) are handled."""
@@ -428,8 +428,8 @@ class TestConformalMondrianTreeClassifier:
         # Test with (1, 3) shape
         result2 = clf.predict(X[0:1], epsilon=0.1)
 
-        assert isinstance(result1, ConformalPredictionSet)
-        assert isinstance(result2, ConformalPredictionSet)
+        assert isinstance(result1, DiscretePredictionSet)
+        assert isinstance(result2, DiscretePredictionSet)
 
 
 class TestEdgeCases:
@@ -447,7 +447,7 @@ class TestEdgeCases:
         clf.learn_initial_training_set(X[:80], y[:80])
 
         result = clf.predict(X[80], return_p_values=True)
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert all(0 <= p <= 1 for p in result[1].values())
 
     def test_identical_points(self):
@@ -460,7 +460,7 @@ class TestEdgeCases:
 
         # Test point at cluster center (conforming) should produce non-empty set
         result = clf.predict(np.array([1.0, 1.0]), epsilon=0.1)
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
         assert len(result.elements) > 0
 
     def test_high_dimensions(self):
@@ -472,7 +472,7 @@ class TestEdgeCases:
         clf.learn_initial_training_set(X, y)
 
         result = clf.predict(np.random.randn(100), epsilon=0.1, return_p_values=True)
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert all(0 <= p <= 1 for p in result[1].values())
 
     def test_zero_epsilon(self):
@@ -485,7 +485,7 @@ class TestEdgeCases:
 
         result = clf.predict(X[0])
         # With epsilon=0, prediction set should be small (possibly empty)
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
 
 
 class TestConformalMondrianForestClassifier:
@@ -564,7 +564,7 @@ class TestConformalMondrianForestClassifier:
             assert clf.n_trees == n_trees
 
     def test_predict_returns_conformal_prediction_set(self, iris_data):
-        """Test that predict returns ConformalPredictionSet for scalar epsilon."""
+        """Test that predict returns DiscretePredictionSet for scalar epsilon."""
         X, y = iris_data
         X_train, y_train = X[:60], y[:60]
 
@@ -572,7 +572,7 @@ class TestConformalMondrianForestClassifier:
         clf.learn_initial_training_set(X_train, y_train)
 
         result = clf.predict(X[60])
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
         assert hasattr(result, 'elements')
 
     def test_predict_multi_level_epsilon(self, iris_data):
@@ -600,7 +600,7 @@ class TestConformalMondrianForestClassifier:
         result = clf.predict(X[60], return_p_values=True)
         assert isinstance(result, tuple)
         assert len(result) == 2
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert isinstance(result[1], dict)
         assert set(result[1].keys()) == set(clf.label_space)
 
@@ -618,7 +618,7 @@ class TestConformalMondrianForestClassifier:
         result = clf.predict(X[60], return_update=True)
         assert isinstance(result, tuple)
         assert len(result) == 2
-        assert isinstance(result[0], ConformalPredictionSet)
+        assert isinstance(result[0], DiscretePredictionSet)
         assert isinstance(result[1], dict)
         assert 'n_leaves_all' in result[1]
         assert 'counts_all' in result[1]
@@ -780,7 +780,7 @@ class TestConformalMondrianForestClassifier:
         for x_t in X_test[:10]:
             pred_set = clf_tree.predict(x_t, epsilon=0.2)
             sizes_tree.append(len(pred_set.elements))
-            assert isinstance(pred_set, ConformalPredictionSet)
+            assert isinstance(pred_set, DiscretePredictionSet)
 
         # Forest with multiple trees
         clf_forest = ConformalMondrianForestClassifier(n_trees=10, lifetime=1.0, epsilon=0.2, rnd_state=0)
@@ -789,7 +789,7 @@ class TestConformalMondrianForestClassifier:
         for x_t in X_test[:10]:
             pred_set = clf_forest.predict(x_t, epsilon=0.2)
             sizes_forest.append(len(pred_set.elements))
-            assert isinstance(pred_set, ConformalPredictionSet)
+            assert isinstance(pred_set, DiscretePredictionSet)
 
         # Both should produce valid predictions
         assert len(sizes_tree) == 10
@@ -823,7 +823,7 @@ class TestConformalMondrianForestClassifier:
 
             for x_t in X_test:
                 result = clf.predict(x_t, epsilon=0.1, return_p_values=True)
-                assert isinstance(result[0], ConformalPredictionSet)
+                assert isinstance(result[0], DiscretePredictionSet)
                 assert all(0 <= p <= 1 for p in result[1].values())
 
     def test_lifetime_parameter(self):
@@ -843,8 +843,8 @@ class TestConformalMondrianForestClassifier:
         result_shallow = clf_shallow.predict(X[0])
         result_deep = clf_deep.predict(X[0])
 
-        assert isinstance(result_shallow, ConformalPredictionSet)
-        assert isinstance(result_deep, ConformalPredictionSet)
+        assert isinstance(result_shallow, DiscretePredictionSet)
+        assert isinstance(result_deep, DiscretePredictionSet)
 
     def test_epsilon_one(self):
         """Test with epsilon=0.5 (reasonable level)."""
@@ -856,7 +856,7 @@ class TestConformalMondrianForestClassifier:
 
         result = clf.predict(X[0])
         # With epsilon=0.5, typically some labels included
-        assert isinstance(result, ConformalPredictionSet)
+        assert isinstance(result, DiscretePredictionSet)
 
 
 # ===========================================================================
@@ -866,9 +866,8 @@ class TestConformalMondrianForestClassifier:
 from online_cp.regressors import (  # noqa: E402
     ConformalMondrianForestRegressor,
     ConformalMondrianTreeRegressor,
-    ConformalPredictionInterval,
     ConformalRegressor,
-    MultiLevelPredictionInterval,
+    ContinuousPredictionSet,
 )
 
 
@@ -908,7 +907,7 @@ class TestConformalMondrianTreeRegressor:
         reg = ConformalMondrianTreeRegressor(rnd_state=0)
         reg.learn_initial_training_set(X, y)
         result = reg.predict(X[0])
-        assert isinstance(result, ConformalPredictionInterval)
+        assert isinstance(result, ContinuousPredictionSet)
 
     def test_predict_lower_le_upper(self, sinusoid_data):
         X, y = sinusoid_data
@@ -924,7 +923,7 @@ class TestConformalMondrianTreeRegressor:
         reg.learn_initial_training_set(X, y)
         eps = np.array([0.05, 0.1, 0.2])
         result = reg.predict(X[0], epsilon=eps)
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         # Larger epsilon → smaller (or equal) interval
         ivs = [result[e] for e in sorted(eps)]
         widths = [iv.upper - iv.lower for iv in ivs]
@@ -979,7 +978,7 @@ class TestConformalMondrianTreeRegressor:
         reg = ConformalMondrianTreeRegressor(rnd_state=0)
         reg.learn_initial_training_set(X, y)
         result, upd = reg.predict(X[0], return_update=True)
-        assert isinstance(result, ConformalPredictionInterval)
+        assert isinstance(result, ContinuousPredictionSet)
         assert "tree" in upd and "leaf_star" in upd
 
     def test_finite_interval_typical_case(self, sinusoid_data):
@@ -1003,7 +1002,7 @@ class TestConformalMondrianForestRegressor:
         reg = ConformalMondrianForestRegressor(n_trees=5, rnd_state=0)
         reg.learn_initial_training_set(X, y)
         result = reg.predict(X[0])
-        assert isinstance(result, ConformalPredictionInterval)
+        assert isinstance(result, ContinuousPredictionSet)
 
     def test_predict_lower_le_upper(self, sinusoid_data):
         X, y = sinusoid_data
@@ -1064,7 +1063,7 @@ class TestConformalMondrianForestRegressor:
         reg.learn_initial_training_set(X, y)
         eps = np.array([0.05, 0.1, 0.2])
         result = reg.predict(X[0], epsilon=eps)
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
 
 
 if __name__ == "__main__":

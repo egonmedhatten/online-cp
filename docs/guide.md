@@ -34,7 +34,7 @@ flowchart TD
 
 ## Regressors
 
-All regressors produce `ConformalPredictionInterval` objects with guaranteed marginal coverage.
+All regressors produce `ContinuousPredictionSet` objects with guaranteed marginal coverage (one or more closed intervals `[a, b]`, including rays and disjoint unions). The legacy name `ConformalPredictionInterval` is retained as a deprecated alias.
 
 | Class | Complexity (per step) | Best when | Notes |
 |-------|----------------------|-----------|-------|
@@ -71,7 +71,7 @@ model = ConformalLassoRegressor(lam=0.1, autotune=True)
 
 ## Classifiers
 
-All classifiers produce `ConformalPredictionSet` objects — sets of labels guaranteed to contain the true label with probability $\geq 1 - \varepsilon$.
+All classifiers produce `DiscretePredictionSet` objects — sets of labels guaranteed to contain the true label with probability $\geq 1 - \varepsilon$. The legacy name `classifiers.ConformalPredictionSet` is retained as a deprecated alias.
 
 | Class | Complexity (per step) | Best when | Notes |
 |-------|----------------------|-----------|-------|

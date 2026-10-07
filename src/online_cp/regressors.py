@@ -66,14 +66,24 @@ from online_cp.mondrian.tree import (
     _MondrianNode,
     _summarize_tree_reg,
 )
+from online_cp.prediction_set import (
+    ContinuousPredictionSet,
+    DiscretePredictionSet,
+    EmptyPredictionSet,
+    MultiLevelPredictionSet,
+)
 
 __all__ = [
     "ConformalRidgeRegressor",
     "ConformalNearestNeighboursRegressor",
     "KernelConformalRidgeRegressor",
     "ConformalLassoRegressor",
-    "ConformalPredictionInterval",
-    "MultiLevelPredictionInterval",
+    "ContinuousPredictionSet",
+    "DiscretePredictionSet",
+    "EmptyPredictionSet",
+    "MultiLevelPredictionSet",
+    "ConformalPredictionInterval",  # deprecated
+    "MultiLevelPredictionInterval",  # deprecated
     "ConformalMondrianTreeRegressor",
     "ConformalMondrianForestRegressor",
 ]
@@ -82,45 +92,49 @@ __all__ = [
 default_epsilon = 0.1
 
 
-class ConformalPredictionInterval:
-    """A prediction interval produced by a conformal regressor.
+# ---------------------------------------------------------------------------
+# Deprecated wrappers
+#
+# The old ``ConformalPredictionInterval`` (regressor) and
+# ``MultiLevelPredictionInterval`` (regressor) classes have been unified into
+# the ``ContinuousPredictionSet`` / ``MultiLevelPredictionSet`` hierarchy in
+# :mod:`online_cp.prediction_set`. The names below are kept for backward
+# compatibility and emit a :class:`DeprecationWarning` on construction.
+# ---------------------------------------------------------------------------
+def _deprecation_msg(old: str, new: str) -> None:
+    warnings.warn(
+        f"`{old}` is deprecated and will be removed in a future release. "
+        f"Use `{new}` from `online_cp.prediction_set` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
-    Parameters
-    ----------
-    lower : float
-        Lower bound of the interval.
-    upper : float
-        Upper bound of the interval.
-    epsilon : float
-        Significance level at which the interval was constructed.
+
+class ConformalPredictionInterval(ContinuousPredictionSet):
+    """Deprecated. Use :class:`ContinuousPredictionSet` instead.
+
+    Parameters are ``(lower, upper, epsilon)`` for backward compatibility.
+    ``.lower`` / ``.upper`` are preserved as read-only properties.
     """
 
     def __init__(self, lower: float, upper: float, epsilon: float) -> None:
-        self.lower = lower
-        self.upper = upper
-        self.epsilon = epsilon
+        _deprecation_msg("ConformalPredictionInterval", "ContinuousPredictionSet")
+        super().__init__([(lower, upper)], epsilon)
 
     @property
-    def is_empty(self) -> bool:
-        """True if the interval is empty (no y satisfies p(y) > epsilon)."""
-        return (self.lower > self.upper) or (np.isnan(self.lower) and np.isnan(self.upper))
+    def lower(self) -> float:
+        """Lower bound of the (single) interval. Preserved for backward compat."""
+        return self.intervals[0][0] if self.intervals else float("nan")
 
-    def __contains__(self, y: float) -> bool:
-        """True if y is in the prediction set."""
-        if self.is_empty:
-            return False
-        return self.lower <= y <= self.upper
-
-    def width(self) -> float:
-        """Width of the prediction interval."""
-        if self.is_empty:
-            return 0.0
-        return self.upper - self.lower
+    @property
+    def upper(self) -> float:
+        """Upper bound of the (single) interval. Preserved for backward compat."""
+        return self.intervals[-1][1] if self.intervals else float("nan")
 
     def __repr__(self):
         if self.is_empty:
             return "()"
-        return repr((self.lower, self.upper))
+        return f"({self.lower}, {self.upper})"
 
     def __str__(self):
         if self.is_empty:
@@ -128,51 +142,15 @@ class ConformalPredictionInterval:
         return f"({self.lower}, {self.upper})"
 
 
-class MultiLevelPredictionInterval:
-    """Prediction intervals at multiple significance levels.
+class MultiLevelPredictionInterval(MultiLevelPredictionSet):
+    """Deprecated. Use :class:`MultiLevelPredictionSet` instead."""
 
-    Returned when ``predict`` is called with an array-like ``epsilon``.
-
-    Parameters
-    ----------
-    predictions : dict
-        Mapping ``{epsilon: ConformalPredictionInterval}``.
-    """
-
-    def __init__(self, predictions: dict[float, ConformalPredictionInterval]) -> None:
-        self._predictions = dict(sorted(predictions.items()))
-
-    @property
-    def levels(self) -> list[float]:
-        """Sorted list of significance levels."""
-        return list(self._predictions.keys())
-
-    @property
-    def is_empty(self) -> bool:
-        """True if the prediction set is empty at any level."""
-        return any(interval.is_empty for interval in self._predictions.values())
-
-    def __getitem__(self, eps: float) -> ConformalPredictionInterval:
-        return self._predictions[eps]
-
-    def __iter__(self):
-        return iter(self._predictions.items())
-
-    def __len__(self) -> int:
-        return len(self._predictions)
-
-    def __contains__(self, y: float) -> bool:
-        """True if y is covered at all levels."""
-        if self.is_empty:
-            return False
-        return all(y in interval for interval in self._predictions.values())
-
-    def coverage(self, y: float) -> dict[float, bool]:
-        """Return dict of {epsilon: bool} indicating coverage at each level."""
-        return {eps: (y in interval) for eps, interval in self._predictions.items()}
+    def __init__(self, predictions: dict[float, ContinuousPredictionSet]) -> None:
+        _deprecation_msg("MultiLevelPredictionInterval", "MultiLevelPredictionSet")
+        super().__init__(predictions)
 
     def __repr__(self):
-        parts = [f"  ε={eps}: {interval}" for eps, interval in self._predictions.items()]
+        parts = [f"  ε={eps}: {pset!r}" for eps, pset in self._predictions.items()]
         return "MultiLevelPredictionInterval(\n" + "\n".join(parts) + "\n)"
 
 
@@ -190,7 +168,7 @@ class ConformalRegressor(SerializableMixin):
         self.epsilon = epsilon
 
     def _construct_Gamma(self, lower, upper, epsilon):
-        return ConformalPredictionInterval(lower, upper, epsilon)
+        return ContinuousPredictionSet([(lower, upper)], epsilon)
 
     @staticmethod
     def _safe_size_check(X):
@@ -626,9 +604,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
         bounds: str = "both",
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """
         This function makes a prediction.
@@ -639,7 +617,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
         >>> cp = ConformalRidgeRegressor()
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), bounds="both")
-        (-inf, inf)
+        ContinuousPredictionSet([(-inf, inf)])
         """
 
         def build_precomputed(X, XTXinv, A, B):
@@ -673,7 +651,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                         )
                     if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        result = MultiLevelPredictionSet(predictions)
                     else:
                         result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
@@ -690,7 +668,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                         )
                     if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        result = MultiLevelPredictionSet(predictions)
                     else:
                         result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
@@ -720,7 +698,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
                         up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
                         predictions[eps] = self._construct_Gamma(lo, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
@@ -731,7 +709,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
                         predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
                     result = self._construct_Gamma(lower, np.inf, epsilon)
@@ -741,7 +719,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
                         predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
                     result = self._construct_Gamma(-np.inf, upper, epsilon)
@@ -756,7 +734,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
             if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                result = MultiLevelPredictionSet(predictions)
             else:
                 result = self._construct_Gamma(-np.inf, np.inf, epsilon)
 
@@ -1086,9 +1064,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         bounds: str = "both",
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """Predict a conformal prediction interval for test object x.
 
@@ -1105,7 +1083,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
         Returns
         -------
-        result : ConformalPredictionInterval or MultiLevelPredictionInterval
+        result : ContinuousPredictionSet or MultiLevelPredictionSet
         precomputed : dict, optional
             Returned if return_update=True. Contains 'D'.
         """
@@ -1120,7 +1098,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             # No training data
             if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                result = MultiLevelPredictionSet(predictions)
             else:
                 result = self._construct_Gamma(-np.inf, np.inf, epsilon)
             if return_update:
@@ -1138,7 +1116,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         if not (eps_check >= min_needed / n_aug):
             if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                result = MultiLevelPredictionSet(predictions)
             else:
                 result = self._construct_Gamma(-np.inf, np.inf, epsilon)
             if return_update:
@@ -1213,7 +1191,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             for eps in epsilon:
                 lo, up = self._compute_interval(alpha_sorted, y_hat_test, eps, n_aug, bounds)
                 predictions[eps] = self._construct_Gamma(lo, up, eps)
-            result = MultiLevelPredictionInterval(predictions)
+            result = MultiLevelPredictionSet(predictions)
         else:
             lo, up = self._compute_interval(alpha_sorted, y_hat_test, epsilon, n_aug, bounds)
             result = self._construct_Gamma(lo, up, epsilon)
@@ -1539,9 +1517,9 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         bounds: str = "both",
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """
         This function makes a prediction.
@@ -1552,7 +1530,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
         >>> cp = ConformalRidgeRegressor()
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), bounds="both")
-        (-inf, inf)
+        ContinuousPredictionSet([(-inf, inf)])
         """
 
         def build_precomputed(X, K, Kinv, A, B):
@@ -1586,7 +1564,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                         )
                     if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        result = MultiLevelPredictionSet(predictions)
                     else:
                         result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
@@ -1607,7 +1585,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                         )
                     if hasattr(epsilon, "__iter__"):
                         predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        result = MultiLevelPredictionSet(predictions)
                     else:
                         result = self._construct_Gamma(-np.inf, np.inf, epsilon)
                     if return_update:
@@ -1644,7 +1622,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
                         up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
                         predictions[eps] = self._construct_Gamma(lo, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
@@ -1655,7 +1633,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
                         predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
                     result = self._construct_Gamma(lower, np.inf, epsilon)
@@ -1665,7 +1643,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
                         predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
                     result = self._construct_Gamma(-np.inf, upper, epsilon)
@@ -1681,7 +1659,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
             if hasattr(epsilon, "__iter__"):
                 predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                result = MultiLevelPredictionSet(predictions)
             else:
                 result = self._construct_Gamma(-np.inf, np.inf, epsilon)
 
@@ -2003,14 +1981,14 @@ class ConformalLassoRegressor(ConformalRegressor):
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """
         Compute the conformal prediction set at x using the homotopy algorithm.
 
-        If epsilon is a list/array, returns a MultiLevelPredictionInterval.
+        If epsilon is a list/array, returns a MultiLevelPredictionSet.
         """
         if epsilon is None:
             epsilon = self.epsilon
@@ -2021,7 +1999,7 @@ class ConformalLassoRegressor(ConformalRegressor):
             for eps in epsilon:
                 result = self.predict(x, epsilon=eps, return_update=False)
                 predictions[eps] = result
-            result = MultiLevelPredictionInterval(predictions)
+            result = MultiLevelPredictionSet(predictions)
             if return_update:
                 return result, {"beta": None}
             return result
@@ -3148,7 +3126,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         x: NDArray,
         epsilon: float | NDArray | None = None,
         return_update: bool = False,
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple:
+    ) -> ContinuousPredictionSet | MultiLevelPredictionSet | tuple:
         """Predict a conformal interval for test object x.
 
         Uses an exact O(n) algebraic knot-point solver.  No grid search.
@@ -3163,7 +3141,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         Returns
         -------
-        ConformalPredictionInterval or MultiLevelPredictionInterval
+        ContinuousPredictionSet or MultiLevelPredictionSet
         """
         x = np.asarray(x, dtype=float).ravel()
         if epsilon is None:
@@ -3205,7 +3183,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                     predictions[float(eps_val)] = self._construct_Gamma(np.nan, np.nan, float(eps_val))
 
             if hasattr(epsilon, "__iter__"):
-                result = MultiLevelPredictionInterval(predictions)
+                result = MultiLevelPredictionSet(predictions)
             else:
                 result = predictions[float(eps_arr[0])]
 
@@ -3260,7 +3238,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
 
         if hasattr(epsilon, "__iter__"):
-            result = MultiLevelPredictionInterval(predictions)
+            result = MultiLevelPredictionSet(predictions)
         else:
             result = predictions[float(eps_arr[0])]
 
@@ -3301,9 +3279,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         return lo, hi
 
     def _make_result(self, epsilon, lo: float, hi: float):
-        """Construct ConformalPredictionInterval or MultiLevelPredictionInterval."""
+        """Construct a ContinuousPredictionSet or MultiLevelPredictionSet."""
         if hasattr(epsilon, "__iter__"):
-            return MultiLevelPredictionInterval(
+            return MultiLevelPredictionSet(
                 {float(eps): self._construct_Gamma(lo, hi, float(eps)) for eps in epsilon}
             )
         return self._construct_Gamma(lo, hi, float(epsilon))
@@ -3319,7 +3297,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         for eps in epsilon:
             lo, hi = self._extract_interval(knots, midpoints, p_vals, float(eps))
             predictions[float(eps)] = self._construct_Gamma(lo, hi, float(eps))
-        return MultiLevelPredictionInterval(predictions)
+        return MultiLevelPredictionSet(predictions)
 
 
 class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRegressor):
@@ -3729,7 +3707,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         x: NDArray,
         epsilon: float | NDArray | None = None,
         return_update: bool = False,
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval | tuple:
+    ) -> ContinuousPredictionSet | MultiLevelPredictionSet | tuple:
         """Predict a conformal interval for test object x.
 
         Uses a grid search followed by bisection to locate p-value crossings.
@@ -3742,7 +3720,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
 
         Returns
         -------
-        ConformalPredictionInterval or MultiLevelPredictionInterval
+        ContinuousPredictionSet or MultiLevelPredictionSet
         """
         x = np.asarray(x, dtype=float).ravel()
         if epsilon is None:
@@ -3929,7 +3907,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
 
         if hasattr(epsilon, "__iter__"):
-            result = MultiLevelPredictionInterval(predictions)
+            result = MultiLevelPredictionSet(predictions)
         else:
             result = predictions[float(eps_arr[0])]
 
@@ -3940,7 +3918,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
     @staticmethod
     def _make_result(epsilon, lo: float, hi: float):
         if hasattr(epsilon, "__iter__"):
-            return MultiLevelPredictionInterval(
-                {float(eps): ConformalPredictionInterval(lo, hi, float(eps)) for eps in epsilon}
+            return MultiLevelPredictionSet(
+                {float(eps): ContinuousPredictionSet([(lo, hi)], float(eps)) for eps in epsilon}
             )
-        return ConformalPredictionInterval(lo, hi, float(epsilon))
+        return ContinuousPredictionSet([(lo, hi)], float(epsilon))

@@ -68,11 +68,15 @@ from online_cp.mondrian.tree import (
     _find_leaf,
     _summarize_tree,
 )
+from online_cp.prediction_set import (
+    DiscretePredictionSet,
+    MultiLevelPredictionSet,
+)
 
 __all__ = [
     "ConformalNearestNeighboursClassifier",
     "ConformalSupportVectorMachine",
-    "ConformalPredictionSet",
+    "ConformalPredictionSet",  # deprecated (use DiscretePredictionSet)
     "MultiLevelPredictionSet",
     "ConformalMondrianTreeClassifier",
     "ConformalMondrianForestClassifier",
@@ -81,76 +85,32 @@ __all__ = [
 default_epsilon = 0.1
 
 
-class ConformalPredictionSet:
-    """A prediction set produced by a conformal classifier.
+def _deprecation_msg(old: str, new: str) -> None:
+    warnings.warn(
+        f"`{old}` is deprecated and will be removed in a future release. "
+        f"Use `{new}` from `online_cp.prediction_set` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
-    Parameters
-    ----------
-    Gamma : np.ndarray
-        Array of predicted labels in the set.
-    epsilon : float
-        Significance level at which the set was constructed.
+
+class ConformalPredictionSet(DiscretePredictionSet):
+    """Deprecated. Use :class:`DiscretePredictionSet` instead.
+
+    The old classifier prediction set is now the
+    :class:`online_cp.prediction_set.DiscretePredictionSet` class. This name
+    is kept for backward compatibility and emits a :class:`DeprecationWarning`
+    on construction.
     """
 
     def __init__(self, Gamma: NDArray[Any], epsilon: float) -> None:
-        self.elements = Gamma
-        self.epsilon = epsilon
-
-    def __contains__(self, y: Any) -> bool:
-        return y in self.elements
-
-    def __len__(self) -> int:
-        return self.elements.shape[0]
-
-    def __repr__(self):
-        return repr(self.elements)
-
-    def __str__(self):
-        return str(self.elements)
-
-    def size(self):
-        return self.__len__()
+        _deprecation_msg("ConformalPredictionSet", "DiscretePredictionSet")
+        super().__init__(Gamma, epsilon)
 
 
-class MultiLevelPredictionSet:
-    """Prediction sets at multiple significance levels.
-
-    Returned when ``predict`` is called with an array-like ``epsilon``.
-
-    Parameters
-    ----------
-    predictions : dict
-        Mapping ``{epsilon: ConformalPredictionSet}``.
-    """
-
-    def __init__(self, predictions: dict[float, ConformalPredictionSet]) -> None:
-        self._predictions = dict(sorted(predictions.items()))
-
-    @property
-    def levels(self) -> list[float]:
-        """Sorted list of significance levels."""
-        return list(self._predictions.keys())
-
-    def __getitem__(self, eps: float) -> ConformalPredictionSet:
-        return self._predictions[eps]
-
-    def __iter__(self):
-        return iter(self._predictions.items())
-
-    def __len__(self) -> int:
-        return len(self._predictions)
-
-    def __contains__(self, y: Any) -> bool:
-        """True if y is covered at all levels."""
-        return all(y in gamma for gamma in self._predictions.values())
-
-    def coverage(self, y: Any) -> dict[float, bool]:
-        """Return dict of {epsilon: bool} indicating coverage at each level."""
-        return {eps: (y in gamma) for eps, gamma in self._predictions.items()}
-
-    def __repr__(self):
-        parts = [f"  ε={eps}: {gamma}" for eps, gamma in self._predictions.items()]
-        return "MultiLevelPredictionSet(\n" + "\n".join(parts) + "\n)"
+# ``MultiLevelPredictionSet`` is already the new, canonical name imported from
+# ``online_cp.prediction_set`` and re-exported here. The old classifier and
+# regressor multi-level classes have been unified into this single class.
 
 
 class ConformalClassifier(SerializableMixin):
@@ -201,13 +161,13 @@ class ConformalClassifier(SerializableMixin):
                 for y in self.label_space:
                     if p_values[y] > eps:
                         Gamma.append(y)
-                predictions[eps] = ConformalPredictionSet(np.array(Gamma), eps)
+                predictions[eps] = DiscretePredictionSet(np.array(Gamma), eps)
             return MultiLevelPredictionSet(predictions)
         Gamma = []
         for y in self.label_space:
             if p_values[y] > epsilon:
                 Gamma.append(y)
-        return ConformalPredictionSet(np.array(Gamma), epsilon)
+        return DiscretePredictionSet(np.array(Gamma), epsilon)
 
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
@@ -577,9 +537,9 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             epsilon = self.epsilon
 
         if self.label_space is None:
-            Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0])
+            Gamma = DiscretePredictionSet(np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0])
             if hasattr(epsilon, "__iter__"):
-                Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                Gamma = MultiLevelPredictionSet({eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon})
             if return_update:
                 return (Gamma, {}, None) if return_p_values else (Gamma, None)
             return (Gamma, {}) if return_p_values else Gamma
@@ -900,11 +860,11 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         if self.label_space is None or self.X is None or self.y.shape[0] == 0:
             if self.label_space is None:
-                Gamma = ConformalPredictionSet(
+                Gamma = DiscretePredictionSet(
                     np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
                 )
                 if hasattr(epsilon, "__iter__"):
-                    Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                    Gamma = MultiLevelPredictionSet({eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon})
                 p_values = {}
             else:
                 Gamma, p_values = self._fallback_prediction(epsilon, tau)
@@ -1231,11 +1191,11 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         if self.label_space is None or self.X is None or self.y.shape[0] == 0:
             # No training data — predict all labels (or empty if no label_space)
             if self.label_space is None:
-                Gamma = ConformalPredictionSet(
+                Gamma = DiscretePredictionSet(
                     np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
                 )
                 if hasattr(epsilon, "__iter__"):
-                    Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                    Gamma = MultiLevelPredictionSet({eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon})
                 if return_p_values:
                     return Gamma, {}
                 return Gamma

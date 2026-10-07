@@ -329,6 +329,21 @@ from online_cp.plotting import (
 from online_cp.plotting import (
     plot_sharpness as plot_sharpness,
 )
+from online_cp.prediction_set import (
+    ConformalPredictionSet as ConformalPredictionSet,
+)
+from online_cp.prediction_set import (
+    ContinuousPredictionSet as ContinuousPredictionSet,
+)
+from online_cp.prediction_set import (
+    DiscretePredictionSet as DiscretePredictionSet,
+)
+from online_cp.prediction_set import (
+    EmptyPredictionSet as EmptyPredictionSet,
+)
+from online_cp.prediction_set import (
+    MultiLevelPredictionSet as MultiLevelPredictionSet,
+)
 from online_cp.preprocessing import (
     PCA as PCA,
 )

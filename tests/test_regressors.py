@@ -4,7 +4,7 @@ from online_cp.kernels import GaussianKernel
 from online_cp.regressors import (
     ConformalRidgeRegressor,
     KernelConformalRidgeRegressor,
-    MultiLevelPredictionInterval,
+    MultiLevelPredictionSet,
 )
 
 
@@ -130,7 +130,7 @@ class TestKernelConformalRidgeRegressor:
 
 class TestMultiLevelPredict:
     def test_ridge_multi_level(self, linear_dataset):
-        """Ridge regressor with list of epsilons returns MultiLevelPredictionInterval."""
+        """Ridge regressor with list of epsilons returns MultiLevelPredictionSet."""
         X, y = linear_dataset
         cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
         cp.learn_initial_training_set(X[:30], y[:30])
@@ -138,7 +138,7 @@ class TestMultiLevelPredict:
         epsilons = [0.01, 0.05, 0.1, 0.2]
         result = cp.predict(X[30], epsilon=epsilons)
 
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert result.levels == sorted(epsilons)
         assert len(result) == 4
 
@@ -164,7 +164,7 @@ class TestMultiLevelPredict:
         epsilons = [0.05, 0.1, 0.2]
         result = cp.predict(X[30], epsilon=epsilons)
 
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert len(result) == 3
         # Smaller epsilon => wider interval
         assert result[0.05].width() >= result[0.1].width()
@@ -176,10 +176,10 @@ class TestMultiLevelPredict:
         cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
         cp.learn_initial_training_set(X[:30], y[:30])
 
-        from online_cp.regressors import ConformalPredictionInterval
+        from online_cp.regressors import ContinuousPredictionSet
 
         result = cp.predict(X[30], epsilon=0.1)
-        assert isinstance(result, ConformalPredictionInterval)
+        assert isinstance(result, ContinuousPredictionSet)
 
 
 class TestRecomputeInverse:
@@ -364,5 +364,5 @@ class TestLassoCrashGuard:
 
         cp = ConformalLassoRegressor(lam=0.5)
         result = cp.predict(np.array([1.0, 2.0]), epsilon=[0.05, 0.1])
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert result[0.05].lower == -np.inf

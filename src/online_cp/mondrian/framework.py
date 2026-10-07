@@ -35,13 +35,15 @@ import numpy as np
 from numpy.typing import NDArray
 
 from online_cp._serialization import SerializableMixin
+from online_cp.prediction_set import (
+    ContinuousPredictionSet,
+    MultiLevelPredictionSet,
+)
 from online_cp.regressors import (
     ConformalLassoRegressor,
-    ConformalPredictionInterval,
     ConformalRegressor,
     ConformalRidgeRegressor,
     KernelConformalRidgeRegressor,
-    MultiLevelPredictionInterval,
     _solve_lasso,
 )
 
@@ -146,7 +148,7 @@ class MondrianConformalRegressor(SerializableMixin):
         x: NDArray[np.floating[Any]],
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         bounds: str = "both",
-    ) -> ConformalPredictionInterval | MultiLevelPredictionInterval:
+    ) -> ContinuousPredictionSet | MultiLevelPredictionSet:
         """Compute the Mondrian (group-conditional) prediction interval.
 
         Computes the pooled model's $A$/$B$ nonconformity decomposition for the
@@ -161,14 +163,14 @@ class MondrianConformalRegressor(SerializableMixin):
             Test object.
         epsilon : float, array-like, or None
             Significance level(s). If None, uses ``base_model.epsilon``. An
-            iterable yields a :class:`MultiLevelPredictionInterval`.
+            iterable yields a :class:`MultiLevelPredictionSet`.
         bounds : {"both", "lower", "upper"}, default "both"
             Which side(s) of the interval to compute.
 
         Returns
         -------
-        ConformalPredictionInterval or MultiLevelPredictionInterval
-            The group-conditional prediction interval at ``epsilon``.
+        ContinuousPredictionSet or MultiLevelPredictionSet
+            The group-conditional prediction set at ``epsilon``.
         """
         if epsilon is None:
             epsilon = self.base_model.epsilon
@@ -240,7 +242,7 @@ class MondrianConformalRegressor(SerializableMixin):
             predictions = {}
             for eps in epsilon:
                 predictions[eps] = self._predict_lasso_single(x, eps, cat)
-            return MultiLevelPredictionInterval(predictions)
+            return MultiLevelPredictionSet(predictions)
         return self._predict_lasso_single(x, epsilon, cat)
 
     def _predict_lasso_single(self, x, epsilon, cat):
@@ -248,7 +250,7 @@ class MondrianConformalRegressor(SerializableMixin):
         cat_mask_train = np.array([c == cat for c in self.categories_])
         n_cat = int(cat_mask_train.sum()) + 1  # +1 for test point
         if n_cat < 2:
-            return ConformalPredictionInterval(-np.inf, np.inf, epsilon)
+            return ContinuousPredictionSet([(-np.inf, np.inf)], epsilon)
 
         threshold = int(np.ceil(n_cat * (1 - epsilon)))
         y0 = x @ model.beta
@@ -271,11 +273,11 @@ class MondrianConformalRegressor(SerializableMixin):
 
         merged = ConformalLassoRegressor._merge_intervals(all_intervals)
         if not merged:
-            return ConformalPredictionInterval(np.nan, np.nan, epsilon)
+            return ContinuousPredictionSet([], epsilon)
         elif len(merged) == 1:
-            return ConformalPredictionInterval(merged[0][0], merged[0][1], epsilon)
+            return ContinuousPredictionSet([merged[0]], epsilon)
         else:
-            return ConformalPredictionInterval(merged[0][0], merged[-1][1], epsilon)
+            return ContinuousPredictionSet(merged, epsilon)
 
     def _t_in_set(self, x_new, t, cat_mask_train, threshold):
         model = self.base_model
@@ -576,8 +578,8 @@ class MondrianConformalRegressor(SerializableMixin):
                 else:
                     lo = -np.inf
                     up = ConformalRegressor._get_upper(u_dic=u_dic, epsilon=eps, n=n)
-                predictions[eps] = ConformalPredictionInterval(lo, up, eps)
-            return MultiLevelPredictionInterval(predictions)
+                predictions[eps] = ContinuousPredictionSet([(lo, up)], eps)
+            return MultiLevelPredictionSet(predictions)
         if bounds == "both":
             lo = ConformalRegressor._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
             up = ConformalRegressor._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
@@ -587,15 +589,15 @@ class MondrianConformalRegressor(SerializableMixin):
         else:
             lo = -np.inf
             up = ConformalRegressor._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
-        return ConformalPredictionInterval(lo, up, epsilon)
+        return ContinuousPredictionSet([(lo, up)], epsilon)
 
     @staticmethod
     def _inf_interval(epsilon):
         if hasattr(epsilon, "__iter__"):
-            return MultiLevelPredictionInterval(
-                {eps: ConformalPredictionInterval(-np.inf, np.inf, eps) for eps in epsilon}
+            return MultiLevelPredictionSet(
+                {eps: ContinuousPredictionSet([(-np.inf, np.inf)], eps) for eps in epsilon}
             )
-        return ConformalPredictionInterval(-np.inf, np.inf, epsilon)
+        return ContinuousPredictionSet([(-np.inf, np.inf)], epsilon)
 
     @property
     def categories(self):

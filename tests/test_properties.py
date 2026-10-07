@@ -51,9 +51,9 @@ from online_cp import (
     VilleWrapper,
     progressive_val,
 )
-from online_cp.classifiers import ConformalClassifier, ConformalPredictionSet
+from online_cp.classifiers import ConformalClassifier, DiscretePredictionSet
 from online_cp.CPS import MondrianTreePredictionMachine
-from online_cp.regressors import ConformalPredictionInterval, ConformalRegressor
+from online_cp.regressors import ConformalRegressor, ContinuousPredictionSet
 from online_cp.venn import _pava_inplace
 
 # Enumerated-case budgets.
@@ -573,7 +573,7 @@ def test_minimum_training_set_one_sided():
 
 
 # --------------------------------------------------------------------------- #
-# Property 12: ConformalPredictionInterval semantics.
+# Property 12: ContinuousPredictionSet semantics.
 #
 # width() == upper - lower (exact arithmetic); __contains__ iff lower<=y<=upper
 # (including boundary). Both are pure data-class operations.
@@ -583,7 +583,7 @@ def test_minimum_training_set_one_sided():
 def prop_interval_width_equals_upper_minus_lower(a: int, b: int) -> bool:
     lo = float(a % 50)
     hi = lo + float(abs(b) % 30)
-    iv = ConformalPredictionInterval(lo, hi, 0.1)
+    iv = ContinuousPredictionSet([(lo, hi)], 0.1)
     return bool(abs(iv.width() - (hi - lo)) < 1e-12)
 
 
@@ -591,7 +591,7 @@ def prop_interval_containment_iff_in_bounds(a: int, b: int, c: int) -> bool:
     lo = float(a % 50)
     hi = lo + float(abs(b) % 30)
     y = float(c % 100 - 30)
-    iv = ConformalPredictionInterval(lo, hi, 0.1)
+    iv = ContinuousPredictionSet([(lo, hi)], 0.1)
     return bool((y in iv) == (lo <= y <= hi))
 
 
@@ -611,8 +611,8 @@ def test_interval_containment_iff_in_bounds():
 # y=0.0 (always-cover vs. never-cover sentinel intervals).
 # --------------------------------------------------------------------------- #
 
-_CM_IV_IN = ConformalPredictionInterval(-1e9, 1e9, 0.1)  # always covers y=0
-_CM_IV_OUT = ConformalPredictionInterval(100.0, 200.0, 0.1)  # never covers y=0
+_CM_IV_IN = ContinuousPredictionSet([(-1e9, 1e9)], 0.1)  # always covers y=0
+_CM_IV_OUT = ContinuousPredictionSet([(100.0, 200.0)], 0.1)  # never covers y=0
 
 
 def prop_cumulative_mean_matches_formula(ks: list[int]) -> bool:
@@ -663,7 +663,7 @@ def test_plugin_martingale_logM_synced():
 # identical _n (they are updated in lockstep inside Metrics.update).
 # --------------------------------------------------------------------------- #
 
-_COMP_IV = ConformalPredictionInterval(0.0, 10.0, 0.1)
+_COMP_IV = ContinuousPredictionSet([(0.0, 10.0)], 0.1)
 
 
 def prop_metrics_composition_n_sync(ks: list[int]) -> bool:
@@ -694,7 +694,7 @@ def prop_error_rate_plus_coverage_equals_one(a: int, b: int, c: int) -> bool:
     lo = float(a % 50)
     hi = lo + float(abs(b) % 30)
     y = float(c % 100 - 30)
-    iv = ConformalPredictionInterval(lo, hi, 0.1)
+    iv = ContinuousPredictionSet([(lo, hi)], 0.1)
     error = ErrorRate()._score(y=y, Gamma=iv)
     coverage = float(y in iv)
     return bool(abs(error + coverage - 1.0) < 1e-12)
@@ -705,7 +705,7 @@ def prop_observed_excess_plus_coverage_equals_set_size(a: int, b: int) -> bool:
     include_y = b % 2 == 0
     y = 0
     elems = np.arange(n) if include_y else np.arange(1, n + 1)
-    gs = ConformalPredictionSet(elems, epsilon=0.1)
+    gs = DiscretePredictionSet(elems, epsilon=0.1)
     oe = ObservedExcess()._score(y=y, Gamma=gs)
     coverage = float(y in gs)
     return bool(abs(oe + coverage - float(len(gs))) < 1e-12)

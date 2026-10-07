@@ -363,8 +363,8 @@ class TestMondrianTreePredictionMachine:
 
 class TestMultiLevelCPD:
     def test_predict_set_multi_level(self):
-        """CPD.predict_set with list of epsilons returns MultiLevelPredictionInterval."""
-        from online_cp.regressors import MultiLevelPredictionInterval
+        """CPD.predict_set with list of epsilons returns MultiLevelPredictionSet."""
+        from online_cp.regressors import MultiLevelPredictionSet
 
         rng = np.random.default_rng(42)
         X = rng.normal(size=(50, 2))
@@ -379,7 +379,7 @@ class TestMultiLevelCPD:
         epsilons = [0.01, 0.05, 0.1, 0.2]
         result = cpd.predict_set(tau, epsilon=epsilons)
 
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert result.levels == sorted(epsilons)
         assert len(result) == 4
 

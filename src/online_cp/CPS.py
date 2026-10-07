@@ -63,10 +63,15 @@ __all__ = [
 default_epsilon = 0.1
 
 
-def get_ConformalPredictionInterval():
-    from .regressors import ConformalPredictionInterval  # Lazy import
+def get_ContinuousPredictionSet():
+    """Return the :class:`ContinuousPredictionSet` class (lazy import).
 
-    return ConformalPredictionInterval
+    .. deprecated::
+        Use ``online_cp.prediction_set.ContinuousPredictionSet`` directly.
+    """
+    from .prediction_set import ContinuousPredictionSet
+
+    return ContinuousPredictionSet
 
 
 class ConformalPredictiveSystem(SerializableMixin):
@@ -773,17 +778,30 @@ class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
     def learn_many(self, y):
         self.y = np.append(self.y, y)
 
-    def predict(self):
-        return self.predict_cpd()
+    def predict_cpd(self, x=None, return_update=False):
+        """Compute the conformal predictive distribution (labels only).
 
-    def predict_cpd(self):
+        Parameters
+        ----------
+        x : array-like, optional
+            Accepted for interface uniformity with other CPS classes; ignored
+            because the Dempster–Hill model uses only the labels.
+        return_update : bool, default False
+            If True, return ``(cpd, {"labels_only": y})``.
+
+        Returns
+        -------
+        DempsterHillConformalPredictiveDistribution
+        """
         Y = np.zeros(shape=self.y.shape[0] + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
         Y[1:-1] = self.y
         Y.sort()
-
-        return DempsterHillConformalPredictiveDistribution(Y, epsilon=self.epsilon)
+        cpd = DempsterHillConformalPredictiveDistribution(Y, epsilon=self.epsilon)
+        if return_update:
+            return cpd, {"labels_only": self.y.copy()}
+        return cpd
 
 
 class ConformalPredictiveDistributionFunction:
@@ -865,19 +883,19 @@ class ConformalPredictiveDistributionFunction:
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
 
-        If epsilon is a list/array, returns a MultiLevelPredictionInterval.
+        If epsilon is a list/array, returns a MultiLevelPredictionSet.
         """
         if epsilon is None:
             epsilon = self.epsilon
 
         # Handle multi-level epsilon
         if hasattr(epsilon, "__iter__"):
-            from .regressors import MultiLevelPredictionInterval
+            from .prediction_set import MultiLevelPredictionSet
 
             predictions = {}
             for eps in epsilon:
                 predictions[eps] = self.predict_set(tau, epsilon=eps, bounds=bounds, minimise_width=minimise_width)
-            return MultiLevelPredictionInterval(predictions)
+            return MultiLevelPredictionSet(predictions)
 
         if minimise_width:
             if bounds != "both":
@@ -939,8 +957,8 @@ class ConformalPredictiveDistributionFunction:
             else:
                 raise ValueError('bounds must be "both", "lower", or "upper"')
 
-        CP_int = get_ConformalPredictionInterval()
-        return CP_int(lower, upper, epsilon)
+        CPS = get_ContinuousPredictionSet()
+        return CPS([(lower, upper)], epsilon)
 
     def find_smallest_epsilon(self, tau, increment=0.001):
         """

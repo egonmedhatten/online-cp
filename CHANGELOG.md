@@ -9,13 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Unified `ConformalPredictionSet` hierarchy** (new module `online_cp.prediction_set`):
+  - Abstract base `ConformalPredictionSet` with a shared interface
+    (`.is_empty`, `.is_discrete`, `.is_continuous`, `.width()`, `.__contains__`, `.coverage`).
+  - `EmptyPredictionSet` — explicit sentinel for the empty set ∅.
+  - `DiscretePredictionSet` — classifier label sets (`.elements`).
+  - `ContinuousPredictionSet` — one or more **disjoint closed** intervals `[a, b]`,
+    including rays, degenerate single points `[a, a]`, and `(-∞, ∞)`. Exposes
+    `.intervals`, `.is_single_interval`, `.to_single_interval()`, and backward-compat
+    `.lower`/`.upper`.
+  - Unified `MultiLevelPredictionSet` (replaces both the regressor and classifier
+    multi-level classes).
+  - All now exported from the top-level `online_cp` namespace.
+
 ### Changed
 
+- **Prediction-set return types** — regressor `predict`/`predict_set` now return
+  `ContinuousPredictionSet` (and `MultiLevelPredictionSet` for array ε); classifier
+  `predict` returns `DiscretePredictionSet`. Intervals are **topologically closed**
+  `[a, b]` (boundaries included), matching the standard conformal-regression
+  super-level set `{y : p(y) > ε}` = `{y : α(y) ≤ c}`.
+- **Mondrian Lasso disjoint sets** — `MondrianConformalRegressor` now returns a
+  proper disjoint `ContinuousPredictionSet` instead of collapsing multiple valid
+  intervals to a single `[first, last]` interval.
+- **Uniform CPS interface** — `DempsterHillConformalPredictiveSystem.predict_cpd` now
+  accepts the standard `(x, return_update=False)` signature (the `x` argument is ignored,
+  since the model is labels-only) and the redundant `predict` override was removed so it
+  inherits the uniform base-class `predict`. `return_update=True` now returns
+  `(cpd, {"labels_only": y})`.
 - **ConformalMondrianTreeRegressor** — replaced O(n²) batch p-value evaluation with event-driven O(n log n) knot sweep algorithm.
   - Added `_build_knot_events()` method to generate knot-value + flag tuples with crossing-direction tags.
   - Added `_pvalue_from_sweep()` method to perform left-to-right O(n) sweep updating rank tallies in O(1) amortised time.
   - Knot events are tagged with +1 (entry) or -1 (exit) based on whether the outside-leaf nonconformity score crosses above or below the test score as the candidate y increases.
   - The p-value p(y) is piecewise-constant with O(n) algebraic breakpoints where NCM ranks change; the event-driven sweep finds the valid region {y : p(y) > ε} in O(n log n) time.
+
+### Removed / Deprecated
+
+- `online_cp.regressors.ConformalPredictionInterval` — **deprecated** (use `ContinuousPredictionSet`).
+  Kept as a `DeprecationWarning`-raising subclass with the legacy `(lower, upper, ε)` signature
+  and `.lower`/`.upper` access.
+- `online_cp.regressors.MultiLevelPredictionInterval` — **deprecated** (use `MultiLevelPredictionSet`).
+- `online_cp.classifiers.ConformalPredictionSet` — **deprecated** (use `DiscretePredictionSet`).
+  Kept as a `DeprecationWarning`-raising subclass for downstream compatibility.
 
 ### Fixed
 

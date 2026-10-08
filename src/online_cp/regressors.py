@@ -57,6 +57,7 @@ except ImportError:
         return lambda f: f
 
 
+from online_cp.mondrian._forest_solver import forest_sweepline_solver
 from online_cp.mondrian._inspection import _MondrianRegressorInspection
 from online_cp.mondrian.tree import (
     MondrianTree,
@@ -167,8 +168,28 @@ class ConformalRegressor(SerializableMixin):
     def __init__(self, epsilon: float | NDArray[np.floating[Any]] = default_epsilon) -> None:
         self.epsilon = epsilon
 
-    def _construct_Gamma(self, lower, upper, epsilon):
-        return ContinuousPredictionSet([(lower, upper)], epsilon)
+    def _construct_Gamma(self, Gamma_val, epsilon):
+        """Construct a prediction set from the solver output.
+
+        For single-interval mode (default): Gamma_val is (lo, hi) tuple
+        For multi-interval mode: Gamma_val is list of (lo, hi) tuples
+        For empty set: Gamma_val is (nan, nan) tuple or empty list []
+        """
+        if isinstance(Gamma_val, tuple):
+            # Single interval case: (lo, hi) or (nan, nan) for empty
+            lo, hi = Gamma_val
+            if np.isnan(lo) and np.isnan(hi):
+                # Return empty ContinuousPredictionSet for backward compatibility
+                # with tests that expect .lower and .upper properties
+                return ContinuousPredictionSet([], epsilon)
+            else:
+                return ContinuousPredictionSet([(lo, hi)], epsilon)
+        else:
+            # Multiple intervals case: list of (lo, hi) tuples
+            intervals = Gamma_val
+            if not intervals:
+                return ContinuousPredictionSet([], epsilon)
+            return ContinuousPredictionSet(intervals, epsilon)
 
     @staticmethod
     def _safe_size_check(X):
@@ -650,10 +671,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                         result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         return result, build_precomputed(X, XTXinv, None, None)
                     else:
@@ -667,10 +688,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                         result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         return result, build_precomputed(X, XTXinv, None, None)
                     else:
@@ -697,32 +718,32 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
                         up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, up, eps)
+                        predictions[eps] = self._construct_Gamma((lo, up), eps)
                     result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
-                    result = self._construct_Gamma(lower, upper, epsilon)
+                    result = self._construct_Gamma((lower, upper), epsilon)
             elif bounds == "lower":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
+                        predictions[eps] = self._construct_Gamma((lo, np.inf), eps)
                     result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(lower, np.inf, epsilon)
+                    result = self._construct_Gamma((lower, np.inf), epsilon)
             elif bounds == "upper":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
+                        predictions[eps] = self._construct_Gamma((-np.inf, up), eps)
                     result = MultiLevelPredictionSet(predictions)
                 else:
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(-np.inf, upper, epsilon)
+                    result = self._construct_Gamma((-np.inf, upper), epsilon)
             else:
                 raise ValueError('bounds must be "both", "lower", or "upper"')
         else:
@@ -733,10 +754,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
             B = None
 
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                 result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
 
         if return_update:
             return result, build_precomputed(X, XTXinv, A, B)
@@ -1097,10 +1118,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         if n == 0:
             # No training data
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                 result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
             if return_update:
                 return result, {"D": None}
             return result
@@ -1115,10 +1136,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         min_needed = 2 if bounds == "both" else 1
         if not (eps_check >= min_needed / n_aug):
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                 result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
             if return_update:
                 return result, {"D": D_aug}
             return result
@@ -1190,11 +1211,11 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             predictions = {}
             for eps in epsilon:
                 lo, up = self._compute_interval(alpha_sorted, y_hat_test, eps, n_aug, bounds)
-                predictions[eps] = self._construct_Gamma(lo, up, eps)
+                predictions[eps] = self._construct_Gamma((lo, up), eps)
             result = MultiLevelPredictionSet(predictions)
         else:
             lo, up = self._compute_interval(alpha_sorted, y_hat_test, epsilon, n_aug, bounds)
-            result = self._construct_Gamma(lo, up, epsilon)
+            result = self._construct_Gamma((lo, up), epsilon)
 
         if return_update:
             return result, {"D": D_aug}
@@ -1563,10 +1584,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                         result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         k = self.kernel(self.X, x).reshape(-1, 1)
                         kappa = self.kernel(x, x)
@@ -1584,10 +1605,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                         result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         k = self.kernel(self.X, x).reshape(-1, 1)
                         kappa = self.kernel(x, x)
@@ -1621,32 +1642,32 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
                         up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, up, eps)
+                        predictions[eps] = self._construct_Gamma((lo, up), eps)
                     result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
-                    result = self._construct_Gamma(lower, upper, epsilon)
+                    result = self._construct_Gamma((lower, upper), epsilon)
             elif bounds == "lower":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
+                        predictions[eps] = self._construct_Gamma((lo, np.inf), eps)
                     result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(lower, np.inf, epsilon)
+                    result = self._construct_Gamma((lower, np.inf), epsilon)
             elif bounds == "upper":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
+                        predictions[eps] = self._construct_Gamma((-np.inf, up), eps)
                     result = MultiLevelPredictionSet(predictions)
                 else:
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(-np.inf, upper, epsilon)
+                    result = self._construct_Gamma((-np.inf, upper), epsilon)
             else:
                 raise ValueError('bounds must be "both", "lower", or "upper"')
         else:
@@ -1658,10 +1679,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             B = None
 
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
                 result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
 
         if return_update:
             return result, build_precomputed(X, K, Kinv, A, B)
@@ -2007,7 +2028,7 @@ class ConformalLassoRegressor(ConformalRegressor):
         x = np.atleast_1d(x).ravel()
 
         if self.X is None or self.X.shape[0] < 2:
-            result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+            result = self._construct_Gamma((-np.inf, np.inf), epsilon)
             if return_update:
                 return result, {"beta": None}
             return result
@@ -2041,12 +2062,12 @@ class ConformalLassoRegressor(ConformalRegressor):
         merged = self._merge_intervals(all_intervals)
 
         if not merged:
-            result = self._construct_Gamma(np.nan, np.nan, epsilon)
+            result = self._construct_Gamma((np.nan, np.nan), epsilon)
         elif len(merged) == 1:
-            result = self._construct_Gamma(merged[0][0], merged[0][1], epsilon)
+            result = self._construct_Gamma((merged[0][0], merged[0][1]), epsilon)
         else:
             # Return the smallest enclosing interval (conservative)
-            result = self._construct_Gamma(merged[0][0], merged[-1][1], epsilon)
+            result = self._construct_Gamma((merged[0][0], merged[-1][1]), epsilon)
 
         # Build precomputed for learn_one
         precomputed_dict = None
@@ -3148,7 +3169,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             epsilon = self.epsilon
 
         n = self._safe_size_check(self.X)
-        _inf_interval = self._construct_Gamma(-np.inf, np.inf, epsilon)
+        _inf_interval = self._construct_Gamma((-np.inf, np.inf), epsilon)
 
         if n == 0:
             if return_update:
@@ -3178,9 +3199,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             predictions = {}
             for eps_val in eps_arr:
                 if p_const > eps_val:
-                    predictions[float(eps_val)] = self._construct_Gamma(-np.inf, np.inf, float(eps_val))
+                    predictions[float(eps_val)] = self._construct_Gamma((-np.inf, np.inf), float(eps_val))
                 else:
-                    predictions[float(eps_val)] = self._construct_Gamma(np.nan, np.nan, float(eps_val))
+                    predictions[float(eps_val)] = self._construct_Gamma((np.nan, np.nan), float(eps_val))
 
             if hasattr(epsilon, "__iter__"):
                 result = MultiLevelPredictionSet(predictions)
@@ -3233,9 +3254,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             )
 
             if len(valid_knots) == 1 and lo == hi == valid_knots[0]:
-                predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
             else:
-                predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
 
         if hasattr(epsilon, "__iter__"):
             result = MultiLevelPredictionSet(predictions)
@@ -3282,9 +3303,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         """Construct a ContinuousPredictionSet or MultiLevelPredictionSet."""
         if hasattr(epsilon, "__iter__"):
             return MultiLevelPredictionSet(
-                {float(eps): self._construct_Gamma(lo, hi, float(eps)) for eps in epsilon}
+                {float(eps): self._construct_Gamma((lo, hi), float(eps)) for eps in epsilon}
             )
-        return self._construct_Gamma(lo, hi, float(epsilon))
+        return self._construct_Gamma((lo, hi), float(epsilon))
 
     def _make_multi_result(
         self,
@@ -3296,7 +3317,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         predictions = {}
         for eps in epsilon:
             lo, hi = self._extract_interval(knots, midpoints, p_vals, float(eps))
-            predictions[float(eps)] = self._construct_Gamma(lo, hi, float(eps))
+            predictions[float(eps)] = self._construct_Gamma((lo, hi), float(eps))
         return MultiLevelPredictionSet(predictions)
 
 
@@ -3309,8 +3330,11 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
 
         α_i = (1/T) Σ_t |y_i − μ_{leaf_t(x_i)}|
 
-    The prediction interval is found via a grid-and-bisection search since
-    averaged NCMs do not yield algebraically tractable knot points.
+    The prediction set is found via an exact O(Mn log(Mn)) sweepline solver.
+    For forests, the prediction set may be a union of disjoint intervals (the
+    p-value is not guaranteed to be quasi-concave). By default, the convex hull
+    is returned for compatibility with downstream tasks; set `return_interval`
+    to `False` to get the exact union of intervals.
 
     Parameters
     ----------
@@ -3330,11 +3354,20 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         Number of grid points for the initial interval search. Default 200.
     bisection_tol : float
         Convergence tolerance for bisection refinement. Default 1e-6.
+    return_interval : bool, optional
+        If True, return the convex hull (single interval) of the exact prediction
+        set. If False, return the exact prediction set as a union of intervals.
+        Default True for backward compatibility.
+    max_depth : int or None, optional
+        Hard depth cap for Mondrian trees. Default None.
+    online : bool, optional
+        If True, use the online Mondrian forest mode. Default False.
     """
 
     _SAVE_PARAMS: tuple = (
         "n_trees", "lifetime", "epsilon", "rnd_state", "verbose",
         "n_jobs", "grid_resolution", "bisection_tol", "max_depth", "online",
+        "return_interval",
     )
     _SAVE_STATE: tuple = ("X", "y", "_forest")
 
@@ -3350,6 +3383,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         bisection_tol: float = 1e-6,
         max_depth: int | None = None,
         online: bool = False,
+        return_interval: bool = True,
     ) -> None:
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
@@ -3373,6 +3407,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         self.bisection_tol = bisection_tol
         self.max_depth = max_depth
         self.online = online
+        self.return_interval = return_interval
         self.X: NDArray | None = None
         self.y: NDArray | None = None
         self.rnd_gen = np.random.default_rng(rnd_state)
@@ -3707,20 +3742,28 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         x: NDArray,
         epsilon: float | NDArray | None = None,
         return_update: bool = False,
+        return_interval: bool | None = None,
     ) -> ContinuousPredictionSet | MultiLevelPredictionSet | tuple:
         """Predict a conformal interval for test object x.
 
-        Uses a grid search followed by bisection to locate p-value crossings.
+        Uses an exact O(Mn log(Mn)) sweepline solver to locate p-value crossings.
+        For forests, the prediction set may be a union of disjoint intervals.
 
         Parameters
         ----------
         x : array-like, shape (d,)
         epsilon : float or array-like, optional
         return_update : bool
+        return_interval : bool or None, optional
+            If True, return the convex hull (single interval) of the exact prediction
+            set. If False, return the exact union of intervals as a DiscretePredictionSet.
+            If None (default), use ``self.return_interval``.
 
         Returns
         -------
         ContinuousPredictionSet or MultiLevelPredictionSet
+            Returns a DiscretePredictionSet with multiple intervals if return_interval=False
+            and the exact prediction set is disconnected.
         """
         x = np.asarray(x, dtype=float).ravel()
         if epsilon is None:
@@ -3732,6 +3775,10 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             if return_update:
                 return result, {}
             return result
+
+        # Use return_interval parameter if provided, otherwise fall back to self.return_interval
+        if return_interval is None:
+            return_interval = self.return_interval
 
         # ---- Build all T trees ONCE (batch: seeds; online: extend forest) --
         X_aug = np.vstack([self.X, x.reshape(1, -1)])
@@ -3764,147 +3811,31 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             eq = int(np.sum(np.abs(avg_train - alpha_y) <= _TOL))  # exclude test point, apply tau below
             return float((gt + tau * eq) / (n + 1))
 
-        # ---- Exact Vectorized Topological Solver -----------------------
+        # ---- Exact O(Mn log(Mn)) Sweepline Solver ----------------------
+        # Use the Numba-accelerated solver from _forest_solver module
         M = len(summaries)
-        A_arr = np.zeros(M, dtype=int)
-        B_arr = np.zeros(M, dtype=float)
-        base_ncm_arr = np.zeros((M, n))
-        inside_mask = np.zeros((M, n), dtype=bool)
-
-        test_vertices = []
-        for m, (base_ncm, ls_idx, ls_mu) in enumerate(summaries):
-            A = len(ls_idx)
-            A_arr[m] = A
-            if A > 0:
-                B_arr[m] = ls_mu * A
-                test_vertices.append(ls_mu)
-                inside_mask[m, ls_idx] = True
-            base_ncm_arr[m] = base_ncm
-
-        test_vertices = np.unique(test_vertices)
-
-        # 1. Collect all topological kinks
-        all_kinks = list(test_vertices)
-        for m in range(M):
-            A = A_arr[m]
-            B = B_arr[m]
-            if A > 0:
-                in_idx = inside_mask[m]
-                if np.any(in_idx):
-                    kinks = (A + 1) * self.y[in_idx] - B
-                    all_kinks.extend(kinks.tolist())
-
-        all_kinks = np.unique(all_kinks)
-        if len(all_kinks) == 0:
-            all_kinks = np.array([0.0])
-
-        margin = 1.0 if len(all_kinks) == 1 else (all_kinks[-1] - all_kinks[0]) * 0.1 + 1.0
-        Y_kinks = np.concatenate([[all_kinks[0] - margin], all_kinks, [all_kinks[-1] + margin]])
-        K_len = len(Y_kinks)
-
-        # 2. Vectorized evaluation of D(y) over all kinks
-        test_ncm = np.abs(A_arr[:, None] * Y_kinks[None, :] - B_arr[:, None]) / (A_arr[:, None] + 1)
-        avg_test_ncm = np.mean(test_ncm, axis=0)
-
-        sum_train_ncm = np.zeros((n, K_len))
-        for m in range(M):
-            A = A_arr[m]
-            B = B_arr[m]
-            sum_train_ncm += base_ncm_arr[m][:, None]
-            if A > 0:
-                in_idx = inside_mask[m]
-                if np.any(in_idx):
-                    y_star = self.y[in_idx]
-                    sum_train_ncm[in_idx, :] -= base_ncm_arr[m][in_idx, None]
-                    sum_train_ncm[in_idx, :] += np.abs((A + 1) * y_star[:, None] - B - Y_kinks[None, :]) / (A + 1)
-        avg_train_ncm = sum_train_ncm / M
-
-        D = avg_train_ncm - avg_test_ncm[None, :]
-
-        # 3. Find true zero-crossings strictly between kinks
-        D_left = D[:, :-1]
-        D_right = D[:, 1:]
-        cross_mask = ((D_left > 1e-11) & (D_right < -1e-11)) | ((D_left < -1e-11) & (D_right > 1e-11))
-
-        cross_i, cross_k = np.where(cross_mask)
-        if len(cross_i) > 0:
-            d1 = D_left[cross_i, cross_k]
-            d2 = D_right[cross_i, cross_k]
-            y1 = Y_kinks[cross_k]
-            y2 = Y_kinks[cross_k + 1]
-            roots = y1 - d1 * (y2 - y1) / (d2 - d1)
-            Y_eval = np.unique(np.concatenate([Y_kinks, roots]))
-        else:
-            Y_eval = Y_kinks
-
-        Y_mid = (Y_eval[:-1] + Y_eval[1:]) / 2
-
-        # 4. Pure Vectorized P-Value Evaluator
-        def eval_p_values(y_cands):
-            if len(y_cands) == 0:
-                return np.array([])
-
-            t_ncm = np.abs(A_arr[:, None] * y_cands[None, :] - B_arr[:, None]) / (A_arr[:, None] + 1)
-            a_test = np.mean(t_ncm, axis=0)
-
-            a_train = np.zeros((n, len(y_cands)))
-            for m in range(M):
-                A = A_arr[m]
-                B = B_arr[m]
-                a_train += base_ncm_arr[m][:, None]
-                if A > 0:
-                    in_idx = inside_mask[m]
-                    if np.any(in_idx):
-                        y_star = self.y[in_idx]
-                        a_train[in_idx, :] -= base_ncm_arr[m][in_idx, None]
-                        a_train[in_idx, :] += np.abs((A + 1) * y_star[:, None] - B - y_cands[None, :]) / (A + 1)
-            a_train /= M
-
-            gt = np.sum(a_train > a_test[None, :] + 1e-11, axis=0)
-            eq = np.sum(np.abs(a_train - a_test[None, :]) <= 1e-11, axis=0)
-            return (gt + tau * eq) / (n + 1)
-
-        # 5. Evaluate exactly on all topological regions and boundaries
-        p_eval = eval_p_values(Y_eval)
-        p_mid = eval_p_values(Y_mid)
-
-        # 6. Extract bounds
         eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
         predictions = {}
 
         for eps_val in eps_arr:
-            valid_eval = p_eval > eps_val
-            valid_mid = p_mid > eps_val
-
-            lo, hi = np.nan, np.nan
-
-            if len(valid_eval) > 0:
-                if valid_eval[0]:
-                    lo = -np.inf
-                if valid_eval[-1]:
-                    hi = np.inf
-
-            if np.isnan(lo):
-                first_mid = np.where(valid_mid)[0]
-                first_eval = np.where(valid_eval)[0]
-                min_y = np.inf
-                if len(first_mid) > 0:
-                    min_y = min(min_y, Y_eval[first_mid[0]])
-                if len(first_eval) > 0:
-                    min_y = min(min_y, Y_eval[first_eval[0]])
-                lo = min_y if min_y != np.inf else np.nan
-
-            if np.isnan(hi):
-                last_mid = np.where(valid_mid)[0]
-                last_eval = np.where(valid_eval)[0]
-                max_y = -np.inf
-                if len(last_mid) > 0:
-                    max_y = max(max_y, Y_eval[last_mid[-1] + 1])
-                if len(last_eval) > 0:
-                    max_y = max(max_y, Y_eval[last_eval[-1]])
-                hi = max_y if max_y != -np.inf else np.nan
-
-            predictions[float(eps_val)] = self._construct_Gamma(lo, hi, float(eps_val))
+            if return_interval:
+                lo, hi = forest_sweepline_solver(
+                    summaries, self.y, float(eps_val), tau, n, M, return_exact=False
+                )
+                # Single interval mode: pass as (lo, hi) tuple
+                if np.isnan(lo) and np.isnan(hi):
+                    predictions[float(eps_val)] = self._construct_Gamma((np.nan, np.nan), float(eps_val))
+                else:
+                    predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
+            else:
+                intervals, Y_eval = forest_sweepline_solver(
+                    summaries, self.y, float(eps_val), tau, n, M, return_exact=True
+                )
+                # intervals is a list of (lo, hi) tuples for the exact prediction set
+                if not intervals:
+                    predictions[float(eps_val)] = self._construct_Gamma([], float(eps_val))
+                else:
+                    predictions[float(eps_val)] = self._construct_Gamma(intervals, float(eps_val))
 
         if hasattr(epsilon, "__iter__"):
             result = MultiLevelPredictionSet(predictions)

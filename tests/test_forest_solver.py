@@ -180,7 +180,7 @@ class TestForestSolverIntegration:
         intervals, _ = forest_sweepline_solver(
             summaries, y, 0.2, 0.7, len(y), 5, return_exact=True
         )
-        for (lo, hi), (next_lo, next_hi) in zip(intervals, intervals[1:]):
+        for (lo, hi), (next_lo, _next_hi) in zip(intervals, intervals[1:]):
             assert lo <= hi
             assert hi <= next_lo + 1e-10
 

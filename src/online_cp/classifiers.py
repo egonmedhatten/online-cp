@@ -561,7 +561,12 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                         D, label_indices=label_indices
                     )
 
-                    Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    # Intentional division: a zero different-label distance (a
+                    # duplicate test point / label with no distinct neighbours)
+                    # legitimately yields +inf, which nan_to_num maps to inf.
+                    # Suppress the expected divide-by-zero warning.
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
                     return label, self._compute_p_value(Alpha, tau, "nonconformity")
 
                 results = Parallel(n_jobs=self.n_jobs)(delayed(process_label)(label) for label in self.label_space)
@@ -574,7 +579,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                         D, label_indices=label_indices
                     )
 
-                    Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    # Intentional division (see parallel branch above): a zero
+                    # different-label distance legitimately yields +inf.
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
                     p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
             time_compute_p_values = time.time() - tic
 

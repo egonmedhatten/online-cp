@@ -174,7 +174,10 @@ class TestWrapperReturnUpdate:
         rng = np.random.default_rng(42)
         X = rng.standard_normal((30, 2))
         y = (X[:, 0] > 0).astype(int)
-        wrapper = ConformalClassifierWrapper(LogisticRegression(), label_space=np.array([0, 1]), rnd_state=7)
+        # The wrapper always emits an "experimental" UserWarning on construction;
+        # this test only exercises the return_update contract, so absorb it.
+        with pytest.warns(UserWarning, match="experimental"):
+            wrapper = ConformalClassifierWrapper(LogisticRegression(), label_space=np.array([0, 1]), rnd_state=7)
         wrapper.learn_initial_training_set(X, y)
         return wrapper, X
 

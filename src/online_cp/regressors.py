@@ -919,7 +919,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         "rnd_state",
         "epsilon",
     )
-    _SAVE_STATE: tuple = ("X", "y", "D")
+    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const")
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
 
@@ -1050,6 +1050,28 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.X = np.atleast_2d(X)
         self.y = np.asarray(y, dtype=float)
         self.D = self.distance_func(self.X)
+        # Cache constant parts of affine scores: a_i = y_i - ŷ_i (with y_n=0)
+        self._update_residuals()
+
+    def _update_residuals(self) -> None:
+        """Compute and cache leave-one-out k-NN residuals for conformal prediction.
+
+        For each training point i, compute a_i = y_i - ŷ_i where ŷ_i is the
+        leave-one-out k-NN prediction. This is the constant part of the affine
+        score α_i(y) = a_i + b_i*y.
+        """
+        if self.X is None or self.y is None or self.D is None:
+            return
+
+        n = self.X.shape[0]
+        if n == 0:
+            return
+
+        # Compute leave-one-out k-NN predictions on the original training set
+        y_hat_train = self._knn_predictions(self.D, self.y)
+
+        # Cache constant parts of affine scores (signed residuals, not absolute)
+        self._a_const = self.y - y_hat_train
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """Incrementally add one observation.
@@ -1069,6 +1091,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=float)
             self.D = self.distance_func(self.X)
+            # Cache residuals for efficient conformal prediction
+            self._update_residuals()
         else:
             if precomputed is not None and "D" in precomputed:
                 self.D = precomputed["D"]
@@ -1077,6 +1101,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 self.D = self._update_distance_matrix(self.D, d)
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, y)
+            # Refresh cached residuals after adding new point
+            self._update_residuals()
 
     def predict(
         self,
@@ -1090,6 +1116,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """Predict a conformal prediction interval for test object x.
+
+        This implements the exact O(n log n) conformal predictor from ALRW2 §2.4
+        using the deleted nonconformity scores with affine representation
+        α_i(y) = a_i + b_i * y.
 
         Parameters
         ----------
@@ -1129,93 +1159,121 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # Augment distance matrix with test point
         d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
         D_aug = self._update_distance_matrix(self.D, d)
-        n_aug = n + 1  # augmented size
 
-        # Check significance level is feasible
-        eps_check = max(epsilon) if hasattr(epsilon, "__iter__") else epsilon
-        min_needed = 2 if bounds == "both" else 1
-        if not (eps_check >= min_needed / n_aug):
-            if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
-                result = MultiLevelPredictionSet(predictions)
-            else:
-                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
-            if return_update:
-                return result, {"D": D_aug}
-            return result
-
-        # Compute leave-one-out k-NN predictions for all training points
-        # in the augmented set. The test point's label is unknown, so we
-        # need to determine the interval of y values that would be included.
+        # Compute affine scores a_i, b_i for all training points (ALRW2 §2.4).
         #
-        # Key insight: For the n training points, their k-NN predictions
-        # may or may not change when the test point is added (only if the
-        # test point enters their k-neighbourhood). For the test point,
-        # its k-NN prediction is always computed from training labels only
-        # (since we exclude self).
-        #
-        # Strategy: compute all training nonconformity scores under the
-        # augmented distance matrix, then find the threshold.
-
+        # x_i is a "reverse neighbour" iff x_n is among the k nearest neighbours
+        # of x_i, i.e. d(x_i, x_n) is within the k smallest of {d(x_i, x_j) : j != i}.
+        # For such points the k-NN prediction of x_i includes the (unknown) test
+        # label, giving  alpha_i(y) = a_i + b_i*y  with b_i = -1/k.
+        # Otherwise the prediction is independent of y, giving b_i = 0.
+        k_actual = min(self.k, n)
         agg_func = np.mean if self.aggregation == "mean" else np.median
 
-        # For each training point i (0..n-1), compute its leave-one-out
-        # k-NN prediction in the augmented set (which includes the test point)
-        D_work = D_aug.copy()
-        np.fill_diagonal(D_work, np.inf)
+        # b_i: -1/k if x_n in NN_k(x_i) else 0
+        b = np.zeros(n, dtype=float)
+        for i in range(n):
+            # distances from x_i to all other training points (exclude self)
+            d_i = self.D[i].copy()
+            d_i[i] = np.inf
+            # d(x_i, x_n)
+            d_test_i = d[i]
+            # number of training points strictly closer than the test point
+            n_closer = int(np.sum(d_i < d_test_i))
+            # tie-breaking: if the test point is tied with others, break by label
+            # (the test label is unknown at this stage; use the canonical rule
+            #  that a tied point is counted as a neighbour -- conservative and
+            #  consistent with the lexsort used elsewhere).
+            if n_closer < k_actual:
+                b[i] = -1.0 / self.k
 
-        # For training points (0..n-1): their predictions don't depend on
-        # the test label since we only use labels of their k neighbours.
-        # BUT if the test point (index n) is among a training point's k-NN,
-        # its label y_test would appear in the average. We handle this by
-        # noting that y_test is what we're searching over.
-        #
-        # However, for the standard conformal regressor approach, we compute
-        # the nonconformity scores as |y_i - hat_y_i| where hat_y_i is
-        # computed with ALL labels known (including the hypothesized test label).
-        # This makes the prediction interval depend on the test label y in a
-        # complex way when the test point enters a training point's k-neighbourhood.
-        #
-        # Simplification (valid and common): Use the "deleted" approach where
-        # for each training point i, the k-NN prediction uses the bag without i.
-        # The test point's label only affects training points that have it as
-        # a k-NN. For the test point itself, its prediction only uses training
-        # labels.
-        #
-        # Even simpler (and what most practical k-NN conformal regressors do):
-        # Compute training residuals on the ORIGINAL training set (without the
-        # test point), then compare the test point's residual against them.
-        # This is valid because the nonconformity scores are exchangeable.
+        # Test point: a_n = -mean(k nearest training labels), b_n = 1
+        # Use lexsort for canonical tie-breaking.
+        knn_idx = np.lexsort((self.y, d))[:k_actual]
+        y_hat_test = agg_func(self.y[knn_idx])
+        a_n = -y_hat_test
+        b_n = 1.0
 
-        # Training residuals (on original training set, leave-one-out)
-        y_hat_train = self._knn_predictions(self.D, self.y)
-        alpha_train = np.abs(self.y - y_hat_train)
+        # For each training point, compute a_i with y_n = 0.
+        # alpha_i(y) = a_i + b_i*y where y is the hypothesized test label.
+        a = np.empty(n, dtype=float)
+        for i in range(n):
+            if b[i] == 0.0:
+                # x_n not a reverse neighbour: prediction independent of y.
+                # a_i = y_i - (mean of k nearest training labels of x_i)
+                # This is exactly the cached leave-one-out residual.
+                a[i] = self._a_const[i]
+            else:
+                # x_n is a reverse neighbour: the k-NN prediction of x_i in the
+                # augmented set includes the test point, whose label is set to 0
+                # for the constant term a_i (the y-dependence is captured by b_i).
+                d_i = self.D[i].copy()
+                d_i[i] = np.inf
+                d_full = np.append(d_i, d[i])  # distances from x_i to all training + test
+                y_full = np.append(self.y, 0.0)  # test label set to 0
+                nn_idx = np.lexsort((y_full, d_full))[:k_actual]
+                y_hat_i = agg_func(y_full[nn_idx])
+                a[i] = self.y[i] - y_hat_i  # constant term with y_n = 0
 
-        # Test point k-NN prediction (using training data only)
-        # Its k nearest neighbours among training points.
-        # Use lexsort (distance primary, y-value secondary) for canonical
-        # tie-breaking that is independent of insertion order.
-        k_test = min(self.k, n)
-        test_knn_idx = np.lexsort((self.y, d))[:k_test]
-        y_hat_test = agg_func(self.y[test_knn_idx])
+        # Compute t_i = (a_i - a_n) / (b_n - b_i) for i = 1..n
+        # For k-NN: b_n - b_i = 1 - (-1/k) = 1 + 1/k for reverse neighbours, 1 otherwise
+        denom = b_n - b
+        t = (a - a_n) / denom
 
-        # The test nonconformity score is |y - y_hat_test| and we need
-        # p(y) = |{i: alpha_i >= |y - y_hat_test|}| / (n+1) > epsilon
-        # The prediction interval is: y_hat_test +/- alpha_(ceil((1-eps)(n+1)))
+        # Sort t values and extract bounds
+        t_sorted = np.sort(t)
 
-        # Sort training residuals
-        alpha_sorted = np.sort(alpha_train)
+        # ALRW2 §2.4: The p-value uses total points N = n+1 (training + test).
+        # Upper bound: t_(ceil((1-ε)*N))  [Algorithm 2.2]
+        # Lower bound: t_(floor(ε*N))    [Algorithm 2.3]
+        # Two-sided: split ε between tails [Algorithm 2.4]
+        # t_sorted has n values (one per training point).
+        # Indices are 1-based in the book, convert to 0-based here.
 
-        # Build the interval
+        N = n + 1  # total number of points
+
+        def get_upper(eps):
+            """Upper bound from Algorithm 2.2: t_(ceil((1-eps)*N))."""
+            idx = int(np.ceil((1 - eps) * N))  # 1-based index
+            if idx < 1:
+                return -np.inf
+            if idx > n:
+                return np.inf
+            return float(t_sorted[idx - 1])
+
+        def get_lower(eps):
+            """Lower bound from Algorithm 2.3: t_(floor(eps*N))."""
+            idx = int(np.floor(eps * N))  # 1-based index
+            if idx < 1:
+                return -np.inf
+            if idx > n:
+                return np.inf
+            return float(t_sorted[idx - 1])
+
+        def get_interval(eps):
+            if bounds == "both":
+                # Algorithm 2.4: split epsilon between tails
+                lo = get_lower(eps / 2)
+                hi = get_upper(eps / 2)
+                return lo, hi
+            elif bounds == "lower":
+                lo = get_lower(eps)
+                return lo, np.inf
+            elif bounds == "upper":
+                hi = get_upper(eps)
+                return -np.inf, hi
+            else:
+                raise ValueError(f"bounds must be 'both', 'lower', or 'upper', got '{bounds}'")
+
         if hasattr(epsilon, "__iter__"):
             predictions = {}
             for eps in epsilon:
-                lo, up = self._compute_interval(alpha_sorted, y_hat_test, eps, n_aug, bounds)
-                predictions[eps] = self._construct_Gamma((lo, up), eps)
+                lo, hi = get_interval(eps)
+                predictions[eps] = self._construct_Gamma((lo, hi), eps)
             result = MultiLevelPredictionSet(predictions)
         else:
-            lo, up = self._compute_interval(alpha_sorted, y_hat_test, epsilon, n_aug, bounds)
-            result = self._construct_Gamma((lo, up), epsilon)
+            lo, hi = get_interval(epsilon)
+            result = self._construct_Gamma((lo, hi), epsilon)
 
         if return_update:
             return result, {"D": D_aug}

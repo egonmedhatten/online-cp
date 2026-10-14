@@ -34,6 +34,17 @@ predictors are thin adapters over this class.
 
 ::: online_cp.regressors.ConformalMondrianForestRegressor
 
+## Mondrian tree CPS
+
+The conformal *predictive system*: a leaf-local signed-residual NCM that
+yields a full predictive distribution (step CDF of the category's training
+labels, with the ALRW2 §7.2 randomisation band). See the
+[conformal predictive systems page](cps.md) for the API reference and
+`.roadmap/mondrian-cps-verification.md` for the construction and its
+finite-sample validity boundary.
+
+::: online_cp.CPS.MondrianTreePredictionMachine
+
 ## Mondrian Venn predictor
 
 Uses the Mondrian leaf as the Venn taxonomy category (a bag function → Venn

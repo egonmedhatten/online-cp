@@ -46,6 +46,11 @@ def _get_find_leaf():
     from online_cp.mondrian.tree import _find_leaf
     return _find_leaf
 
+def _get_cps_helpers():
+    """Lazy import of the CPS category-selection helpers."""
+    from online_cp.mondrian.tree import _select_cps_category, _subtree_training_indices
+    return _select_cps_category, _subtree_training_indices
+
 try:
     from ._serialization import SerializableMixin
 except ImportError:
@@ -1187,32 +1192,60 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
 
 
 class MondrianTreePredictionMachine(ConformalPredictiveSystem):
-    r"""Conformal predictive system based on Mondrian trees with signed residuals.
+    r"""Conformal predictive system based on Mondrian trees with leaf-local signed residuals.
 
-    This CPS uses the Mondrian tree partition and the signed residual as the
-    conformity measure:
+    This CPS uses the Mondrian tree partition together with the
+    **leaf-local signed residual** as the conformity measure.  For a
+    test point ``x``, the *category* is the leaf of the partition
+    containing ``x`` — or, when that leaf holds no training data, the
+    deepest ancestor whose subtree does (the empty-leaf walk-up
+    convention, see below).  If the category holds ``A`` training
+    points with y-sum ``B``, then for a candidate response ``y`` the
+    signed residuals (category mean **including** the candidate) are
 
-        α_i = y_i − μ_leaf(x_i)
+    * test point:       ``(A·y − B) / (A+1)``
+    * category point j: ``((A+1)·y_j − B − y) / (A+1)``
 
-    where μ_leaf is the mean of **all** y-values (including the candidate) in
-    the leaf.  For Mondrian trees, the leaf structure depends only on the
-    features X (not on y), so the test point (x, y) always falls into the same
-    leaf for any candidate y.
+    so that ``α_n^y − α_j^y = y − y_j`` is strictly increasing in ``y``
+    (slope 1).  The critical values are therefore exactly the ``A``
+    category labels, and the conformal predictive distribution is the
+    interval-valued step CDF of those labels (ALRW2 §7.2 band):
 
-    Mathematical insight
-    --------------------
-    Let A = number of training points in ``leaf_star`` and B = their y-sum.
-    Under candidate y:
+        P̂(y) ∈ [ #{j : y_j < y}/A ,  #{j : y_j ≤ y}/A ].
 
-    * Test signed residual:  ``(A·y − B) / (A+1)``    slope A/(A+1)
-    * Inside signed residual: ``((A+1)·y_j − B − y) / (A+1)``    slope ∓1/(A+1)
+    The CPD is thus genuinely *Mondrian*: test points in different
+    categories (different label sets) receive different CPDs, and the
+    partition drives the prediction.  Once the partition is known the
+    CPD costs O(A log A) in the category size A.
 
-    The difference α_n^y − α_i^y = y − y_i is strictly increasing in y (slope 1),
-    so the critical values are simply C_i = y_i (the training labels).  No
-    studentisation is needed.
+    Validity
+    --------
+    Given the X-only partition, the test label is exchangeable with the
+    category training labels (ALRW2 §2.2.9, Mondrian taxonomy) whenever
+    the conditional label distribution is (approximately) constant over
+    the category box, so the CPD is calibrated conditional on the
+    category — asymptotically in the category size A:
 
-    This yields an O(n) conformal predictive distribution with knots at the
-    sorted training labels, making it extremely efficient.
+        P( y ∈ Γ^ε | category ) → 1 − ε   as A → ∞.
+
+    At finite A the two-sided quantile set under-covers by ≈ (1 − Aε/2)/(A+1)
+    under exact exchangeability (see `.roadmap/mondrian-cps-verification.md`).
+
+    Empty-leaf convention
+    ---------------------
+    A leaf may contain the test point but no training data.  The
+    category is then the deepest ancestor holding at least one
+    training point.  (Using the empty leaf itself would give a
+    p-value that is identically the randomisation ``τ`` for every ``y``
+    — not a valid randomised predictive system, as it never moves from
+    0 to 1.)
+
+    Note
+    ----
+    The partition is grown with the shared ``rnd_gen`` (advanced in
+    place), as in the Mondrian predictors; within one prediction step
+    use the ``return_update`` pattern if you evaluate the CPD more than
+    once.
 
     Parameters
     ----------
@@ -1320,6 +1353,11 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
     def predict_cpd(self, x, return_update=False):
         r"""Compute the conformal predictive distribution for test object x.
 
+        The CPD is the interval-valued step CDF of the training labels
+        in the *category* of ``x`` — the leaf of the Mondrian partition
+        containing ``x``, or, when that leaf holds no training data,
+        the deepest ancestor whose subtree does.
+
         Parameters
         ----------
         x : array-like, shape (d,)
@@ -1346,7 +1384,7 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
 
         # Lazy imports
         MondrianTree = _get_mondrian_tree()
-        _find_leaf = _get_find_leaf()
+        _select_category, _training_indices = _get_cps_helpers()
 
         # Build Mondrian tree on augmented data [X; x]
         X_aug = np.vstack([self.X, x])
@@ -1360,38 +1398,27 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
             verbose=self.verbose,
         ).root
 
-        # Find leaf containing x (leaf_star).  For Mondrian trees the leaf
-        # depends only on X, so the same leaf is visited for every candidate y.
-        # The partition is required by the theory even though the signed-
-        # residual monotonicity makes the CPD depend only on the labels.
-        leaf_star = _find_leaf(tree, x)
-        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]  # noqa: F841
+        # Category: the leaf containing x, or (empty-leaf convention) the
+        # deepest ancestor holding at least one training point.
+        category = _select_category(tree, x, n)
+        labels = self.y[_training_indices(category, n)]
 
-        # Critical values C_i = y_i (the training labels).
-        # The signed-residual difference α_n^y − α_i^y = y − y_i is strictly
-        # increasing in y (slope 1), so the p-value jumps exactly at each y_i.
-        # Consequently the leaf mean B does not appear in the final CPD.
-        Y = np.zeros(n + 2)
+        # Knots at the sorted category labels; signed-residual monotonicity
+        # (α_n^y − α_j^y = y − y_j) makes the category labels the critical
+        # values, so the category mean B does not appear in the final CPD.
+        A = labels.size
+        Y = np.empty(A + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
-        Y[1:-1] = self.y.copy()
-        Y.sort()
+        Y[1:-1] = np.sort(labels)
 
-        # For Mondrian signed residual CPS:
-        # L[j] = (number of labels < Y[j]) / n
-        # U[j] = (number of labels <= Y[j]) / n
-        # For Y[0] = -inf: L[0] = 0, U[0] = 0
-        # For Y[-1] = +inf: L[-1] = 1, U[-1] = 1
-        L = np.zeros(len(Y))
-        U = np.zeros(len(Y))
-        L[-1] = 1.0
-        U[-1] = 1.0
-        # For each breakpoint Y[j] (j=1..n), count how many training labels
-        # are strictly less than Y[j] (for L) and how many are <= Y[j] (for U).
-        for j in range(1, n + 1):
-            y_j = Y[j]
-            L[j] = np.sum(self.y < y_j) / n
-            U[j] = np.sum(self.y <= y_j) / n
+        # Knot bands: L[j] = #{labels < Y[j]}/A, U[j] = #{labels <= Y[j]}/A
+        L = np.empty(A + 2)
+        U = np.empty(A + 2)
+        L[0] = U[0] = 0.0
+        L[-1] = U[-1] = 1.0
+        L[1:-1] = np.searchsorted(Y[1:-1], Y[1:-1], side="left") / A
+        U[1:-1] = np.searchsorted(Y[1:-1], Y[1:-1], side="right") / A
 
         cpd = MondrianPredictiveDistributionFunction(Y, L, U, epsilon=self.epsilon)
 
@@ -1410,24 +1437,26 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
 class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
     r"""Conformal predictive distribution for the Mondrian signed-residual CPS.
 
-    The CPD is a step function whose knots are at the sorted training labels
-    ``Y[1:-1]``.  At each knot ``Y[j]`` the lower and upper CDF bounds are
+    The CPD is a step function whose knots are at the sorted *category*
+    labels ``Y[1:-1]``.  At each knot ``Y[j]`` the lower and upper CDF
+    bounds are
 
     .. math::
 
-        L[j] = \frac{|\{i : y_i < Y[j]\}|}{n}, \qquad
-        U[j] = \frac{|\{i : y_i \le Y[j]\}|}{n},
+        L[j] = \frac{|\{i : y_i < Y[j]\}|}{A}, \qquad
+        U[j] = \frac{|\{i : y_i \le Y[j]\}|}{A},
 
-    where :math:`n` is the training-set size.  The use of strict ``<`` for
-    ``L`` and ``<=`` for ``U`` follows the interval-valued CPD definition in
-    [ALRW2 §7.2]: the lower bound excludes ties whereas the upper bound
-    includes them, so that :math:`L(y) \le U(y)` for every :math:`y`.
+    where :math:`A` is the category size (number of training points in
+    the Mondrian category).  The use of strict ``<`` for ``L`` and ``<=``
+    for ``U`` follows the interval-valued CPD definition in [ALRW2 §7.2]:
+    the lower bound excludes ties whereas the upper bound includes them,
+    so that :math:`L(y) \le U(y)` for every :math:`y`.
 
     Parameters
     ----------
     Y : ndarray
-        Sorted array of length ``n+2`` with ``Y[0] = -inf``, ``Y[-1] = +inf``,
-        and ``Y[1:-1]`` = the sorted training labels.
+        Sorted array of length ``A+2`` with ``Y[0] = -inf``, ``Y[-1] = +inf``,
+        and ``Y[1:-1]`` = the sorted category labels.
     L : ndarray
         Lower CDF bounds, same length as ``Y``.
     U : ndarray
@@ -1462,13 +1491,17 @@ class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunc
         ``y``.  When ``y`` coincides with one or more knots, the lower bound
         is ``L[left]`` (first matching knot's ``L``) and the upper bound is
         ``U[right-1]`` (last matching knot's ``U``).  When ``y`` lies strictly
-        between two knots, both bounds equal ``L[i] = U[i]`` for the bracket
-        index ``i``.
+        between two knots the band collapses to the single CDF value
+        ``L[i] = U[i - 1]``, where ``i`` is the first knot strictly above
+        ``y`` (no ties occur between knots, so no randomisation is needed).
         """
         if y == self.Y[0]:
             return 0.0, 0.0
         if y == self.Y[-1]:
             return 1.0, 1.0
+        if self.Y.size == 2:
+            # No knots (empty category): completely non-informative band.
+            return 0.0, 1.0
         # Search in Y[1:-1] which contains the actual data points
         left = np.searchsorted(self.Y[1:-1], y, side="left") + 1
         right = np.searchsorted(self.Y[1:-1], y, side="right") + 1
@@ -1478,9 +1511,10 @@ class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunc
             # Matches span from Y[left] to Y[right-1] (in Y indexing)
             return self.L[left], self.U[right - 1]
         else:
-            # y is between breakpoints
+            # y lies strictly between knots Y[i-1] and Y[i]; the CDF is the
+            # single value #{labels <= y}/A = L[i] = U[i - 1].
             i = left
-            return self.L[i], self.U[i]
+            return self.L[i], self.U[i - 1]
 
     def _compute_quantile(self, p, tau):
         """Compute the p-quantile of the CPD.
@@ -1489,10 +1523,12 @@ class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunc
 
         Two types of CDF level are checked:
 
-        * **At breakpoint** ``Y[j]`` (``j = 1,\\dots,n``): the smoothed CDF
-          is :math:`(1-\\tau) L[j] + \\tau U[j]`.
+        * **At knot** ``Y[j]`` (``j = 1,\\dots,n``): the smoothed CDF is
+          :math:`(1-\\tau) L[j] + \\tau U[j]` (the randomisation band only
+          exists at knots, where ties occur).
         * **Between** ``Y[j]`` and ``Y[j+1]`` (``j = 0,\\dots,n``): the CDF
-          is constant at :math:`(1-\\tau) L[j] + \\tau U[j]`.
+          is the single, non-randomised value ``U[j] = L[j+1]``
+          (``#{labels <= Y[j]} / A``).
 
         The quantile is whichever yields the smaller ``y``: the knot
         ``Y[j_{\\text{at}}]`` or the value just above ``Y[j_{\\text{between}}]``.
@@ -1500,20 +1536,24 @@ class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunc
         ``L`` and ``U`` to differ but the smallest feasible ``y`` is always
         returned.
         """
-        n = len(self.Y) - 2  # number of training labels
+        n = len(self.Y) - 2  # number of category labels
 
         if p <= 0:
             return -np.inf
         if p > 1:
             return np.inf
+        if n == 0:
+            # No knots: the band is [0, 1] everywhere, so the smoothed CDF
+            # is the constant tau; the quantile is -inf iff tau >= p.
+            return -np.inf if tau >= p else np.inf
 
-        # At-breakpoint CDF values for j = 1..n.
+        # At-knot CDF values for j = 1..n.
         at_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
         at_idx = np.where(at_levels >= p)[0]
         j_at = at_idx[0] + 1 if len(at_idx) > 0 else len(self.Y)
 
-        # Between-interval CDF values for j = 0..n.
-        between_levels = (1 - tau) * self.L[: n + 1] + tau * self.U[: n + 1]
+        # Between-knot CDF values for j = 0..n: U[j] = L[j + 1].
+        between_levels = self.U[: n + 1]
         between_idx = np.where(between_levels >= p)[0]
         j_between = between_idx[0] if len(between_idx) > 0 else n + 1
 

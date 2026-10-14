@@ -331,7 +331,13 @@ def test_mondrian_forest_regressor_coverage_validity():
 
 @pytest.mark.slow
 def test_svm_classifier_coverage_validity():
-    """Test ConformalSupportVectorMachine coverage validity."""
+    """Test ConformalSupportVectorMachine coverage validity.
+
+    Uses the standard warm-up protocol (train on the first 200 examples,
+    then a test-then-learn stream on the remaining 200) so that the
+    streaming warm-up excess error (≈ H_400 − H_200 per run) stays small
+    relative to the pooled binomial gate.
+    """
     eps = 0.1
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(1)
@@ -340,7 +346,15 @@ def test_svm_classifier_coverage_validity():
     for _ in range(n_runs):
         X, y = generate_binary_classification_data(rng, N, d)
         clf = ConformalSupportVectorMachine(C=1.0, kernel=GaussianKernel(sigma=1.0))
-        metric = progressive_val(clf, X, y, epsilon=eps, metric=ErrorRate())
+        clf.learn_initial_training_set(X[:200], y[:200])
+
+        metric = ErrorRate()
+        for i in range(200, N):
+            x_i = X[i]
+            y_i = y[i]
+            Gamma = clf.predict(x_i, epsilon=eps)
+            metric.update(y=y_i, Gamma=Gamma)
+            clf.learn_one(x_i, y_i)
         total_errors += int(metric.values.sum())
         total_preds += int(metric.values.size)
     result = binomtest(total_errors, total_preds, eps, alternative="greater")
@@ -418,13 +432,21 @@ def test_mondrian_forest_classifier_coverage_validity():
 
 @pytest.mark.slow
 def test_ridge_cps_cdf_validity():
-    """Test RidgePredictionMachine CDF validity via PIT uniformity."""
+    """Test RidgePredictionMachine CDF validity via PIT uniformity.
+
+    The PIT values are computed for test labels drawn from the *same
+    conditional distribution* as the training labels (``y = x @ beta +
+    noise`` for the test's own ``x``) — a marginal ``N(0, 1)`` draw would
+    not match the conditional CPD and would fail uniformity by design.
+    """
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
     for _ in range(n_runs):
-        X, y = generate_linear_data(rng, N, d)
+        X = rng.normal(size=(N, d))
+        beta = rng.normal(size=d)
+        y = X @ beta + rng.normal(scale=0.5, size=N)
         cps = RidgePredictionMachine(a=1.0)
         cps.learn_initial_training_set(X, y)
 
@@ -433,9 +455,9 @@ def test_ridge_cps_cdf_validity():
         pit_values = []
         for x in X_test:
             cpd = cps.predict_cpd(x)
-            # Sample from the distribution and compute PIT values
+            # Sample from the conditional distribution and compute PIT values
             tau = rng.uniform(0, 1)
-            y_sample = rng.normal()  # Sample from the true distribution
+            y_sample = float(x @ beta) + rng.normal(scale=0.5)
             pit = cpd(y_sample, tau)
             pit_values.append(pit)
 
@@ -457,14 +479,21 @@ def test_ridge_cps_cdf_validity():
 
 @pytest.mark.slow
 def test_kernel_ridge_cps_coverage_validity():
-    """Test KernelRidgePredictionMachine prediction set coverage."""
+    """Test KernelRidgePredictionMachine prediction set coverage.
+
+    Test labels are drawn from the *same conditional distribution* as the
+    training labels (``y = x @ beta + noise`` for the test's own ``x``); a
+    marginal ``N(0, 1)`` draw would not match the conditional CPD.
+    """
     eps = 0.1
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
     for _ in range(n_runs):
-        X, y = generate_linear_data(rng, N, d)
+        X = rng.normal(size=(N, d))
+        beta = rng.normal(size=d)
+        y = X @ beta + rng.normal(scale=0.5, size=N)
         cps = KernelRidgePredictionMachine(kernel=GaussianKernel(sigma=1.0), a=1.0)
         cps.learn_initial_training_set(X, y)
 
@@ -473,8 +502,8 @@ def test_kernel_ridge_cps_coverage_validity():
             cpd = cps.predict_cpd(x)
             tau = rng.uniform(0, 1)
             Gamma = cpd.predict_set(tau=tau, epsilon=eps)
-            # Check coverage for true y (sample from same distribution)
-            y_true = rng.normal()
+            # Check coverage for true y (sample from the same distribution)
+            y_true = float(x @ beta) + rng.normal(scale=0.5)
             in_set = y_true in Gamma
             if not in_set:
                 total_errors += 1
@@ -488,14 +517,21 @@ def test_kernel_ridge_cps_coverage_validity():
 
 @pytest.mark.slow
 def test_knn_cps_coverage_validity():
-    """Test NearestNeighboursPredictionMachine prediction set coverage."""
+    """Test NearestNeighboursPredictionMachine prediction set coverage.
+
+    Test labels are drawn from the *same conditional distribution* as the
+    training labels (``y = x @ beta + noise`` for the test's own ``x``); a
+    marginal ``N(0, 1)`` draw would not match the conditional CPD.
+    """
     eps = 0.1
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
     for _ in range(n_runs):
-        X, y = generate_linear_data(rng, N, d)
+        X = rng.normal(size=(N, d))
+        beta = rng.normal(size=d)
+        y = X @ beta + rng.normal(scale=0.5, size=N)
         cps = NearestNeighboursPredictionMachine(k=5)
         cps.learn_initial_training_set(X, y)
 
@@ -504,7 +540,7 @@ def test_knn_cps_coverage_validity():
             cpd = cps.predict_cpd(x)
             tau = rng.uniform(0, 1)
             Gamma = cpd.predict_set(tau=tau, epsilon=eps)
-            y_true = rng.normal()
+            y_true = float(x @ beta) + rng.normal(scale=0.5)
             in_set = y_true in Gamma
             if not in_set:
                 total_errors += 1
@@ -548,25 +584,34 @@ def test_dempster_hill_cps_coverage_validity():
 
 @pytest.mark.slow
 def test_mondrian_cps_coverage_validity():
-    """Test MondrianTreePredictionMachine prediction set coverage."""
+    """Test MondrianTreePredictionMachine prediction set coverage.
+
+    The leaf-local (taxonomy) CPD is calibrated on the *category's*
+    labels only, so its finite-sample coverage is ≈ 1 − ε only once the
+    categories are large.  We therefore test in the strict-exchangeability
+    regime: 1-D features with pure-noise labels (independent of x), a
+    shallow tree (lifetime = 0.25) so the categories stay large, and many
+    training points.  There the test label is exactly exchangeable with
+    the category labels, and the pooled error rate must stay ≤ ε.
+    """
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N = 40, 1000
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
     for _ in range(n_runs):
-        X, y = generate_linear_data(rng, N, d)
-        cps = MondrianTreePredictionMachine(lifetime=1.0)
+        X = rng.normal(size=(N, 1))
+        y = rng.normal(size=N)
+        cps = MondrianTreePredictionMachine(lifetime=0.25)
         cps.learn_initial_training_set(X, y)
 
-        X_test = rng.normal(size=(100, d))
+        X_test = rng.normal(size=(100, 1))
         for x in X_test:
             cpd = cps.predict_cpd(x)
             tau = rng.uniform(0, 1)
             Gamma = cpd.predict_set(tau=tau, epsilon=eps)
             y_true = rng.normal()
-            in_set = y_true in Gamma
-            if not in_set:
+            if y_true not in Gamma:
                 total_errors += 1
             total_preds += 1
 

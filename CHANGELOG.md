@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `_pvalue_from_sweep()` method to perform left-to-right O(n) sweep updating rank tallies in O(1) amortised time.
   - Knot events are tagged with +1 (entry) or -1 (exit) based on whether the outside-leaf nonconformity score crosses above or below the test score as the candidate y increases.
   - The p-value p(y) is piecewise-constant with O(n) algebraic breakpoints where NCM ranks change; the event-driven sweep finds the valid region {y : p(y) > ε} in O(n log n) time.
+- **Mondrian tree CPS — leaf-local CPD** — `MondrianTreePredictionMachine.predict_cpd`
+  now builds the CPD from the *category* of the test point (the leaf containing
+  it, or, when that leaf holds no training data, the deepest ancestor whose
+  subtree does — the empty-leaf walk-up): the interval-valued step CDF of the
+  category's A training labels, with knots at the sorted category labels
+  (ALRW2 §7.2 band). The previous implementation used the global empirical CDF
+  of *all* training labels and left the computed leaf unused, so the partition
+  did not drive the prediction. See `.roadmap/mondrian-cps-verification.md`
+  for the construction and its finite-sample validity boundary.
 
 ### Removed / Deprecated
 
@@ -59,6 +68,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ruff Linting** — fixed import sorting (I001) and loop variable binding (B023) issues in tests.
 - **Mondrian graphviz fallback** — `draw()` now degrades gracefully to the matplotlib backend when the `graphviz` Python package is installed but the system `dot` binary is missing, instead of crashing inside `dot`.
 - **GitHub Pages Deployment** — fixed docs workflow to properly create virtual environment, install dependencies, and deploy documentation.
+- **Mondrian CPD between-knot band** — `MondrianPredictiveDistributionFunction._cdf_bounds`
+  returned the *next* knot's upper value for `y` strictly between knots,
+  inflating the CPD band between knots (e.g. labels {1, 2}, y = 1.5 gave
+  [0.5, 1.0] instead of [0.5, 0.5]). Fixed: the band collapses to the single
+  CDF value `L[i] = U[i − 1]`; added a degenerate empty-category guard (band
+  [0, 1] everywhere).
+- **Mondrian CPD quantiles / prediction sets** — `_compute_quantile` used the
+  τ-interpolated at-knot band instead of the single between-knot CDF value
+  `U[j] = L[j + 1]`, making quantiles and prediction sets too narrow
+  (e.g. `quantile(0.5, 0.5)` for labels {1, 2} returned 2.0 instead of just
+  above 1.0). Fixed, plus the n = 0 (empty category) quantile rule
+  (−∞ iff τ ≥ p).
+- **`ConformalMondrianTreeRegressor.predict` empty-leaf path** — the A == 0
+  branch (empty leaf → vacuous "total epistemic uncertainty" set) returned
+  before caching `self._last_tree`, so `draw_partition()` after such a predict
+  raised `RuntimeError`. The tree is now cached immediately after it is
+  built, on all branches.
+- **Mondrian notebook** — `notebooks/mondrian.ipynb` CPS section updated to the
+  leaf-local construction (shallow tree, 800-point regression demo); the
+  depth-vs-coverage trade-off at finite samples is documented inline.
 
 ---
 

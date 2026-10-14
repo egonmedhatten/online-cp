@@ -3235,6 +3235,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             return _inf_interval
 
         tree, leaf_star, _ = self._build_augmented_tree(x)
+        # Cache the tree for inspection utilities (draw_partition etc.),
+        # regardless of which prediction branch is taken below.
+        self._last_tree = tree
 
         leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
         A = len(leaf_star_train_idx)
@@ -3324,8 +3327,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         if return_update:
             return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
-        # Cache the tree for inspection utilities
-        self._last_tree = tree
 
         return result
 

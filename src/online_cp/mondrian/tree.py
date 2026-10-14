@@ -690,6 +690,62 @@ def _compute_subtree_counts(root: _MondrianNode) -> dict[int, int]:
     return counts
 
 
+def _select_cps_category(root: _MondrianNode, x: NDArray, n: int) -> _MondrianNode:
+    """Select the conformal category node for a test point.
+
+    Starts at the leaf containing ``x`` and walks up towards the root,
+    returning the deepest node whose subtree holds at least one training
+    sample (index ``< n``).  This implements the empty-leaf convention for
+    the Mondrian CPS: when the leaf containing ``x`` carries no training
+    data, its parent (or a higher ancestor) is used as the category, so
+    the conformal predictive distribution always has a well-defined,
+    non-degenerate empirical CDF.
+
+    Args:
+        root: Root of the tree grown on the augmented bag (``n`` training
+            points plus the test point, which has index ``n``).
+        x: Test feature vector (d,).
+        n: Number of training samples.
+
+    Returns:
+        The selected category node.  For ``n >= 1`` the returned node is
+        guaranteed to contain at least one training sample (the root
+        always qualifies).
+    """
+    counts = _compute_subtree_counts(root)
+    # Descend from the root to the leaf containing x, recording the path.
+    path = [root]
+    node = root
+    while not node.is_leaf():
+        node = node.left if x[node.split_dim] <= node.split_loc else node.right
+        path.append(node)
+    # Walk back up: the deepest node holding a training sample is the category.
+    for node in reversed(path):
+        # Every node on the path also contains the test point (index n).
+        if counts[id(node)] - 1 >= 1:
+            return node
+    return root
+
+
+def _subtree_training_indices(node: _MondrianNode, n: int) -> NDArray:
+    """All training indices (``< n``) in the subtree rooted at ``node``.
+
+    Args:
+        node: Subtree root.
+        n: Number of training samples (the test point has index ``n``).
+
+    Returns:
+        1-D int array of the training sample indices in the subtree.
+    """
+    if node.is_leaf():
+        if node.indices is None:
+            return np.empty(0, dtype=int)
+        return node.indices[node.indices < n]
+    return np.concatenate(
+        [_subtree_training_indices(node.left, n), _subtree_training_indices(node.right, n)]
+    )
+
+
 def _compute_partition_bounds(
     root: _MondrianNode,
     X_lower: NDArray,

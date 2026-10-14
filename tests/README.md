@@ -19,14 +19,14 @@ addopts = "-m 'not slow'"
 markers = ["slow: statistical-validity tests; run with -m slow"]
 ```
 
-## "Deselected" tests (12 by default)
+## "Deselected" tests (26 by default)
 
-`uv run pytest` reports **12 deselected**. These are *not* skipped — they are
+`uv run pytest` reports **26 deselected**. These are *not* skipped — they are
 **filtered out before collection** by the `-m 'not slow'` marker expression.
 They are collected, but never executed, because they are statistically
 expensive (long generated streams) and would slow the default lane down.
 
-The 12 deselected tests are:
+The 26 deselected tests are:
 
 | File | Test | Why it is slow |
 |------|------|----------------|
@@ -37,9 +37,23 @@ The 12 deselected tests are:
 | `tests/test_mondrian_online.py` | `TestOnlineForestRegressor::test_coverage_tracks_epsilon` | Long online stream |
 | `tests/test_mondrian_online.py` | `TestOnlineForestRegressor::test_coverage_matches_batch` | Long online stream |
 | `tests/test_statistical.py` | `test_ridge_regressor_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_knn_regressor_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_kernel_ridge_regressor_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_lasso_regressor_coverage_validity` | Law-of-large-numbers |
 | `tests/test_statistical.py` | `test_mondrian_tree_regressor_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_mondrian_forest_regressor_coverage_validity` | Law-of-large-numbers |
 | `tests/test_statistical.py` | `test_knn_classifier_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_svm_classifier_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_mondrian_tree_classifier_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_mondrian_forest_classifier_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_ridge_cps_cdf_validity` | PIT uniformity at scale |
+| `tests/test_statistical.py` | `test_kernel_ridge_cps_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_knn_cps_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_dempster_hill_cps_coverage_validity` | Law-of-large-numbers |
+| `tests/test_statistical.py` | `test_mondrian_cps_coverage_validity` | Law-of-large-numbers |
 | `tests/test_statistical.py` | `test_venn_abers_calibration_in_the_large` | Calibration at scale |
+| `tests/test_statistical.py` | `test_knn_venn_calibration_in_the_large` | Calibration at scale |
+| `tests/test_statistical.py` | `test_mondrian_venn_calibration_in_the_large` | Calibration at scale |
 | `tests/test_statistical.py` | `test_ville_false_alarm_rate_under_null` | False-alarm rate |
 | `tests/test_statistical.py` | `test_ville_detects_distribution_shift` | Distribution-shift detection |
 
@@ -69,7 +83,7 @@ classifier. They are guarded by:
 @pytest.mark.skipif(not _has_graphviz(), reason="graphviz not installed")
 ```
 
-`_has_graphviz()` (defined in `src/online_cp/mondrian/tree.py:990`) returns
+`_has_graphviz()` (defined in `src/online_cp/mondrian/tree.py:1046`) returns
 `True` only when **both** of the following are present:
 
 1. The Python `graphviz` package is importable.
@@ -113,10 +127,10 @@ except ImportError:
 ## Verifying the current state
 
 ```bash
-# Fast lane (default): should report "1308 passed, 12 deselected, 0 warnings"
+# Fast lane (default): should report "1316 passed, 26 deselected, 0 warnings"
 uv run pytest -W always -q --no-header
 
-# Slow lane: should report "12 passed"
+# Slow lane: should report "26 passed"
 uv run pytest -m slow -q --no-header
 ```
 

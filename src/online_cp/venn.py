@@ -783,7 +783,11 @@ class VennAbersPredictor(VennPredictor):
                 if precomputed is not None and "XTXinv" in precomputed:
                     self.XTXinv = precomputed["XTXinv"]
                 else:
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    # Update (X^T X + aI)^{-1} via the matrix-inversion lemma,
+                    # symmetrized to counteract round-off drift over long streams.
+                    v = self.XTXinv @ x
+                    M = self.XTXinv - np.outer(v, v) / (1.0 + x @ v)
+                    self.XTXinv = 0.5 * (M + M.T)
                 self.X = np.vstack([self.X, x.reshape(1, -1)])
                 self.y = np.append(self.y, y)
 

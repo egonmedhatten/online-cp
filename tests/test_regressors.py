@@ -2,6 +2,7 @@ import numpy as np
 
 from online_cp.kernels import GaussianKernel
 from online_cp.regressors import (
+    ConformalRegressor,
     ConformalRidgeRegressor,
     KernelConformalRidgeRegressor,
     MultiLevelPredictionSet,
@@ -74,6 +75,76 @@ class TestConformalRidgeRegressor:
         assert cp.minimum_training_set(0.1, "upper") == 10
         assert cp.minimum_training_set(0.05) == 40
 
+    def test_x_txinv_stays_symmetric_over_long_stream(self):
+        """Repeated rank-1 inverse updates must preserve symmetry.
+
+        Regression test for the symmetrized `_rank1_inverse_update`: after many
+        online `learn_one` calls the incremental (X'X + aI)^-1 must remain
+        symmetric to machine precision (the unsymmetrized update accumulated
+        ~1e-7 asymmetry over a few hundred near-collinear steps).
+        """
+        cp = ConformalRidgeRegressor(a=1e-4, warnings=False, rnd_state=0)
+        rng = np.random.default_rng(0)
+        d = 5
+        X = rng.normal(size=(300, d)) * np.array([5.0, 1.0, 0.3, 0.1, 1.0])
+        X[:, 1] = X[:, 0] + 0.01 * rng.normal(size=300)  # near-collinear
+        y = X.sum(axis=1)
+        cp.learn_initial_training_set(X[:40], y[:40])
+        for i in range(40, 300):
+            cp.learn_one(X[i], y[i])
+        asym = np.abs(cp.XTXinv - cp.XTXinv.T).max()
+        assert asym == 0.0, f"XTXinv lost symmetry after online updates (max asym={asym})"
+
+    def test_ridge_inverse_update_matches_reference(self):
+        """The symmetrized rank-1 update must match a direct re-inversion."""
+        cp = ConformalRidgeRegressor(a=0.5, warnings=False, rnd_state=0)
+        rng = np.random.default_rng(1)
+        X = rng.normal(size=(60, 4))
+        y = X.sum(axis=1)
+        cp.learn_initial_training_set(X[:10], y[:10])
+        for i in range(10, 60):
+            cp.learn_one(X[i], y[i])
+            expected = np.linalg.inv(X[: i + 1].T @ X[: i + 1] + cp.a * np.identity(cp.p))
+            assert np.allclose(cp.XTXinv, expected, atol=1e-8), f"divergence at n={i + 1}"
+
+    def test_order_statistic_clamping_at_small_n(self):
+        """_get_lower/__get_upper clamp the rank to [1, n-1] and return rays.
+
+        Pins the edge-case behavior: when the required 1-based rank exceeds the
+        number of available training cut-points (n - 1), the selector returns the
+        unbounded ray rather than wrapping to the opposite tail.
+        """
+        # 3 training cut-points => ranks 1..3 (n = 4 total).
+        l_dic = {1: 1.0, 2: 2.0, 3: 3.0}
+        u_dic = {1: 1.0, 2: 2.0, 3: 3.0}
+        n = 4
+        # Upper: required rank ceil((1 - eps)*n). eps -> 0 gives rank 4 > n-1 => +inf.
+        assert np.isposinf(ConformalRegressor._get_upper(u_dic, 1e-6, n))
+        # eps = 1.0 gives rank 0 (out of range) => +inf (KeyError fallback).
+        assert np.isposinf(ConformalRegressor._get_upper(u_dic, 1.0, n))
+        # eps = 0.5 => rank ceil(0.5*4) = 2 => u_dic[2] = 2.0
+        assert ConformalRegressor._get_upper(u_dic, 0.5, n) == 2.0
+        # Lower: required rank floor(eps*n). eps = 1 gives rank 4 > n-1 => -inf.
+        assert np.isneginf(ConformalRegressor._get_lower(l_dic, 1.0, n))
+        # eps = 0.5 => rank floor(0.5*4) = 2 => l_dic[2] = 2.0
+        assert ConformalRegressor._get_lower(l_dic, 0.5, n) == 2.0
+        # eps = 0 => rank 0 (out of range) => -inf (KeyError fallback).
+        assert np.isneginf(ConformalRegressor._get_lower(l_dic, 0.0, n))
+
+    def test_vectorised_l_and_u_drops_test_point(self):
+        """l_dic/u_dic hold exactly n - 1 ranked cut-points (test point excluded)."""
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False)
+        rng = np.random.default_rng(2)
+        n = 12
+        A = rng.normal(size=n)
+        B = np.abs(rng.normal(size=n)) + 0.5  # keep B[-1] - B[i] well-defined
+        B[-1] = B[-1] + 3.0  # make test point have the largest B
+        l_dic, u_dic = cp._vectorised_l_and_u(A, B)
+        assert len(l_dic) == n - 1
+        assert len(u_dic) == n - 1
+        assert set(l_dic) == set(range(1, n))
+        assert set(u_dic) == set(range(1, n))
+
     def test_compute_p_value_in_unit_interval(self, linear_dataset):
         X, y = linear_dataset
         cp = ConformalRidgeRegressor(a=1.0, warnings=False, rnd_state=0)
@@ -92,6 +163,53 @@ class TestConformalRidgeRegressor:
         assert cp.a == 5.0
         expected = np.linalg.inv(cp.X.T @ cp.X + 5.0 * np.identity(cp.p))
         assert np.allclose(cp.XTXinv, expected)
+
+    def test_ridge_gcv_eigenbasis_matches_inverse_gcv(self):
+        """The eigenbasis GCV must minimise the *same* GCV as the inverse form.
+
+        We evaluate the original (inverse) GCV at both the eigenbasis-tuned ``a``
+        and the original-tuned ``a``; the eigenbasis result must attain a GCV no
+        worse than the original's, and both must be near the true minimum of the
+        GCV curve over a grid (the GCV is flat, so this is a robust check that
+        does not depend on the exact optimiser).
+        """
+        rng = np.random.default_rng(0)
+        n, p = 120, 6
+        X = rng.normal(size=(n, p))
+        y = X.sum(axis=1) + rng.normal(scale=0.2, size=n)
+
+        cp = ConformalRidgeRegressor(a=1.0, warnings=False, verbose=0)
+        cp.learn_initial_training_set(X, y)
+
+        def gcv_inverse(a):
+            XTX = cp.X.T @ cp.X
+            Id = cp.Id
+            In = np.identity(n)
+            A = cp.X @ np.linalg.inv(XTX + a * Id) @ cp.X.T
+            if np.max(np.diag(A)) > 1:
+                return np.inf
+            return (1 / n) * np.linalg.norm((In - A) @ cp.y) ** 2 / ((1 / n) * np.trace(In - A)) ** 2
+
+        # True GCV minimum over a log grid (robust reference).
+        grid = np.geomspace(1e-4, 1.0, num=200)
+        ref_min = min(gcv_inverse(a) for a in grid)
+
+        cp._tune_ridge_parameter()
+        a_tuned = cp.a
+        assert a_tuned >= 1e-6, "tuned ridge parameter must respect the lower bound"
+        gcv_at_tuned = gcv_inverse(a_tuned)
+        # The eigenbasis-tuned a must attain a GCV essentially at the minimum.
+        assert gcv_at_tuned <= ref_min * 1.001 + 1e-12, (
+            f"tuned a={a_tuned:.3e} attains GCV {gcv_at_tuned:.6e}, "
+            f"but the grid minimum is {ref_min:.6e}"
+        )
+
+        # The resulting fit should be close to the (near-)OLS solution, since
+        # the GCV is near-minimal (a small ridge parameter).
+        beta_tuned = cp.XTXinv @ cp.X.T @ cp.y
+        beta_ols = np.linalg.lstsq(cp.X, cp.y, rcond=None)[0]
+        rel = np.max(np.abs(beta_tuned - beta_ols)) / (np.max(np.abs(beta_ols)) + 1e-12)
+        assert rel < 0.05, f"tuned fit deviates too much from OLS (rel {rel:.2e})"
 
 
 class TestKernelConformalRidgeRegressor:

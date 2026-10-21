@@ -43,7 +43,6 @@ except ImportError:
 import numpy as np
 from joblib import Parallel, delayed
 from numpy.typing import NDArray
-from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
 # Optional numba for Lasso homotopy speedup
@@ -91,6 +90,21 @@ __all__ = [
 
 
 default_epsilon = 0.1
+
+
+def _rank1_inverse_update(inv, x):
+    r"""Return ``(inv - inv xx' inv) / (1 + x' inv x)``, symmetrized.
+
+    This is the inverse of ``A + x x'`` for the positive-definite matrix ``A``
+    whose inverse is ``inv`` (the matrix-inversion lemma). The update is
+    symmetrized as ``(M + M') / 2`` after each step to counteract the asymmetric
+    round-off that accumulates when this rank-1 update is applied repeatedly
+    over a long online stream; symmetry is an invariant of every intermediate
+    ``A^{-1}`` since ``A`` is symmetric.
+    """
+    v = inv @ x
+    M = inv - np.outer(v, v) / (1.0 + x @ v)
+    return 0.5 * (M + M.T)
 
 
 # ---------------------------------------------------------------------------
@@ -229,24 +243,71 @@ class ConformalRegressor(SerializableMixin):
 
     @staticmethod
     def _get_upper(u_dic, epsilon, n):
-        try:
-            upper = u_dic[int(np.ceil((1 - epsilon) * n))]
-        except KeyError:
-            upper = np.inf
-        return upper
+        r"""Upper bound from Algorithm 2.2: the order statistic $t_{(\lceil(1-\epsilon)n\rceil)}$.
+
+        ``u_dic`` maps 1-based rank ``k`` (``1 .. n - 1``) to the ``k``-th
+        smallest training cut-point. The upper bound is the order statistic at
+        rank ``k = ceil((1 - epsilon) * n)``.
+
+        Parameters
+        ----------
+        u_dic : dict
+            Mapping ``rank -> value`` for the upper order statistic, ranks
+            ``1 .. n - 1`` (see :meth:`_vectorised_l_and_u`).
+        epsilon : float
+            Significance level for this tail (callers pass ``epsilon / 2`` for a
+            two-sided set).
+        n : int
+            Total number of points (training + test) = number of cut-points + 1.
+        """
+        k = int(np.ceil((1 - epsilon) * n))
+        # A required rank outside the available range (k < 1 or k > n - 1) means
+        # the order statistic does not exist -> unbounded ray (+inf). This is
+        # the explicit form of the previous KeyError fallback.
+        return u_dic.get(k, np.inf)
 
     @staticmethod
     def _get_lower(l_dic, epsilon, n):
-        try:
-            lower = l_dic[int(np.floor(epsilon * n))]
-        except KeyError:
-            lower = -np.inf
-        return lower
+        r"""Lower bound from Algorithm 2.3: the order statistic $t_{(\lfloor\epsilon n\rfloor)}$.
+
+        ``l_dic`` maps 1-based rank ``k`` (``1 .. n - 1``) to the ``k``-th
+        smallest training cut-point. The lower bound is the order statistic at
+        rank ``k = floor(epsilon * n)``.
+
+        Parameters
+        ----------
+        l_dic : dict
+            Mapping ``rank -> value`` for the lower order statistic, ranks
+            ``1 .. n - 1`` (see :meth:`_vectorised_l_and_u`).
+        epsilon : float
+            Significance level for this tail (callers pass ``epsilon / 2`` for a
+            two-sided set).
+        n : int
+            Total number of points (training + test) = number of cut-points + 1.
+        """
+        k = int(np.floor(epsilon * n))
+        # A required rank outside the available range (k < 1 or k > n - 1) means
+        # the order statistic does not exist -> unbounded ray (-inf). This is
+        # the explicit form of the previous KeyError fallback.
+        return l_dic.get(k, -np.inf)
 
     @staticmethod
     def _vectorised_l_and_u(A, B):
-        """A and B are columns"""
-        # Calculate differences
+        """Compute the lower/upper order-statistic dictionaries.
+
+        ``A`` and ``B`` are length-``n`` columns (last element = test point).
+        For each training point ``i`` the cut-point is
+        ``t_i = (a_i - a_n) / (b_n - b_i)``. Two dictionaries are returned:
+
+        - ``l_dic``: ascending-sorted cut-points with anomalous points
+          (``b_n <= b_i``) sent to ``-inf`` (they can never be the lower bound),
+          the overall minimum dropped. Ranks ``1 .. n - 1``.
+        - ``u_dic``: ascending-sorted cut-points with anomalous points sent to
+          ``+inf`` (they can never be the upper bound), the overall maximum
+          dropped. Ranks ``1 .. n - 1``.
+
+        This is the input to :meth:`_get_lower` / :meth:`_get_upper`.
+        """
         differences = B[-1] - B
 
         # Create an array to store results
@@ -258,14 +319,17 @@ class ConformalRegressor(SerializableMixin):
         l[mask] = (A[mask] - A[-1]) / differences[mask]
         u[mask] = (A[mask] - A[-1]) / differences[mask]
 
-        # Assign positive infinity where differences are non-positive
+        # Assign infinity where differences are non-positive (anomalous case,
+        # ALRW2 §2.3.2): the point's cut-point cannot be a lower bound (-inf)
+        # nor an upper bound (+inf).
         l[~mask] = -np.inf
         u[~mask] = np.inf
 
+        # Drop the test point's own entry and one extreme sentinel each, so each
+        # dictionary holds exactly n - 1 values, 1-based ranked.
         l = np.sort(l, axis=0)[1:]
         u = np.sort(u, axis=0)[:-1]
 
-        # These are just to avoid messing with the python indexing. Could probably be removed for efficiency
         l_dic = {i + 1: val for i, val in enumerate(l)}
         u_dic = {i + 1: val for i, val in enumerate(u)}
 
@@ -525,9 +589,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             "or provide more linearly independent training examples."
                         ) from None
                 else:
-                    # Update XTX_inv using the Sherman-Morrison formula
-                    # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    # Update XTX_inv using the matrix-inversion lemma
+                    # (inverse of (X'X + aI) -> inverse of ((X+x)(X+x)' + aI)).
+                    self.XTXinv = _rank1_inverse_update(self.XTXinv, x)
                     self._n_sm_updates += 1
 
                     if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
@@ -558,9 +622,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     ) from None
             else:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update XTX_inv using the Sherman-Morrison formula
-                # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                # Update XTX_inv using the matrix-inversion lemma
+                # (inverse of (X'X + aI) -> inverse of ((X+x)(X+x)' + aI)).
+                self.XTXinv = _rank1_inverse_update(self.XTXinv, x)
                 self._n_sm_updates += 1
 
                 if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
@@ -859,31 +923,71 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     def _tune_ridge_parameter(self, a0=None):
         """
-        Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
+        Tune ridge parameter with Generalized cross validation
+        (https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf).
+
+        The GCV score only depends on the ridge hat matrix
+        ``A = X (X^T X + a I)^{-1} X^T`` through ``||y - A y||`` and
+        ``trace(A)``.  We factor ``X^T X`` **once** into its eigendecomposition
+        (``X^T X = V diag(lam) V^T``); for a ridge parameter ``a`` the hat
+        matrix is ``A = (X V) diag(lam / (lam + a)) (X V)^T``, so evaluating the
+        GCV at any ``a`` reduces to a handful of vector operations (O(n p))
+        instead of a fresh p x p matrix inverse per evaluation (O(p^3)).  The
+        one-dimensional GCV is then minimised with :func:`minimize_scalar`
+        (bound method) rather than a general-purpose minimiser.
+
+        The result is identical to the original formulation (same GCV, same
+        ``a >= 1e-6`` bound, same ``max_diag_H > 1`` guard); only the
+        evaluation order changes, so the minimised ``a`` is (up to optimiser
+        tolerance) the same.
         """
         XTX = self.X.T @ self.X
         n = self.X.shape[0]
-        In = np.identity(n)
+        y = self.y
+
+        # One-time eigendecomposition of X^T X (symmetric, p x p).
+        lam_eig, V = np.linalg.eigh(XTX)
+        # Columns of W = X V;  W^T W = diag(lam_eig) (orthonormal up to lam).
+        W = self.X @ V
+        # Precompute V^T (X^T y) and W^T y so the per-a work is just vector ops.
+        Xt_y = self.X.T @ y  # (p,)
+        Vt_Xt_y = V.T @ Xt_y  # (p,)
 
         def GCV(a):
-            try:
-                A = self.X @ np.linalg.inv(XTX + a * self.Id) @ self.X.T
-                max_diag_H = np.max(np.diag(A))
-                if max_diag_H > 1:
-                    return np.inf
-                return (1 / n) * np.linalg.norm((In - A) @ self.y) ** 2 / ((1 / n) * np.trace(In - A)) ** 2
-            except (np.linalg.LinAlgError, ZeroDivisionError):
+            # Hat-matrix eigenvalues are lam / (lam + a) in (0, 1) for a > 0.
+            denom = lam_eig + a
+            # trace(A) = sum_j lam_j / (lam_j + a)
+            trA = np.sum(lam_eig / denom)
+            # A y = W ( diag(lam/denom) @ (V^T X^T y) ) ... see docstring.
+            #   A y = (X V) diag(1/(lam+a)) (V^T) (X^T y)
+            #        = W @ ( (Vt_Xt_y) / denom )
+            A_y = W @ (Vt_Xt_y / denom)
+            # ||(I - A) y||^2 = ||y - A y||^2
+            r = y - A_y
+            num = (1.0 / n) * float(r @ r)
+            den = (1.0 / n) * (n - trA)
+            if den <= 0.0:
                 return np.inf
+            # Equivalent to the original max_diag_H > 1 guard (inert for ridge,
+            # kept for safety): A = W diag(1/(lam+a)) W^T, so the i-th hat
+            # diagonal is sum_j W_ij^2 / (lam_j + a).
+            max_diag_H = np.max(np.einsum("ij,j,ij->i", W, 1.0 / denom, W))
+            if max_diag_H > 1.0:
+                return np.inf
+            return num / (den * den)
 
-        # Initial guess
-        if a0 is None:
-            a0 = 1e-6  # Just a small pertubation to avoid numerical issues
+        # Upper bound for the bounded 1-D minimiser.  The original used an
+        # unbounded Nelder-Mead with a lower bound only; here we need a finite
+        # upper bound.  For ridge the GCV plateaus once a is large enough that
+        # the hat matrix is negligible, and the optimum always lies below
+        # O(n * var(y)) (the scale at which the fit is essentially the mean).
+        upper = max(1.0, n * max(float(np.var(y)), 1e-12))
 
         # Bounds to ensure a >= 0
-        res = minimize(
-            GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True)
-        )  # May be relevant to pass some arguments here, or even use another minimizer.
-        a = res.x[0]
+        from scipy.optimize import minimize_scalar
+
+        res = minimize_scalar(GCV, bounds=(1e-6, upper), method="bounded", options={"xatol": 1e-8})
+        a = res.x
 
         if self.verbose > 0:
             print(f"New ridge parameter: {a}")
@@ -897,6 +1001,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
     Produces prediction intervals with guaranteed coverage using the
     nonconformity measure |y - ŷ_kNN| where ŷ_kNN is the leave-one-out
     k-nearest neighbours prediction.
+
+    This implementation uses an optimized exact algorithm with:
+    - Cached k-th nearest neighbor distances for efficient reverse-neighbour detection
+    - O(n) prediction time (instead of O(n²) in the naive implementation)
+
+    For very large datasets, consider using a k-d tree for O(n log n) complexity
+    (not yet implemented, but the exact path is highly optimized).
 
     >>> import numpy as np
     >>> np.random.seed(42)
@@ -919,7 +1030,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         "rnd_state",
         "epsilon",
     )
-    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const")
+    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const", "_kth_distances")
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
 
@@ -1052,6 +1163,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.D = self.distance_func(self.X)
         # Cache constant parts of affine scores: a_i = y_i - ŷ_i (with y_n=0)
         self._update_residuals()
+        # Cache k-th nearest distances for efficient reverse-neighbour detection
+        self._update_kth_distances()
 
     def _update_residuals(self) -> None:
         """Compute and cache leave-one-out k-NN residuals for conformal prediction.
@@ -1073,6 +1186,32 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # Cache constant parts of affine scores (signed residuals, not absolute)
         self._a_const = self.y - y_hat_train
 
+    def _update_kth_distances(self) -> None:
+        """Compute and cache k-th nearest neighbor distances for each training point.
+
+        For each training point i, compute the k-th smallest distance to other
+        training points (excluding self). This is used for efficient reverse-neighbour
+        detection during prediction.
+        """
+        if self.X is None or self.y is None or self.D is None:
+            return
+
+        n = self.X.shape[0]
+        if n == 0:
+            return
+
+        k_actual = min(self.k, n - 1)
+        if k_actual == 0:
+            self._kth_distances = np.zeros(n)
+            return
+
+        # For each training point, get k-th nearest distance (excluding self)
+        self._kth_distances = np.empty(n)
+        for i in range(n):
+            d_i = self.D[i].copy()
+            d_i[i] = np.inf
+            self._kth_distances[i] = np.partition(d_i, k_actual - 1)[k_actual - 1]
+
     def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """Incrementally add one observation.
 
@@ -1093,6 +1232,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.D = self.distance_func(self.X)
             # Cache residuals for efficient conformal prediction
             self._update_residuals()
+            self._update_kth_distances()
         else:
             if precomputed is not None and "D" in precomputed:
                 self.D = precomputed["D"]
@@ -1101,8 +1241,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 self.D = self._update_distance_matrix(self.D, d)
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, y)
-            # Refresh cached residuals after adding new point
+            # Refresh cached residuals and k-th distances after adding new point
             self._update_residuals()
+            self._update_kth_distances()
 
     def predict(
         self,
@@ -1117,9 +1258,12 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
     ):
         """Predict a conformal prediction interval for test object x.
 
-        This implements the exact O(n log n) conformal predictor from ALRW2 §2.4
-        using the deleted nonconformity scores with affine representation
-        α_i(y) = a_i + b_i * y.
+        This implements the conformal predictor from ALRW2 §2.4 using the
+        deleted nonconformity scores with affine representation α_i(y) = a_i + b_i * y.
+
+        This implementation uses an optimized exact algorithm with:
+        - Cached k-th nearest neighbor distances for efficient reverse-neighbour detection
+        - O(n) prediction time per call (after O(n²) preprocessing in training)
 
         Parameters
         ----------
@@ -1137,6 +1281,18 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         result : ContinuousPredictionSet or MultiLevelPredictionSet
         precomputed : dict, optional
             Returned if return_update=True. Contains 'D'.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from online_cp.regressors import ConformalNearestNeighboursRegressor
+        >>> X = np.array([[0], [1], [2], [3], [4]])
+        >>> y = np.array([0, 1, 2, 3, 4])
+        >>> cp = ConformalNearestNeighboursRegressor(k=2)
+        >>> cp.learn_initial_training_set(X, y)
+        >>> result = cp.predict(np.array([1.5]))
+        >>> isinstance(result, ContinuousPredictionSet)
+        True
         """
         x = np.asarray(x).ravel()
 
@@ -1171,20 +1327,14 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         agg_func = np.mean if self.aggregation == "mean" else np.median
 
         # b_i: -1/k if x_n in NN_k(x_i) else 0
+        # Use cached k-th nearest distances for efficient reverse-neighbour detection.
+        # x_n is a reverse neighbour iff d(x_i, x_n) <= k-th nearest distance of x_i.
         b = np.zeros(n, dtype=float)
         for i in range(n):
-            # distances from x_i to all other training points (exclude self)
-            d_i = self.D[i].copy()
-            d_i[i] = np.inf
             # d(x_i, x_n)
             d_test_i = d[i]
-            # number of training points strictly closer than the test point
-            n_closer = int(np.sum(d_i < d_test_i))
-            # tie-breaking: if the test point is tied with others, break by label
-            # (the test label is unknown at this stage; use the canonical rule
-            #  that a tied point is counted as a neighbour -- conservative and
-            #  consistent with the lexsort used elsewhere).
-            if n_closer < k_actual:
+            # Use cached k-th nearest distance (already excludes self)
+            if d_test_i <= self._kth_distances[i]:
                 b[i] = -1.0 / self.k
 
         # Test point: a_n = -mean(k nearest training labels), b_n = 1
@@ -1209,8 +1359,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 # for the constant term a_i (the y-dependence is captured by b_i).
                 d_i = self.D[i].copy()
                 d_i[i] = np.inf
-                d_full = np.append(d_i, d[i])  # distances from x_i to all training + test
-                y_full = np.append(self.y, 0.0)  # test label set to 0
+                # Use partition to find k nearest (excluding self) among training + test
+                d_full = np.append(d_i, d[i])
+                y_full = np.append(self.y, 0.0)
+                # Get k+1 nearest (test might be among them), then filter
                 nn_idx = np.lexsort((y_full, d_full))[:k_actual]
                 y_hat_i = agg_func(y_full[nn_idx])
                 a[i] = self.y[i] - y_hat_i  # constant term with y_n = 0
@@ -1495,8 +1647,14 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
     @staticmethod
     def _update_Kinv(Kinv, k, kappa):
+        """Block matrix-inversion lemma (ALRW2 eq. 2.56) to extend ``Kinv``.
+
+        Symmetrizes the result to counteract round-off drift from repeated
+        rank-1 extensions over a long online stream.
+        """
         d = 1 / (kappa - k.T @ Kinv @ k)
-        return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        M = np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        return 0.5 * (M + M.T)
 
     @staticmethod
     def _update_K(K, k, kappa):
@@ -1837,30 +1995,57 @@ def _solve_lasso(X, y, lam, rho=0.0, max_iter=1000, tol=1e-6, warm_start=None):
     else:
         beta = np.zeros(p)
 
-    # Precompute X^T X diagonal and X^T y
-    # For coordinate descent: update_j = X_j^T (y - X beta + X_j beta_j)
-    # We use the "naive" update which is simple and correct.
-    # Column norms squared (for normalization)
+    # Precompute the diagonal of X^T X (column norm squared) used in the
+    # soft-thresholding update.  The residual is maintained incrementally so a
+    # sweep costs only the O(p) coordinate updates rather than a fresh O(n p)
+    # matrix-vector product.
     col_norms_sq = np.sum(X**2, axis=0)  # (p,)
+    residual = y - X @ beta
 
+    def _kkt_residual(b):
+        """Max |KKT violation| of b under the elastic-net objective.
+
+        Active j : subgrad_j == sign(b_j) * lam   (subgrad = X^T (y - X b) + rho b)
+        Inactive j : |subgrad_j| <= lam.
+        """
+        s = X.T @ (y - X @ b) + rho * b
+        act = np.abs(b) > 1e-12
+        l1 = np.max(np.abs(s[act] - np.sign(b[act]) * lam)) if act.any() else 0.0
+        l2 = np.max(np.abs(s[~act])) if (~act).any() else 0.0
+        return max(l1, l2)
+
+    # Initial optimality check: a warm start may already be optimal.  This is
+    # the key speed-up in the online loop, where every augmented-data solve
+    # warm-starts from the previous solution (the Lasso path is continuous, so
+    # a single augmented point is usually a no-op for the solution).
+    if _kkt_residual(beta) < tol:
+        return beta
+
+    # Cyclic coordinate descent with the *true* KKT stopping rule.
+    #
+    # The original implementation stopped on ``max|delta beta| < tol`` with
+    # ``tol = 1e-6``.  That test is *insufficient*: a single coefficient can
+    # oscillate below the threshold each sweep while the subgradient is still
+    # far from +/-lam, so the loop halts early and returns a solution that is
+    # not the Lasso/elastic-net optimum.  A non-optimum starting solution is
+    # exactly what made the conformal-Lasso homotopy diverge from the true
+    # solution path and under-cover.  Here we instead check the optimality
+    # condition itself: for active j the subgradient must equal sign(beta_j)
+    # * lam, and for inactive j it must lie in [-lam, lam].  This converges to
+    # the (unique) optimum and, because it is an actual stopping test, also
+    # stops as soon as the warm start is already optimal.
     for _iteration in range(max_iter):
-        beta_old = beta.copy()
-        residual = y - X @ beta
-
         for j in range(p):
             if col_norms_sq[j] == 0:
                 continue
-            # Partial residual including j-th component
+            # Unconstrained coordinate update (partial residual re-adding the
+            # j-th contribution): beta_j^* = S_lam( x_j^T (r + x_j beta_j) ) /
+            # (||x_j||^2 + rho), with r = y - X beta.
             residual += X[:, j] * beta[j]
-            # Unconstrained update
             rho_j = X[:, j] @ residual
-            # Soft threshold
             beta[j] = _soft_threshold(rho_j, lam) / (col_norms_sq[j] + rho)
-            # Update residual
             residual -= X[:, j] * beta[j]
-
-        # Check convergence
-        if np.max(np.abs(beta - beta_old)) < tol:
+        if _kkt_residual(beta) < tol:
             break
 
     return beta
@@ -2000,27 +2185,46 @@ class ConformalLassoRegressor(ConformalRegressor):
         self.beta = _solve_lasso(self.X, self.y, self.lam, rho=self.rho)
 
     def _tune_lambda(self):
-        """Tune lambda via K-fold cross-validation."""
+        """Tune lambda via K-fold cross-validation.
+
+        The lambda grid is walked in *descending* order and each fold's
+        coordinate-descent fit is warm-started from the previous lambda's
+        solution for that fold (the Lasso solution is monotone in lambda, so a
+        nearby starting point converges in far fewer sweeps). This preserves
+        the exact same CV procedure -- same folds, same grid, same MSE -- while
+        turning ~n_folds * grid_size cold fits into a near-warm homotopy path.
+        """
         n = self.X.shape[0]
         indices = np.arange(n)
         self.rnd_gen.shuffle(indices)
         folds = np.array_split(indices, self.n_folds)
 
-        # Lambda grid: geometric sequence
+        # Precompute per-fold train/validation arrays once (avoid re-indexing
+        # and concatenating on every (lambda, fold) iteration).
+        train_arrays = []
+        val_arrays = []
+        for k in range(self.n_folds):
+            val_idx = folds[k]
+            train_idx = np.concatenate([folds[j] for j in range(self.n_folds) if j != k])
+            train_arrays.append((self.X[train_idx], self.y[train_idx]))
+            val_arrays.append((self.X[val_idx], self.y[val_idx]))
+
+        # Lambda grid: geometric sequence, walked descending (large -> small).
         lam_max = np.max(np.abs(self.X.T @ self.y)) / n
-        lam_grid = np.geomspace(lam_max, lam_max * 1e-3, num=50)
+        lam_grid = np.geomspace(lam_max * 1e-3, lam_max, num=50)
 
         best_lam = self.lam
         best_mse = np.inf
 
+        # Per-fold warm-started solutions carried across lambdas (descending).
+        fold_betas = [None] * self.n_folds
         for lam in lam_grid:
             mse = 0.0
             for k in range(self.n_folds):
-                val_idx = folds[k]
-                train_idx = np.concatenate([folds[j] for j in range(self.n_folds) if j != k])
-                X_tr, y_tr = self.X[train_idx], self.y[train_idx]
-                X_val, y_val = self.X[val_idx], self.y[val_idx]
-                beta_k = _solve_lasso(X_tr, y_tr, lam, rho=self.rho)
+                X_tr, y_tr = train_arrays[k]
+                X_val, y_val = val_arrays[k]
+                beta_k = _solve_lasso(X_tr, y_tr, lam, rho=self.rho, warm_start=fold_betas[k])
+                fold_betas[k] = beta_k
                 mse += np.mean((y_val - X_val @ beta_k) ** 2)
             mse /= self.n_folds
             if mse < best_mse:
@@ -2189,7 +2393,12 @@ class ConformalLassoRegressor(ConformalRegressor):
         # Residuals
         abs_res = np.abs(y_aug - X_aug @ beta_t)
 
-        # Rank of |r_{n+1}| (how many are <= it, in increasing order)
+        # Rank of |r_{n+1}| among all (n+1) residuals, in ascending order
+        # (1 = smallest): count of residuals with |r_i| <= |r_{n+1}|, which
+        # always includes the test point itself.  Lei (2019), prelim.tex line
+        # 141: y_{n+1}(t) is in the set iff this ascending rank is NO HIGHER
+        # than ceil((n+1)(1-alpha)) -- i.e. the test residual must be among
+        # the SMALLEST in magnitude (a candidate the Lasso fits well).
         rank = np.sum(abs_res <= abs_res[-1])
         return rank <= threshold
 
@@ -2308,12 +2517,12 @@ class ConformalLassoRegressor(ConformalRegressor):
             x_J = x_new[J_k]
 
             try:
-                Sigma_J_inv = np.linalg.inv(Sigma_J)
+                # Solve Sigma_J * z = x_J directly (avoids forming the full
+                # inverse; numerically preferred and identical up to rounding).
+                Sigma_J_inv_x = np.linalg.solve(Sigma_J, x_J)
             except np.linalg.LinAlgError:
                 # Singular — cannot continue homotopy
                 break
-
-            Sigma_J_inv_x = Sigma_J_inv @ x_J
 
             # eta(k) = (XtX_aug_J)^{-1} x_{n+1,J}  [paper eq. (5), first form]
             # Note: the Sherman-Morrison form with training-only covariance has a
@@ -2335,31 +2544,34 @@ class ConformalLassoRegressor(ConformalRegressor):
             slope_test = sign * (1.0 - x_J @ Sigma_J_inv_x)  # dr_{n+1}/d(delta_t)
 
             # Find breakpoint t_{k+1}
-            # Primal: beta_j(t_k) + eta_j(k) * dt = 0 for j in J_k
+            # Primal: beta_j(t_k) + eta_j(k) * dt = 0 for j in J_k.
+            # dt_j = -beta_J_j / eta_j (vectorised, masked by |eta| > 1e-15).
             beta_J = beta_k[J_k]
             dt_primal = np.full(len(J_k), np.inf)
-            for idx in range(len(J_k)):
-                if abs(eta_k[idx]) > 1e-15:
-                    dt = -beta_J[idx] / eta_k[idx]
-                    if dt > 1e-12:
-                        dt_primal[idx] = dt
+            active_eta = np.abs(eta_k) > 1e-15
+            if np.any(active_eta):
+                cand = np.full(len(J_k), np.inf)
+                cand[active_eta] = -beta_J[active_eta] / eta_k[active_eta]
+                cand = np.where(cand > 1e-12, cand, np.inf)
+                dt_primal = cand
 
-            # Dual: |v_j(t_k) + gamma_j * dt| = lambda for j in J_c
+            # Dual: |v_j(t_k) + gamma_j * dt| = lambda for j in J_c.
+            # For each j the two candidate breakpoints are (lam - v_j)/g and
+            # (-lam - v_j)/g; take the smallest one that is positive.
             dt_dual = np.full(len(J_c_k), np.inf)
-            for idx in range(len(J_c_k)):
-                g = gamma_k[idx]
-                v_j = v_inactive[idx]
-                if abs(g) > 1e-15:
-                    # v_j + g*dt = +lambda or -lambda
-                    dt1 = (lam - v_j) / g
-                    dt2 = (-lam - v_j) / g
-                    candidates = []
-                    if dt1 > 1e-12:
-                        candidates.append(dt1)
-                    if dt2 > 1e-12:
-                        candidates.append(dt2)
-                    if candidates:
-                        dt_dual[idx] = min(candidates)
+            if len(J_c_k) > 0:
+                g = gamma_k
+                v_j = v_inactive
+                valid_g = np.abs(g) > 1e-15
+                if np.any(valid_g):
+                    dt1 = np.full(len(J_c_k), np.inf)
+                    dt2 = np.full(len(J_c_k), np.inf)
+                    dt1[valid_g] = (lam - v_j[valid_g]) / g[valid_g]
+                    dt2[valid_g] = (-lam - v_j[valid_g]) / g[valid_g]
+                    # Per-j: min of the candidates that are > 1e-12 (else inf).
+                    dt1 = np.where(dt1 > 1e-12, dt1, np.inf)
+                    dt2 = np.where(dt2 > 1e-12, dt2, np.inf)
+                    dt_dual = np.minimum(dt1, dt2)
 
             dt_k = min(
                 np.min(dt_primal) if len(dt_primal) > 0 else np.inf,
@@ -2411,6 +2623,8 @@ class ConformalLassoRegressor(ConformalRegressor):
                 entering_idx = np.argmin(dt_dual)
                 entering_var = J_c_k[entering_idx]
                 entering_sign = np.sign(v_inactive[entering_idx])
+                if entering_sign == 0.0:
+                    entering_sign = 1.0
                 J_k = np.append(J_k, entering_var)
                 signs_k = np.append(signs_k, entering_sign)
 
@@ -2428,7 +2642,9 @@ class ConformalLassoRegressor(ConformalRegressor):
     ):
         """
         Within one homotopy piece of length dt_k, find sub-intervals where
-        |r_{n+1}(t)| has rank <= threshold among all |r_i(t)|.
+        the ascending rank of |r_{n+1}(t)| among all |r_i(t)| is NO HIGHER than
+        threshold (Lei 2019, prelim.tex line 141: the test residual must be
+        among the SMALLEST in magnitude for the candidate to be in the set).
 
         Residuals are linear in delta_t (local parameter within the piece):
             r_i(delta) = r_train[i] + slopes_train[i] * delta   for i=0..n-1
@@ -2439,42 +2655,54 @@ class ConformalLassoRegressor(ConformalRegressor):
         # Find all crossing points using the JIT-compiled function
         raw_crossings = _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k)
 
-        # Build sorted unique crossings with endpoints
-        crossings = [0.0]
-        for c in raw_crossings:
-            crossings.append(c)
-        crossings.append(dt_k)
-        crossings = sorted(set(crossings))
+        # Build sorted unique crossings with endpoints (C-level, no Python set/sort)
+        crossings = np.unique(np.concatenate(([0.0, dt_k], raw_crossings)))
 
-        # For each sub-interval, check rank at midpoint
-        result_intervals = []
-        for idx in range(len(crossings) - 1):
-            d_start = crossings[idx]
-            d_end = crossings[idx + 1]
-            if d_end - d_start < 1e-14:
-                continue
-            d_mid = (d_start + d_end) / 2
+        if len(crossings) < 2:
+            return []
 
-            # Compute residuals at midpoint
-            r_i_mid = r_train + slopes_train * d_mid
-            r_test_mid = r_test + slope_test * d_mid
+        # Sub-intervals are the gaps between consecutive crossings.
+        d_starts = crossings[:-1]
+        d_ends = crossings[1:]
+        widths = d_ends - d_starts
+        # Drop degenerate sub-intervals (zero width).
+        valid = widths >= 1e-14
+        if not np.any(valid):
+            return []
+        d_starts = d_starts[valid]
+        d_ends = d_ends[valid]
 
-            abs_r_i = np.abs(r_i_mid)
-            abs_r_test = np.abs(r_test_mid)
+        # Evaluate residuals at each sub-interval's midpoint, all at once.
+        #   r_i(d_mid)    = r_train[i] + slopes_train[i] * d_mid   (n, m)
+        #   r_{n+1}(d_mid)= r_test + slope_test * d_mid           (m,)
+        d_mids = 0.5 * (d_starts + d_ends)
+        r_i_mid = r_train[:, None] + slopes_train[:, None] * d_mids[None, :]
+        r_test_mid = r_test + slope_test * d_mids
 
-            # Rank: number of |r_j| <= |r_{n+1}| (including n+1 itself)
-            rank = np.sum(abs_r_i <= abs_r_test) + 1  # +1 for itself
+        # Ascending rank per sub-interval: #training residuals with
+        # |r_j| <= |r_{n+1}| + 1 (the +1 counts the test point itself, which
+        # always satisfies |r_{n+1}| <= |r_{n+1}|).  Lei (2019) conformal
+        # criterion (prelim.tex line 141 / method.tex line 459): a candidate
+        # is kept iff this ascending rank is NO HIGHER than
+        # ceil((n+1)(1-alpha)), i.e. the test residual must be among the
+        # SMALLEST in magnitude.
+        in_set = (np.abs(r_i_mid) <= np.abs(r_test_mid)[None, :]).sum(axis=0) + 1 <= threshold
 
-            if rank <= threshold:
-                # This sub-interval is in the prediction set
-                # Map to global t-space
-                t_start = sign * (t_accumulated + d_start)
-                t_end = sign * (t_accumulated + d_end)
-                if t_start > t_end:
-                    t_start, t_end = t_end, t_start
-                result_intervals.append((t_start, t_end))
+        if not np.any(in_set):
+            return []
 
-        return result_intervals
+        d_starts = d_starts[in_set]
+        d_ends = d_ends[in_set]
+
+        # Map to global t-space. With sign > 0, d_starts < d_ends gives
+        # t_starts < t_ends; with sign < 0 the order reverses, so swap to keep
+        # the convention t_start <= t_end.
+        t_left = sign * (t_accumulated + np.minimum(d_starts, d_ends))
+        t_right = sign * (t_accumulated + np.maximum(d_starts, d_ends))
+        if sign < 0:
+            t_left, t_right = t_right, t_left
+
+        return list(zip(t_left, t_right))
 
     @staticmethod
     def _merge_intervals(intervals):

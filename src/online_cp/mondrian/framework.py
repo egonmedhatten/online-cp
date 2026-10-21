@@ -285,6 +285,11 @@ class MondrianConformalRegressor(SerializableMixin):
         y_aug = np.append(model.y, x_new @ model.beta + t)
         beta_t = _solve_lasso(X_aug, y_aug, model.lam, rho=model.rho, warm_start=model.beta)
         abs_res = np.abs(y_aug - X_aug @ beta_t)
+        # Ascending rank of |r_{n+1}(t)| among the pooled same-category fitted
+        # residuals, including the test point itself.  Group-conditional
+        # conformal criterion: the candidate is in the set iff this rank is NO
+        # HIGHER than the threshold (test residual among the smallest in the
+        # category), matching the base ConformalLassoRegressor.
         rank = int(np.sum(abs_res[:-1][cat_mask_train] <= abs_res[-1])) + 1
         return rank <= threshold
 
@@ -449,7 +454,12 @@ class MondrianConformalRegressor(SerializableMixin):
             d_mid = (d_start + d_end) / 2
             r_i_mid = r_train + slopes_train * d_mid
             r_test_mid = r_test + slope_test * d_mid
-            # Only count same-category residuals for rank
+            # Ascending rank of the test residual among the pooled
+            # same-category fitted residuals (including itself).  Group-
+            # conditional conformal criterion: the candidate is kept iff this
+            # rank is NO HIGHER than the threshold (test residual among the
+            # smallest in the category), matching the base
+            # ConformalLassoRegressor.
             abs_r_cat = np.abs(r_i_mid[cat_mask_train])
             abs_r_test = np.abs(r_test_mid)
             rank = int(np.sum(abs_r_cat <= abs_r_test)) + 1

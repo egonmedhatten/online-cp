@@ -197,8 +197,11 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                 if self.X.shape[0] == 1:
                     self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
                 else:
-                    # Update (X^T X + aI)^{-1} via Sherman-Morrison
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    # Update (X^T X + aI)^{-1} via the matrix-inversion lemma,
+                    # symmetrized to counteract round-off drift over long streams.
+                    v = self.XTXinv @ x
+                    M = self.XTXinv - np.outer(v, v) / (1.0 + x @ v)
+                    self.XTXinv = 0.5 * (M + M.T)
 
                     # Check the rank
                     if self.warnings:
@@ -215,8 +218,11 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                 self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
             else:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update (X^T X + aI)^{-1} via Sherman-Morrison
-                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                # Update (X^T X + aI)^{-1} via the matrix-inversion lemma,
+                # symmetrized to counteract round-off drift over long streams.
+                v = self.XTXinv @ x
+                M = self.XTXinv - np.outer(v, v) / (1.0 + x @ v)
+                self.XTXinv = 0.5 * (M + M.T)
 
                 # Check the rank
                 if self.warnings:
@@ -259,31 +265,42 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
     def _tune_ridge_parameter(self, a0=None):
         """
-        Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
+        Tune ridge parameter with Generalized cross validation
+        (https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf).
+
+        Same eigenbasis approach as ``ConformalRidgeRegressor._tune_ridge_parameter``:
+        factor ``X^T X`` once into ``V diag(lam) V^T``; the hat matrix is
+        ``A = (X V) diag(1/(lam + a)) (X V)^T`` so each GCV evaluation is O(n p)
+        instead of an O(p^3) inverse.  Minimised with ``minimize_scalar`` (bounded).
         """
         XTX = self.X.T @ self.X
         n = self.X.shape[0]
-        In = np.identity(n)
+        y = self.y
+
+        lam_eig, V = np.linalg.eigh(XTX)
+        W = self.X @ V
+        Xt_y = self.X.T @ y
+        Vt_Xt_y = V.T @ Xt_y
 
         def GCV(a):
-            try:
-                A = self.X @ np.linalg.inv(XTX + a * self.Id) @ self.X.T
-                max_diag_H = np.max(np.diag(A))  # Maximum diagonal element of the hat matrix
-                if max_diag_H > 1:
-                    return np.inf
-                return (1 / n) * np.linalg.norm((In - A) @ self.y) ** 2 / ((1 / n) * np.trace(In - A)) ** 2
-            except (np.linalg.LinAlgError, ZeroDivisionError):
+            denom = lam_eig + a
+            trA = np.sum(lam_eig / denom)
+            A_y = W @ (Vt_Xt_y / denom)
+            r = y - A_y
+            num = (1.0 / n) * float(r @ r)
+            den = (1.0 / n) * (n - trA)
+            if den <= 0.0:
                 return np.inf
+            max_diag_H = np.max(np.einsum("ij,j,ij->i", W, 1.0 / denom, W))
+            if max_diag_H > 1.0:
+                return np.inf
+            return num / (den * den)
 
-        # Initial guess
-        if a0 is None:
-            a0 = 1e-6  # Small perturbation to avoid numerical issues
+        upper = max(1.0, n * max(float(np.var(y)), 1e-12))
+        from scipy.optimize import minimize_scalar
 
-        # Bounds to ensure a >= 0
-        res = minimize(
-            GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True)
-        )  # May be relevant to pass some arguments here, or even use another minimizer.
-        a = res.x[0]
+        res = minimize_scalar(GCV, bounds=(1e-6, upper), method="bounded", options={"xatol": 1e-8})
+        a = res.x
 
         if self.verbose > 0:
             print(f"New ridge parameter: {a}")
@@ -410,7 +427,10 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
             self.Hy = H @ self.y
 
     def _update_Kinv(self, Kinv, k, d):
-        return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        """Block matrix-inversion lemma to extend ``Kinv``; symmetrized to
+        counteract round-off drift over long online streams."""
+        M = np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        return 0.5 * (M + M.T)
 
     @staticmethod
     def _update_K(K, k, kappa):

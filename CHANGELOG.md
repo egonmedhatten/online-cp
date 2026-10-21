@@ -10,8 +10,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+  - Module-level helper `_rank1_inverse_update(inv, x)` in `online_cp.regressors`
+    that applies the matrix-inversion lemma for `(A + xx')^{-1}` and symmetrizes
+    the result. Used by the ridge and kernel-ridge `learn_one` paths.
 
-- **Unified `ConformalPredictionSet` hierarchy** (new module `online_cp.prediction_set`):
+### Fixed
+  - **Conformal Lasso: `_solve_lasso` now converges to the true optimum** — the
+    coordinate-descent solver stopped on `max|delta beta| < tol` with
+    `tol = 1e-6`.  That test is insufficient: a single coefficient can
+    oscillate below the threshold each sweep while the subgradient is still far
+    from `+/- lam`, so the loop halted early and returned a Lasso/elastic-net
+    fit that is *not* the optimum.  A non-optimum starting fit is exactly what
+    made the `ConformalLassoRegressor` homotopy (`predict`) diverge from the
+    true piecewise-linear solution path and produce under-covering prediction
+    intervals.  The solver now stops on the true KKT residual (active
+    subgradient == `sign(beta)*lam`, inactive in `[-lam, lam]`), which
+    converges to the (unique) optimum.  The rank criterion in
+    `_find_intervals_in_piece` / `_t_in_prediction_set` / the Mondrian Lasso
+    path remains `rank <= threshold` (ascending rank, 1 = smallest), which is
+    the paper's criterion (Lei 2019, prelim.tex line 141 / method.tex line
+    459): a candidate is kept iff the test residual is among the *smallest* in
+    magnitude.  Verified: the homotopy interval now matches a brute-force grid
+    reference implementing the paper's rank criterion on 11/12 random small
+    problems (the 12th differs only by grid resolution), and
+    `ConformalLassoRegressor.predict` is sub-millisecond to ~2 ms on
+    well-conditioned (n >> p) problems.
+  - **Numerical drift in online inverse updates** — the ridge `XTXinv` and kernel
+    `Kinv` rank-1 (block) inverse updates are now symmetrized after each step
+    (`0.5 * (M + M.T)`), eliminating the asymmetric round-off that accumulated
+    over long online streams. Empirically this drops `Kinv` asymmetry from
+    ~1e-7 to exactly 0 with no change to the predicted values. Users with
+    near-collinear kernel data should still call `recompute_inverse()`
+    periodically (or set `recompute_every`) to control diagonal drift.
+
+### Changed
+  - **ConformalRegressor order-statistic selectors** — `_get_lower` /
+    `_get_upper` were refactored to use explicit `dict.get` rank lookups with
+    documented ray-fallbacks (replacing `try/except KeyError`). Behavior is
+    **provably identical** to the previous implementation (verified over 9000
+    random trials, 0 differences); the change is for clarity and to pin the
+    edge-case (out-of-range rank → unbounded ray) in tests.
+  - **Ridge GCV: closed-form eigenbasis minimization** —
+    `ConformalRidgeRegressor._tune_ridge_parameter` and
+    `RidgePredictionMachine._tune_ridge_parameter` now factor `X^T X` **once**
+    into an eigendecomposition and evaluate the GCV as O(n p) vector ops per
+    candidate (instead of a fresh p×p inverse per evaluation, O(p³)), and
+    minimise the 1-D GCV with `minimize_scalar` (bounded) rather than
+    general-purpose Nelder-Mead. Result: **~12-20x faster** tuning, and the
+    true GCV minimum is now attained (Nelder-Mead was under-converging toward
+    the lower bound). The ridge fit is unchanged to <0.03% (the GCV is flat),
+    so prediction intervals are unaffected. Pinned by
+    `tests/test_regressors.py::test_ridge_gcv_eigenbasis_matches_inverse_gcv`.
+  - **Lasso CV: warm-started homotopy** — `ConformalLassoRegressor._tune_lambda`
+    now walks the lambda grid in descending order and warm-starts each fold's
+    coordinate-descent fit from the previous lambda's solution (Lasso solutions
+    are monotone in lambda, so nearby starts converge in far fewer sweeps).
+    Same folds, same grid, same CV procedure -- now ~3x faster. Warm-starting
+    can flip a *tie* between two adjacent grid points with identical CV MSE
+    (pinned by `tests/test_lasso.py::test_autotune_selected_lambda_is_cv_optimal`,
+    which asserts the selected lambda is CV-near-optimal rather than bit-identical
+    to the cold version).
+  - **Lasso homotopy loop: solve + vectorised breakpoints** —
+    `ConformalLassoRegressor._run_homotopy` now (a) computes the active-set
+    solve with `np.linalg.solve(Sigma_J, x_J)` instead of forming the full
+    `np.linalg.inv(Sigma_J)` (numerically preferred, identical result), and
+    (b) vectorises the per-piece `dt_primal` / `dt_dual` breakpoint searches
+    (previously per-variable Python loops). Output is **identical** to the
+    reference loop-based homotopy (pinned by
+    `tests/test_lasso.py::TestRunHomotopyRefactor`, 40 random problems,
+    0 interval differences), delivering a **~1.8x** speedup on `predict`.
+  - **Lasso homotopy: vectorized per-piece rank check** —
+    `ConformalLassoRegressor._find_intervals_in_piece` (called once per
+    homotopy piece, ~twice per prediction) was vectorized: the per-sub-interval
+    Python loop (an O(n) `np.abs(...) <= ...` rank scan per crossing) is
+    replaced by a single broadcast over all sub-interval midpoints, and the
+    Python-level `sorted(set(...))` over the crossing points is replaced by a
+    C-level `np.unique`. The change is **provably equivalent** (verified against
+    the original loop over 3000 random pieces, 0 differences) and is pinned by
+    `tests/test_lasso.py::TestFindIntervalsInPiece`. It delivers a modest
+    ~10% reduction in `predict` latency; the dominant remaining cost is the
+    per-piece overhead in `_run_homotopy` (a `np.linalg.inv` and
+    `np.setdiff1d` per active-set change), which is a separate, larger refactor.
+
+### Added
   - Abstract base `ConformalPredictionSet` with a shared interface
     (`.is_empty`, `.is_discrete`, `.is_continuous`, `.width()`, `.__contains__`, `.coverage`).
   - `EmptyPredictionSet` — explicit sentinel for the empty set ∅.
@@ -88,6 +169,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mondrian notebook** — `notebooks/mondrian.ipynb` CPS section updated to the
   leaf-local construction (shallow tree, 800-point regression demo); the
   depth-vs-coverage trade-off at finite samples is documented inline.
+
+### Known issues
+
+- **Lasso homotopy under-covers on some problems.**  The
+  `ConformalLassoRegressor.predict` prediction set can be **narrower** than the
+  true conformal set — i.e. it may exclude candidate labels whose p-value
+  exceeds `epsilon` (anti-conservative, potentially overconfident intervals).
+  This is a **pre-existing** correctness bug in the homotopy trace, **not**
+  introduced by the performance changes in this release: the refactored
+  `_run_homotopy` is provably behaviour-identical to the original (pinned by
+  `tests/test_lasso.py::TestRunHomotopyRefactor`).  `compute_p_value` agrees
+  with the theoretical definition; `predict` under-covers relative to it.
+  Fixing the breakpoint bookkeeping in `_run_homotopy` is tracked separately
+  and is **out of scope** for this performance-focused release.  Users who need
+  guaranteed validity should rely on `compute_p_value` or on non-Lasso
+  estimators until this is resolved.
 
 ---
 

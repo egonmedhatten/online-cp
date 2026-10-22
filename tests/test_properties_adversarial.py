@@ -611,5 +611,60 @@ def test_mforest_regressor_pvalue_quasi_convex():
     )
 
 
+# ======================================================================= #
+# A15 – Mondrian forest exact-interval permutation invariance (goal 1, §2)  #
+#                                                                          #
+# The exact O(Mn log(Mn)) sweepline solver must be a bag function:          #
+# re-ordering the training (x_i, y_i) pairs must not change the exact        #
+# prediction-set intervals for a fixed test point, fixed tree seeds and      #
+# fixed tau. (Permutation invariance of the *p-value* is already covered by  #
+# A14; this guards the interval-extraction path itself.)                    #
+# ======================================================================= #
+
+_A15_RNG = np.random.default_rng(7)
+_A15_N = 12
+_A15_X = _A15_RNG.uniform(0, 1, size=(_A15_N, 2))
+_A15_Y = _A15_RNG.uniform(0, 1, size=_A15_N)
+_A15_XQ = np.array([0.4, 0.6])
+
+
+def _forest_exact_intervals(order, seeds):
+    from online_cp.mondrian._forest_solver import forest_sweepline_solver
+    from online_cp.regressors import ConformalMondrianForestRegressor
+
+    reg = ConformalMondrianForestRegressor(
+        n_trees=3, lifetime=1.0, rnd_state=0
+    )
+    reg.learn_initial_training_set(_A15_X[order], _A15_Y[order])
+    n = len(_A15_Y)
+    X_aug = np.vstack([_A15_X[order], _A15_XQ.reshape(1, -1)])
+    # Deterministic per-tree seeds so the partition is comparable across orders.
+    summaries = reg._forest_summaries(X_aug, _A15_XQ, n, seeds=seeds)
+    intervals, _ = forest_sweepline_solver(
+        summaries, _A15_Y[order], 0.1, 0.5, n, 3, return_exact=True
+    )
+    return intervals
+
+
+def prop_mforest_exact_intervals_perm_invariant(keys: list[int]) -> bool:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A15_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    seeds = np.array([11, 12, 13])
+    ref = _forest_exact_intervals(list(range(_A15_N)), seeds)
+    out = _forest_exact_intervals(perm, seeds)
+    if len(ref) != len(out):
+        return False
+    for (lo1, hi1), (lo2, hi2) in zip(ref, out):
+        if not (np.isclose(lo1, lo2, atol=1e-9) and np.isclose(hi1, hi2, atol=1e-9)):
+            return False
+    return True
+
+
+def test_mforest_exact_intervals_perm_invariant():
+    assert leancheck.check(
+        prop_mforest_exact_intervals_perm_invariant, max_tests=_TESTS_MED, silent=True
+    )
+
+
 if __name__ == "__main__":
     leancheck.main(verbose=True, exit_on_failure=False)

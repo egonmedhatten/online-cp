@@ -108,6 +108,41 @@ class TestExtendDistribution:
         assert stats.ks_2samp(batch, extend).pvalue > 0.02
 
 
+class TestOnlineTreePermutationInvariance:
+    """Bag-function invariance of the *online* (extend-built) tree.
+
+    The Mondrian partition is a function of the multiset of feature values, not
+    their order. For the online path this means: projecting the points in one
+    order vs. another must yield trees with the same leaf-count *distribution*
+    (projectivity makes each single insertion order a valid Mondrian process,
+    but different orders are different realisations — so we compare the
+    distribution, not the exact tree)."""
+
+    def test_extend_leaf_count_distribution_is_order_invariant(self):
+        rng = np.random.default_rng(0)
+        X = rng.uniform(0, 1, (40, 2))
+        lifetime = 3.0
+        n_trials = 200
+
+        # Order A: natural.
+        order_a = list(range(len(X)))
+        leaves_a = np.array([
+            len(_build_by_extend(X[order_a], np.random.default_rng(s), lifetime=lifetime))
+            for s in range(n_trials)
+        ])
+        # Order B: a fixed non-trivial permutation.
+        order_b = list(np.random.default_rng(1).permutation(len(X)))
+        leaves_b = np.array([
+            len(_build_by_extend(X[order_b], np.random.default_rng(s), lifetime=lifetime))
+            for s in range(n_trials, 2 * n_trials)
+        ])
+
+        # Both orders draw from the same (batch) law, so their leaf-count
+        # distributions must not be distinguishable.
+        assert abs(leaves_a.mean() - leaves_b.mean()) < 0.15 * leaves_a.mean()
+        assert stats.ks_2samp(leaves_a, leaves_b).pvalue > 0.02
+
+
 def _clf_stream_error(seed, online):
     """Progressive-validation error rate of the (online or batch) tree classifier."""
     X, y = make_moons(n_samples=200, noise=0.3, random_state=seed)

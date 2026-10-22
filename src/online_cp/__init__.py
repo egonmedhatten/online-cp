@@ -48,7 +48,7 @@ Examples
 True
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 from online_cp._serialization import (
     SerializationError as SerializationError,

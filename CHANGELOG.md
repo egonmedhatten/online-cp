@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.4.0] — 2026-10-22
 
 ### Added
   - Module-level helper `_rank1_inverse_update(inv, x)` in `online_cp.regressors`
@@ -169,6 +169,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mondrian notebook** — `notebooks/mondrian.ipynb` CPS section updated to the
   leaf-local construction (shallow tree, 800-point regression demo); the
   depth-vs-coverage trade-off at finite samples is documented inline.
+- **k-NN tie-breaking: bag-function (permutation) invariance** — the October
+  2026 12-module audit found three bare `np.argpartition` k-nearest selections
+  that were unstable on distance ties, so the prediction changed with the
+  training-row order on tie-rich data (a violation of the Mondrian/conformal
+  bag-function requirement). Fixed by replacing them with a canonical
+  `np.lexsort` tie-break:
+  - `ConformalNearestNeighboursRegressor.compute_p_value` (test-point k-nearest
+    → `lexsort((y, d))`, matching the training path in `_knn_predictions`);
+    previously p was 1.0 for one insertion order and ≈ 0.71 for the other three.
+  - `NearestNeighboursVennPredictor._compute_taxonomies` and
+    `_compute_taxonomies_multiclass` (→ `lexsort((labels, d))`); previously the
+    Abers p0/p1 ranged p0 0.43→0.0, p1 0.5→0.75 across orders.
+  Regression guards: `tests/test_knn_regressor.py::test_pvalue_tie_invariant_across_insertion_orders`
+  and `tests/test_venn_abers.py::TestNearestNeighboursVennPredictor::test_knn_taxonomy_tie_invariant_across_insertion_orders`.
+  See `.roadmap/audit-2026-10.md`.
 
 ### Known issues
 

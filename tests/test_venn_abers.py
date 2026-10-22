@@ -529,6 +529,42 @@ class TestVennPredictorInheritance:
 class TestNearestNeighboursVennPredictor:
     """Tests for the taxonomy-based Venn predictor."""
 
+    def test_knn_taxonomy_tie_invariant_across_insertion_orders(self):
+        """Regression guard for the k-NN taxonomy tie-break fix (audit 2026-10).
+
+        The test point is equidistant (distance 1.0) to the first four training
+        points, so a bare ``np.argpartition`` would pick a tie-dependent subset
+        for the k-nearest-neighbour *taxonomy* and the Abers p0/p1 would change
+        with the training-row order. With the ``np.lexsort((labels, d))``
+        canonical tie-break the Venn prediction is a bag function of the
+        training data and must be identical across orders.
+        """
+        X = np.array(
+            [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [2.0, 0.0], [3.0, 0.0]]
+        )
+        y = np.array([0, 1, 0, 1, 0, 1])
+        x_test = np.array([0.0, 0.0])
+
+        def p01_for(order):
+            v = NearestNeighboursVennPredictor(k=1, label_space=[0, 1])
+            v.learn_initial_training_set(X[order], y[order])
+            pred = v.predict(x_test)
+            return pred.p0, pred.p1
+
+        orders = [
+            list(range(6)),
+            list(range(5, -1, -1)),
+            [3, 1, 4, 0, 5, 2],
+            [2, 4, 0, 5, 1, 3],
+        ]
+        ref = p01_for(orders[0])
+        for order in orders[1:]:
+            got = p01_for(order)
+            assert np.isclose(got[0], ref[0]) and np.isclose(got[1], ref[1]), (
+                f"Venn k-NN prediction is not invariant to insertion order "
+                f"(order {order}: {got} vs ref {ref})"
+            )
+
     def test_slide_example_k1(self):
         """Reproduce the exact k=1 example from Ilia's ALRW lecture slides.
 

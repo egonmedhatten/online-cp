@@ -1509,11 +1509,15 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         y_hat_train = self._knn_predictions(self.D, self.y)
         alpha_train = np.abs(self.y - y_hat_train)
 
-        # Test point k-NN prediction
+        # Test point k-NN prediction.
+        # Use lexsort (distance primary, y-value secondary) so that ties in
+        # distance are broken canonically by y rather than by insertion order,
+        # matching the training path in _knn_predictions (np.argpartition is
+        # unstable on ties and would break permutation invariance).
         d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
         k_test = min(self.k, n)
         agg_func = np.mean if self.aggregation == "mean" else np.median
-        test_knn_idx = np.argpartition(d, k_test - 1)[:k_test]
+        test_knn_idx = np.lexsort((self.y, d))[:k_test]
         y_hat_test = agg_func(self.y[test_knn_idx])
 
         # Test nonconformity score

@@ -1561,14 +1561,17 @@ class NearestNeighboursVennPredictor(VennPredictor):
         np.fill_diagonal(D_work, np.inf)
 
         for i in range(n):
-            # Find k nearest neighbours
+            # Find k nearest neighbours.
+            # lexsort (distance primary, label secondary) breaks distance ties
+            # canonically by label rather than by insertion order (np.
+            # argpartition is unstable on ties), keeping the taxonomy a bag
+            # function of (X, labels).
             if k >= n - 1:
                 # Use all other points
                 nn_idx = np.arange(n)
                 nn_idx = nn_idx[nn_idx != i]
             else:
-                # Partial sort to find k nearest
-                nn_idx = np.argpartition(D_work[i], k)[:k]
+                nn_idx = np.lexsort((labels, D_work[i]))[:k]
 
             taxonomies[i] = np.sum(labels[nn_idx])
 
@@ -1602,11 +1605,15 @@ class NearestNeighboursVennPredictor(VennPredictor):
         np.fill_diagonal(D_work, np.inf)
 
         for i in range(n):
+            # lexsort (distance primary, label secondary) breaks distance ties
+            # canonically by label rather than by insertion order (np.
+            # argpartition is unstable on ties), keeping the taxonomy a bag
+            # function of (X, labels).
             if k >= n - 1:
                 nn_idx = np.arange(n)
                 nn_idx = nn_idx[nn_idx != i]
             else:
-                nn_idx = np.argpartition(D_work[i], k)[:k]
+                nn_idx = np.lexsort((labels, D_work[i]))[:k]
 
             taxonomies[i] = np.sum(labels[nn_idx] == labels[i])
 

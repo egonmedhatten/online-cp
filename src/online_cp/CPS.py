@@ -1249,7 +1249,7 @@ class MondrianTreePredictionMachine(ConformalPredictiveSystem):
         P( y ∈ Γ^ε | category ) → 1 − ε   as A → ∞.
 
     At finite A the two-sided quantile set under-covers by ≈ (1 − Aε/2)/(A+1)
-    under exact exchangeability (see `.roadmap/mondrian-cps-verification.md`).
+    under exact exchangeability (see `.roadmap/archive/mondrian-cps-verification.md`).
 
     Empty-leaf convention
     ---------------------

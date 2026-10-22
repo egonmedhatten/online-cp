@@ -156,6 +156,25 @@ venn.learn_initial_training_set(X_train, y_train)
 prob = venn.predict(x_new)
 ```
 
+Tuning and modes worth knowing:
+
+- **Partition granularity** — `lifetime` controls split density (larger → more
+  splits → smaller leaves). Auto-tune unsupervised with
+  `lifetime="sqrt_n"` or `lifetime="density"` (labels are never used).
+- **Online (streaming) mode** — pass `online=True` to learn one example at a
+  time without regrowing the partition: the tree (or forest) is grown once
+  and then *extended* per step at `O(depth)` cost, keeping the whole stream
+  on one consistent draw of the Mondrian process (~3–6× faster than
+  rebuilding each step).
+- **Tree CPS** — `MondrianTreePredictionMachine` returns a full conformal
+  *predictive distribution*: a leaf-local signed-residual CPD (step CDF of
+  the category's labels with the ALRW2 §7.2 randomisation band) that supports
+  quantiles, plotting, and scoring. Coverage is guaranteed conditional on the
+  category; finite samples are covered when leaves are large enough.
+
+See the [Mondrian notebook](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/mondrian.ipynb)
+and the guide's *Mondrian Prediction* section for details.
+
 ### Streaming evaluation
 
 River-style test-then-train loop with composable metrics:
@@ -277,7 +296,8 @@ for i in range(len(X_test)):
 | **Regressors** | `ConformalRidgeRegressor`, `KernelConformalRidgeRegressor`, `ConformalNearestNeighboursRegressor`, `ConformalLassoRegressor` |
 | **Classifiers** | `ConformalNearestNeighboursClassifier`, `ConformalSupportVectorMachine` |
 | **Venn Predictors** | `VennAbersPredictor` (ridge, k-NN, SVM scoring), `NearestNeighboursVennPredictor` (binary & multiclass), `log_loss_point`, `brier_point` |
-| **Mondrian CP** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage |
+| **Mondrian CP (wrappers)** | `MondrianConformalRegressor`, `MondrianConformalClassifier` — group-conditional coverage over any base model |
+| **Mondrian trees & forests** | `MondrianTree`, `ConformalMondrianTreeClassifier`, `ConformalMondrianForestClassifier`, `ConformalMondrianTreeRegressor`, `ConformalMondrianForestRegressor`, `MondrianVennPredictor`, `MondrianTreePredictionMachine` — adaptive partition predictors |
 | **Predictive Systems** | `RidgePredictionMachine`, `KernelRidgePredictionMachine`, `NearestNeighboursPredictionMachine`, `DempsterHillConformalPredictiveSystem` |
 | **Decision Making** | `ConformalPredictiveDecisionMaker`, `UtilityFunction`, `cps_decision`, `venn_decision` |
 | **Metrics** | `ErrorRate`, `ObservedExcess`, `ObservedFuzziness`, `SetSize`, `IntervalWidth`, `WinklerScore`, `CRPS` |
@@ -342,7 +362,7 @@ loaded = ConformalNearestNeighboursRegressor.load("model.joblib")  # works
 
 ## Tutorial
 
-Start with [`notebooks/quickstart.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/quickstart.ipynb) for a 5-minute introduction ([run on Binder](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)), then see [`notebooks/tutorial.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb) for a comprehensive walkthrough covering regression, classification, Mondrian CP, conformal predictive systems, martingales, and evaluation.
+Start with [`notebooks/quickstart.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/quickstart.ipynb) for a 5-minute introduction ([run on Binder](https://mybinder.org/v2/gh/egonmedhatten/online-cp/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fquickstart.ipynb)), then see [`notebooks/tutorial.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/tutorial.ipynb) for a comprehensive walkthrough covering regression, classification, Mondrian CP (wrappers, trees & forests, and the tree CPS), conformal predictive systems, decision-making (including a clinical case study), martingales, and evaluation. Focused notebooks: [`mondrian.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/mondrian.ipynb) (Mondrian architecture), [`pipeline.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/pipeline.ipynb) (pipelines & preprocessing), [`guide.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/guide.ipynb) (which-method comparison), and [`toy-example.ipynb`](https://github.com/egonmedhatten/online-cp/blob/main/notebooks/toy-example.ipynb) (hand-computed step-through).
 
 ## Links
 

@@ -91,14 +91,14 @@ class TestConformalSVM:
         return X, y
 
     def test_prediction_returns_set(self, separable_data):
-        """predict() should return a ConformalPredictionSet."""
+        """predict() should return a DiscretePredictionSet."""
         X, y = separable_data
-        from online_cp.classifiers import ConformalPredictionSet
+        from online_cp.classifiers import DiscretePredictionSet
 
         svm = ConformalSupportVectorMachine(kernel=LinearKernel(), C=10.0, rnd_state=0)
         svm.learn_initial_training_set(X[:40], y[:40])
         Gamma = svm.predict(X[40])
-        assert isinstance(Gamma, ConformalPredictionSet)
+        assert isinstance(Gamma, DiscretePredictionSet)
 
     def test_correct_label_in_set(self, separable_data):
         """On well-separated data with small epsilon, errors should be rare."""
@@ -310,14 +310,14 @@ class TestMultiClassSVM:
     def test_multiclass_basic(self, three_class_data):
         """Three-class SVM should return a valid prediction set."""
         X, y = three_class_data
-        from online_cp.classifiers import ConformalPredictionSet
+        from online_cp.classifiers import DiscretePredictionSet
 
         svm = ConformalSupportVectorMachine(
             kernel=GaussianKernel(sigma=1.0), C=10.0, label_space=np.array([0, 1, 2]), rnd_state=0
         )
         svm.learn_initial_training_set(X[:60], y[:60])
         Gamma = svm.predict(X[60])
-        assert isinstance(Gamma, ConformalPredictionSet)
+        assert isinstance(Gamma, DiscretePredictionSet)
         # True label should be in set (well-separated, default epsilon=0.1)
         assert y[60] in Gamma
 

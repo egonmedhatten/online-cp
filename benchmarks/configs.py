@@ -39,7 +39,7 @@ def get_configs(task="all"):
 
 
 def _regression_configs():
-    from online_cp import ConformalRidgeRegressor, KernelConformalRidgeRegressor, GaussianKernel
+    from online_cp import ConformalRidgeRegressor, GaussianKernel, KernelConformalRidgeRegressor
 
     return [
         {
@@ -95,7 +95,12 @@ def _classification_configs():
 
 
 def _cps_configs():
-    from online_cp import RidgePredictionMachine, KernelRidgePredictionMachine, NearestNeighboursPredictionMachine, GaussianKernel
+    from online_cp import (
+        GaussianKernel,
+        KernelRidgePredictionMachine,
+        NearestNeighboursPredictionMachine,
+        RidgePredictionMachine,
+    )
 
     return [
         {
@@ -120,7 +125,7 @@ def _cps_configs():
 
 
 def _venn_configs():
-    from online_cp import VennAbersPredictor, NearestNeighboursVennPredictor
+    from online_cp import NearestNeighboursVennPredictor, VennAbersPredictor
 
     return [
         {

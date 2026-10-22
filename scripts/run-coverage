@@ -10,4 +10,5 @@ set -e
 export PYTHONPATH=src
 coverage erase
 coverage run -m pytest tests/ -q
-coverage report
+# Coverage floor (fast lane baseline 89% as of 2026-10-13).
+coverage report --fail-under=88

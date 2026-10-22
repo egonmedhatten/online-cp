@@ -10,8 +10,8 @@ import numpy as np
 from sklearn.datasets import (
     load_breast_cancer,
     load_diabetes,
-    load_iris,
     load_digits,
+    load_iris,
 )
 
 

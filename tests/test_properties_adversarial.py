@@ -39,6 +39,7 @@ import numpy as np
 from online_cp import (
     ConformalNearestNeighboursRegressor,
     ConformalRidgeRegressor,
+    MondrianTreePredictionMachine,
     OptimisticFTRLBarrierLegendreMartingale,
     RidgePredictionMachine,
     SimpleLegendreJumper,
@@ -398,6 +399,271 @@ def prop_oftrl_barrier_high_degree_stability(pvs: list[PValue]) -> bool:
 
 def test_oftrl_barrier_high_degree_stability():
     assert leancheck.check(prop_oftrl_barrier_high_degree_stability, max_tests=_TESTS_MED, silent=True)
+
+
+# A12 Mondrian tree classifier order-invariance on tie-rich data
+#     The Mondrian partition is a bag function of X (permutation-invariant), so
+#     the conformal p-values must not depend on training insertion order even
+#     when integer-valued features produce many ties at split candidates.
+#     Guard: seeded predictions are identical across any training-row permutation.
+
+_A12_RNG = np.random.default_rng(0)
+_A12_N = 12
+_A12_X = _A12_RNG.integers(0, 3, size=(_A12_N, 2)).astype(float)
+_A12_Y = (_A12_X[:, 0] > 1).astype(int)
+_A12_XQ = np.array([1.0, 2.0])
+
+
+def _fit_mtree_clf(order):
+    from online_cp.classifiers import ConformalMondrianTreeClassifier
+
+    clf = ConformalMondrianTreeClassifier(
+        lifetime=2.0, rnd_state=0, label_space=np.array([0, 1])
+    )
+    clf.learn_initial_training_set(_A12_X[order], _A12_Y[order])
+    return clf
+
+
+def prop_mondrian_tree_clf_order_invariant_ties(keys: list[int]) -> bool:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A12_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    ref = _fit_mtree_clf(list(range(_A12_N)))
+    out = _fit_mtree_clf(perm)
+    _, p_ref = ref.predict(_A12_XQ, epsilon=0.5, return_p_values=True)
+    _, p_out = out.predict(_A12_XQ, epsilon=0.5, return_p_values=True)
+    return all(bool(np.isclose(p_ref[k], p_out[k])) for k in p_ref)
+
+
+def test_mondrian_tree_clf_order_invariant_ties():
+    assert leancheck.check(
+        prop_mondrian_tree_clf_order_invariant_ties, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
+# A13 Mondrian CPS order-invariance with real-valued features
+#     The Mondrian partition is a bag function of X (permutation-invariant), so
+#     the conformal predictive distribution must not depend on training insertion
+#     order. Guard: predictions are identical across any training-row permutation.
+
+_A13_RNG = np.random.default_rng(0)
+_A13_N = 15
+_A13_X = _A13_RNG.normal(size=(_A13_N, 2))
+_A13_Y = _A13_X @ np.array([1.0, -0.5]) + 0.1 * _A13_RNG.normal(size=_A13_N)
+_A13_XQ = np.array([0.1, 0.2])
+
+
+def _fit_mtree_cps(order):
+    mps = MondrianTreePredictionMachine(lifetime=1.0, rnd_state=0)
+    mps.learn_initial_training_set(_A13_X[order], _A13_Y[order])
+    return mps
+
+
+def prop_mondrian_cps_order_invariant_ties(keys: list[int]) -> bool:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A13_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    ref = _fit_mtree_cps(list(range(_A13_N)))
+    out = _fit_mtree_cps(perm)
+    cpd_ref = ref.predict_cpd(_A13_XQ)
+    cpd_out = out.predict_cpd(_A13_XQ)
+    # Test CDF values at several quantile levels
+    for p in [0.05, 0.25, 0.5, 0.75, 0.95]:
+        q_ref = cpd_ref.quantile(p, tau=0.5)
+        q_out = cpd_out.quantile(p, tau=0.5)
+        if not np.isclose(q_ref, q_out):
+            return False
+    return True
+
+
+def test_mondrian_cps_order_invariant_ties():
+    assert leancheck.check(
+        prop_mondrian_cps_order_invariant_ties, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
+# ======================================================================= #
+# A14 – Mondrian regressor p(y) quasi-convexity                          #
+#                                                                          #
+# The smoothed p-value function p(y) must be quasi-convex:               #
+# - Piecewise linear with O(n) knot points                               #
+# - Unimodal: increases to a single peak at y = B/A, then decreases      #
+# - Superlevel sets {y: p(y) > ε} must be intervals (possibly empty)     #
+# ======================================================================= #
+
+_A14_RNG = np.random.default_rng(42)
+_A14_N = 10
+_A14_X = _A14_RNG.normal(size=(_A14_N, 2))
+_A14_Y = _A14_X @ np.array([1.0, -0.5]) + 0.1 * _A14_RNG.normal(size=_A14_N)
+_A14_XQ = np.array([0.3, -0.2])
+
+
+def _fit_mtree_regr(order):
+    from online_cp.regressors import ConformalMondrianTreeRegressor
+
+    model = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+    model.learn_initial_training_set(_A14_X[order], _A14_Y[order])
+    return model
+
+
+def _fit_mforest_regr(order):
+    from online_cp.regressors import ConformalMondrianForestRegressor
+
+    model = ConformalMondrianForestRegressor(n_trees=5, lifetime=1.0, rnd_state=0)
+    model.learn_initial_training_set(_A14_X[order], _A14_Y[order])
+    return model
+
+
+def prop_mtree_regressor_pvalue_quasi_convex(keys: list[int]) -> bool:
+    """Mondrian tree: p(y) should be quasi-convex (superlevel sets are intervals).
+
+    For quasi-convexity, the key property is that for any epsilon, the set
+    {y: p(y) > epsilon} must be an interval (possibly empty or infinite).
+
+    We fix tau to test the deterministic piecewise-linear p(y|tau) function.
+    """
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A14_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    model_ref = _fit_mtree_regr(list(range(_A14_N)))
+    model_perm = _fit_mtree_regr(perm)
+
+    # Fix tau to test the deterministic p(y|tau) function
+    # The smoothed p-value with fixed tau is piecewise linear and quasi-convex
+    fixed_tau = 0.5
+
+    # Evaluate p(y) on a dense grid using the same tau
+    y_grid = np.linspace(-3, 3, 50)
+    p_ref = np.array([model_ref.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+    p_perm = np.array([model_perm.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+
+    # Check p-values in [0, 1]
+    if not (np.all(p_ref >= 0) and np.all(p_ref <= 1)):
+        return False
+    if not (np.all(p_perm >= 0) and np.all(p_perm <= 1)):
+        return False
+
+    # Check that both give identical results (permutation invariance)
+    if not np.allclose(p_ref, p_perm):
+        return False
+
+    # Check quasi-convexity: superlevel sets should be intervals (at most 2 transitions)
+    for epsilon in [0.1, 0.2, 0.3, 0.4]:
+        above = p_ref > epsilon
+        if not np.any(above):
+            continue
+        transitions = np.diff(above.astype(int))
+        num_transitions = np.sum(np.abs(transitions))
+        if num_transitions > 2:
+            return False
+
+    return True
+
+
+def test_mtree_regressor_pvalue_quasi_convex():
+    assert leancheck.check(
+        prop_mtree_regressor_pvalue_quasi_convex, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
+def prop_mforest_regressor_pvalue_quasi_convex(keys: list[int]) -> bool:
+    """Mondrian forest: p(y) should be quasi-convex (superlevel sets are intervals).
+
+    We fix tau to test the deterministic piecewise-linear p(y|tau) function.
+    """
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A14_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    model_ref = _fit_mforest_regr(list(range(_A14_N)))
+    model_perm = _fit_mforest_regr(perm)
+
+    # Fix tau to test the deterministic p(y|tau) function
+    fixed_tau = 0.5
+
+    # Evaluate p(y) on a dense grid using the same tau
+    y_grid = np.linspace(-3, 3, 50)
+    p_ref = np.array([model_ref.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+    p_perm = np.array([model_perm.compute_p_value(_A14_XQ, y, tau=fixed_tau) for y in y_grid])
+
+    # Check p-values in [0, 1]
+    if not (np.all(p_ref >= 0) and np.all(p_ref <= 1)):
+        return False
+    if not (np.all(p_perm >= 0) and np.all(p_perm <= 1)):
+        return False
+
+    # Check that both give identical results (permutation invariance)
+    if not np.allclose(p_ref, p_perm):
+        return False
+
+    # Check quasi-convexity: superlevel sets should be intervals
+    for epsilon in [0.1, 0.2, 0.3, 0.4]:
+        above = p_ref > epsilon
+        if not np.any(above):
+            continue
+        # Find transitions
+        transitions = np.diff(above.astype(int))
+        num_transitions = np.sum(np.abs(transitions))
+        if num_transitions > 2:
+            return False
+
+    return True
+
+
+def test_mforest_regressor_pvalue_quasi_convex():
+    assert leancheck.check(
+        prop_mforest_regressor_pvalue_quasi_convex, max_tests=_TESTS_SLOW, silent=True
+    )
+
+
+# ======================================================================= #
+# A15 – Mondrian forest exact-interval permutation invariance (goal 1, §2)  #
+#                                                                          #
+# The exact O(Mn log(Mn)) sweepline solver must be a bag function:          #
+# re-ordering the training (x_i, y_i) pairs must not change the exact        #
+# prediction-set intervals for a fixed test point, fixed tree seeds and      #
+# fixed tau. (Permutation invariance of the *p-value* is already covered by  #
+# A14; this guards the interval-extraction path itself.)                    #
+# ======================================================================= #
+
+_A15_RNG = np.random.default_rng(7)
+_A15_N = 12
+_A15_X = _A15_RNG.uniform(0, 1, size=(_A15_N, 2))
+_A15_Y = _A15_RNG.uniform(0, 1, size=_A15_N)
+_A15_XQ = np.array([0.4, 0.6])
+
+
+def _forest_exact_intervals(order, seeds):
+    from online_cp.mondrian._forest_solver import forest_sweepline_solver
+    from online_cp.regressors import ConformalMondrianForestRegressor
+
+    reg = ConformalMondrianForestRegressor(
+        n_trees=3, lifetime=1.0, rnd_state=0
+    )
+    reg.learn_initial_training_set(_A15_X[order], _A15_Y[order])
+    n = len(_A15_Y)
+    X_aug = np.vstack([_A15_X[order], _A15_XQ.reshape(1, -1)])
+    # Deterministic per-tree seeds so the partition is comparable across orders.
+    summaries = reg._forest_summaries(X_aug, _A15_XQ, n, seeds=seeds)
+    intervals, _ = forest_sweepline_solver(
+        summaries, _A15_Y[order], 0.1, 0.5, n, 3, return_exact=True
+    )
+    return intervals
+
+
+def prop_mforest_exact_intervals_perm_invariant(keys: list[int]) -> bool:
+    pad = [keys[i] if i < len(keys) else 0 for i in range(_A15_N)]
+    perm = np.argsort(np.array(pad), kind="stable")
+    seeds = np.array([11, 12, 13])
+    ref = _forest_exact_intervals(list(range(_A15_N)), seeds)
+    out = _forest_exact_intervals(perm, seeds)
+    if len(ref) != len(out):
+        return False
+    for (lo1, hi1), (lo2, hi2) in zip(ref, out):
+        if not (np.isclose(lo1, lo2, atol=1e-9) and np.isclose(hi1, hi2, atol=1e-9)):
+            return False
+    return True
+
+
+def test_mforest_exact_intervals_perm_invariant():
+    assert leancheck.check(
+        prop_mforest_exact_intervals_perm_invariant, max_tests=_TESTS_MED, silent=True
+    )
 
 
 if __name__ == "__main__":

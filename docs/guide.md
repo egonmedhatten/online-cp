@@ -34,7 +34,7 @@ flowchart TD
 
 ## Regressors
 
-All regressors produce `ConformalPredictionInterval` objects with guaranteed marginal coverage.
+All regressors produce `ContinuousPredictionSet` objects with guaranteed marginal coverage (one or more closed intervals `[a, b]`, including rays and disjoint unions). The legacy name `ConformalPredictionInterval` is retained as a deprecated alias.
 
 | Class | Complexity (per step) | Best when | Notes |
 |-------|----------------------|-----------|-------|
@@ -71,7 +71,7 @@ model = ConformalLassoRegressor(lam=0.1, autotune=True)
 
 ## Classifiers
 
-All classifiers produce `ConformalPredictionSet` objects — sets of labels guaranteed to contain the true label with probability $\geq 1 - \varepsilon$.
+All classifiers produce `DiscretePredictionSet` objects — sets of labels guaranteed to contain the true label with probability $\geq 1 - \varepsilon$. The legacy name `classifiers.ConformalPredictionSet` is retained as a deprecated alias.
 
 | Class | Complexity (per step) | Best when | Notes |
 |-------|----------------------|-----------|-------|
@@ -235,11 +235,87 @@ for p in p_values:
 
 ---
 
-## Mondrian Conformal Prediction
+## Mondrian Prediction
 
-Use Mondrian CP when you need validity guarantees **within subgroups**, not just overall.
+The Mondrian block has **two independent uses** of the Mondrian idea:
 
-### Label-conditional (classification)
+1. **Adaptive tree & forest predictors** — the Mondrian *process* discovers an
+   axis-aligned partition automatically and scores nonconformity in the leaves.
+   Use these as standalone conformal predictors (or a calibrated-probability
+   Venn predictor) when you want a nonlinear, self-tuning model.
+2. **Group-conditional taxonomy wrappers** — apply a category function on top of
+   *any* base predictor to upgrade marginal validity to **subgroup** validity.
+
+### Adaptive tree & forest predictors
+
+No category function is needed: the partition is grown from the data at each
+step, so validity is exact under exchangeability (ALRW2 §2.2.9). A single tree is
+fast and interpretable (`draw()` / `draw_partition()`); a forest averages many
+trees for smoother nonconformity scores.
+
+```python
+from online_cp import (
+    ConformalMondrianForestClassifier,
+    ConformalMondrianTreeRegressor,
+    MondrianVennPredictor,
+)
+
+# Classification prediction set
+clf = ConformalMondrianForestClassifier(n_trees=50, rnd_state=0)
+clf.learn_initial_training_set(X, y)
+Gamma = clf.predict(x_new, epsilon=0.1)
+
+# Regression interval (a single tree solves the interval exactly)
+reg = ConformalMondrianTreeRegressor(rnd_state=0)
+reg.learn_initial_training_set(X, y)
+interval = reg.predict(x_new, epsilon=0.1)
+
+# Calibrated probabilities via the Mondrian-leaf Venn taxonomy
+venn = MondrianVennPredictor(rnd_state=0)
+venn.learn_initial_training_set(X, y)
+prob = venn.predict(x_new)
+```
+
+!!! tip "Tuning the partition"
+    `lifetime` controls granularity (larger → more splits → smaller leaves). For
+    standardised features start around `1`–`5`, or let it auto-tune with
+    `lifetime="sqrt_n"` / `lifetime="density"` (unsupervised — labels are never
+    used). Standardise or `PCA`-rotate features first for best results.
+
+#### Online (streaming) mode
+
+Pass `online=True` to learn one example at a time without regrowing the
+partition. The tree (or forest) is grown once from the initial set and then
+**extended** one point at a time (`ExtendMondrianBlock`), so each step costs
+`O(depth)` per tree instead of rebuilding from scratch:
+
+```python
+from online_cp import ConformalMondrianForestRegressor, ErrorRate, progressive_val
+
+reg = ConformalMondrianForestRegressor(n_trees=10, lifetime=3.0, rnd_state=0, online=True)
+reg.learn_initial_training_set(X_init, y_init)
+
+# Streaming: predict, observe, learn
+for x, y in stream:
+    interval = reg.predict(x, epsilon=0.1)
+    reg.learn_one(x, y)          # persists the exact tree(s) that scored x
+
+# …or use the built-in test-then-train harness
+progressive_val(reg, X_stream, y_stream, epsilon=0.1, metric=ErrorRate())
+```
+
+Online mode is opt-in and requires a fixed float `lifetime` and `max_depth=None`
+(the projective Mondrian regime); batch mode stays the default and reference.
+Because `learn_one` keeps the exact partition that `predict` scored, the whole
+stream is one consistent draw of the Mondrian process, so the online *error
+sequence* enjoys the same validity guarantee as batch — not just per-step
+coverage. Typical speedups over rebuilding each step are **~3–6×**.
+
+### Group-conditional taxonomy wrappers
+
+Use these when you need validity guarantees **within subgroups**, not just overall.
+
+#### Label-conditional (classification)
 
 The most common case: guarantee coverage **per class** — $P(y \in \Gamma(x) \mid y = c) \geq 1 - \varepsilon$ for all $c$ (ALRW2 §4.6.7).
 
@@ -255,7 +331,7 @@ model.learn_initial_training_set(X, y)
 Gamma = model.predict(x_new, epsilon=0.1)
 ```
 
-### Object-conditional (regression or classification)
+#### Object-conditional (regression or classification)
 
 When you have a **categorical covariate** (site, sensor, group) and want group-conditional validity:
 
@@ -270,7 +346,7 @@ model.learn_initial_training_set(X, y)
 interval = model.predict(x_new, epsilon=0.1)
 ```
 
-### General taxonomy
+#### General taxonomy
 
 For any taxonomy $\kappa(x, y) \to \text{category}$ depending on both features and label:
 

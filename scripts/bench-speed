@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Per-model learn_one / predict speed baseline (goal 3).
+
+Usage:
+    uv run python scripts/bench-speed 10000,100000,1000000 2,10
+
+Streams up to CAP learn_one steps to estimate the steady-state per-step cost
+(median of the last few steps), then times a single predict on a point near the
+end of the stream. Lasso is run with autotune=False to isolate the steady-state
+cost from the per-step rho refit. Single-threaded for reproducibility.
+"""
+
+import os
+import sys
+import time
+import warnings
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+warnings.filterwarnings("ignore")
+
+import numpy as np  # noqa: E402
+
+import online_cp as ocp  # noqa: E402
+from online_cp.kernels import GaussianKernel  # noqa: E402
+
+MODELS = [
+    ("Ridge", lambda: ocp.ConformalRidgeRegressor()),
+    ("Lasso", lambda: ocp.ConformalLassoRegressor(autotune=False)),
+    ("KernelRidge", lambda: ocp.KernelConformalRidgeRegressor(kernel=GaussianKernel(1.0))),
+    ("KNN-Reg", lambda: ocp.ConformalNearestNeighboursRegressor(k=5)),
+    ("KNN-Clf", lambda: ocp.ConformalNearestNeighboursClassifier(k=5, label_space=[0, 1])),
+    ("SVM(2-class)", lambda: ocp.ConformalSupportVectorMachine(label_space=[0, 1])),
+    ("VennAbers", lambda: ocp.VennAbersPredictor(scorer="ridge", label_space=[0, 1])),
+    ("NN-Venn", lambda: ocp.NearestNeighboursVennPredictor(k=5, label_space=[0, 1])),
+    (
+        "Mondrian",
+        lambda: ocp.MondrianConformalRegressor(
+            base_model=ocp.ConformalRidgeRegressor(a=1.0),
+            category_fn=lambda x: "pos" if x[0] > 0 else "neg",
+        ),
+    ),
+]
+
+CAP = 500  # max streamed steps (steady-state is reached well before this)
+
+
+def data(n, d, cls):
+    rng = np.random.default_rng(0)
+    X = rng.uniform(0, 1, size=(n, d))
+    y = (X[:, 0] > 0.5).astype(float) if cls else rng.uniform(-1, 1, size=n)
+    return X, y
+
+
+def bench(name, mk, n, d, cls):
+    X, y = data(n, d, cls)
+    m = mk()
+    streamed = min(CAP, n)
+    samples = min(10, streamed // 5)
+    last = streamed - samples
+    t_learn = []
+    for i in range(streamed):
+        if i >= last:
+            s = time.perf_counter()
+            m.learn_one(X[i], y[i])
+            t_learn.append(time.perf_counter() - s)
+        else:
+            m.learn_one(X[i], y[i])
+    x_test = X[streamed - 1]
+    try:
+        if name in ("VennAbers", "NN-Venn"):
+            s = time.perf_counter()
+            m.predict(x_test)
+            pred_ms = (time.perf_counter() - s) * 1e3
+        else:
+            s = time.perf_counter()
+            m.predict(x_test, epsilon=0.05)
+            pred_ms = (time.perf_counter() - s) * 1e3
+    except Exception:
+        pred_ms = float("nan")
+    learn_ms = float(np.median(t_learn)) * 1e3 if t_learn else float("nan")
+    return learn_ms, pred_ms
+
+
+def main():
+    sizes = [int(s) for s in sys.argv[1].split(",") if s]
+    dims = [int(s) for s in sys.argv[2].split(",") if s]
+    header = f"{'model':14s}" + "".join(f"{str(n // 1000) + 'k,d=' + str(d):>22s}" for d in dims for n in sizes)
+    print(header, flush=True)
+    print("(learn_ms/step, predict_ms)", flush=True)
+    for name, mk in MODELS:
+        cls = name in ("KNN-Clf", "SVM(2-class)", "VennAbers", "NN-Venn")
+        row = f"{name:14s}"
+        for d in dims:
+            for n in sizes:
+                try:
+                    learn_ms, pred_ms = bench(name, mk, n, d, cls)
+                    row += f"{learn_ms:10.3f} {pred_ms:11.3f}"
+                except Exception as e:
+                    row += f"{str(e)[:22]:>22s}"
+        print(row, flush=True)
+
+
+if __name__ == "__main__":
+    main()

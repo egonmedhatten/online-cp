@@ -297,7 +297,7 @@ class TestMondrianConformalRegressorLasso:
         epsilon_vals = [0.05, 0.1, 0.2, 0.3]
         result = wrapper.predict(X_test[0], epsilon=epsilon_vals)
 
-        # Should return MultiLevelPredictionInterval
+        # Should return MultiLevelPredictionSet
         assert hasattr(result, "__getitem__"), "Multi-epsilon should return dict-like object"
 
         # Verify nesting property: smaller epsilon should have wider bounds

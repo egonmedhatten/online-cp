@@ -141,6 +141,54 @@ class TestConformalLassoRegressor:
         assert cp.lam != 1.0 or cp.lam == 1.0  # Just check it ran without error
         assert cp.beta is not None
 
+    def test_autotune_selected_lambda_is_cv_optimal(self, sparse_data):
+        """The warm-started CV should select a lambda whose CV MSE is (near-)optimal.
+
+        The selected lambda must attain a CV MSE within a small tolerance of the
+        best grid value. (Warm-starting can flip a *tie* between two adjacent
+        grid points with identical CV MSE, so we assert on the MSE, not on
+        bit-identical lambda.)
+        """
+        X, y, _ = sparse_data
+        n_folds = 4
+        cp = ConformalLassoRegressor(lam=1.0, autotune=False, n_folds=n_folds, rnd_state=42)
+        cp.X = X[:60].copy()
+        cp.y = y[:60].copy()
+        cp.rnd_gen = np.random.default_rng(42)
+
+        # Manually reproduce the CV to get the full MSE curve.
+        indices = np.arange(60)
+        cp.rnd_gen.shuffle(indices)
+        folds = np.array_split(indices, n_folds)
+        lam_max = np.max(np.abs(cp.X.T @ cp.y)) / cp.X.shape[0]
+        lam_grid = np.geomspace(lam_max * 1e-3, lam_max, num=50)
+        mses = []
+        for lam in lam_grid:
+            mse = 0.0
+            for k in range(n_folds):
+                val_idx = folds[k]
+                train_idx = np.concatenate([folds[j] for j in range(n_folds) if j != k])
+                X_tr, y_tr = cp.X[train_idx], cp.y[train_idx]
+                X_val, y_val = cp.X[val_idx], cp.y[val_idx]
+                beta = _solve_lasso(X_tr, y_tr, lam, rho=cp.rho)
+                mse += np.mean((y_val - X_val @ beta) ** 2)
+            mses.append(mse / n_folds)
+        best_mse = min(mses)
+
+        # Run the actual autotune.
+        cp.rnd_gen = np.random.default_rng(42)
+        cp._tune_lambda()
+        selected = cp.lam
+        # The selected lambda must be on the grid and its MSE near-optimal.
+        assert selected in lam_grid or any(np.isclose(selected, g) for g in lam_grid), (
+            f"selected lam {selected} not on grid"
+        )
+        idx = int(np.argmin(np.abs(lam_grid - selected)))
+        assert mses[idx] <= best_mse * 1.001 + 1e-12, (
+            f"selected lam {selected} (mse {mses[idx]:.6e}) is not near-optimal "
+            f"(best {best_mse:.6e})"
+        )
+
     def test_small_training_set(self):
         """With very few points, should still produce valid output."""
         rng = np.random.default_rng(99)
@@ -227,6 +275,11 @@ class TestConformalLassoRegressor:
                 y_aug = np.append(y_train, y_trial)
                 beta_aug = _solve_lasso(X_aug_base, y_aug, lam, warm_start=beta0)
                 abs_res = np.abs(y_aug - X_aug_base @ beta_aug)
+                # Ascending rank (1 = smallest) of the test residual among all
+                # residuals: count of |r_i| <= |r_{n+1}| (test always counted).
+                # Lei (2019) conformal criterion (prelim.tex line 141 /
+                # method.tex line 459): in-set iff this rank is NO HIGHER than
+                # threshold (the test residual must be among the SMALLEST).
                 rank = np.sum(abs_res <= abs_res[-1])
                 if rank <= threshold:
                     in_set_bf.append(y_trial)
@@ -370,3 +423,191 @@ class TestElasticNet:
         # Ridge closed form: (X^T X + rho I)^{-1} X^T y
         beta_ridge = np.linalg.solve(X.T @ X + 100.0 * np.eye(p), X.T @ y)
         np.testing.assert_allclose(beta_enet, beta_ridge, atol=1e-4)
+
+
+class TestFindIntervalsInPiece:
+    """Regression tests for the vectorized _find_intervals_in_piece.
+
+    These pin the (vectorized) implementation's contract: it must return a list
+    of (t_start, t_end) intervals with t_start <= t_end, covering exactly the
+    sub-intervals of [t_acc, t_acc + sign*dt] (mapped to global t-space) where
+    the test residual's rank is AT LEAST the threshold (Lei 2019 conformal
+    criterion: the test residual must be among the largest).
+    """
+
+    def _ref(self, cp, r_train, r_test, slopes, slope_test, dt, tacc, sign, thr, n):
+        """Loop-based reference implementation (the pre-vectorization version).
+
+        NOTE: the conformal criterion (Lei 2019, prelim.tex line 141 /
+        method.tex line 459) keeps a sub-interval iff the ASCENDING rank of the
+        test residual (the count of residuals with |r_i| <= |r_{n+1}|, including
+        the test point; 1 = smallest) is NO HIGHER than the threshold.  (A
+        candidate label is in the set iff its fitted residual is among the
+        SMALLEST.)
+        """
+        from online_cp.regressors import _compute_crossings
+
+        raw = _compute_crossings(r_train, slopes, r_test, slope_test, n, dt)
+        crossings = [0.0]
+        for c in raw:
+            crossings.append(c)
+        crossings.append(dt)
+        crossings = sorted(set(crossings))
+        out = []
+        for idx in range(len(crossings) - 1):
+            ds, de = crossings[idx], crossings[idx + 1]
+            if de - ds < 1e-14:
+                continue
+            dm = (ds + de) / 2
+            ri = r_train + slopes * dm
+            rt = r_test + slope_test * dm
+            rank = np.sum(np.abs(ri) <= np.abs(rt)) + 1
+            if rank <= thr:
+                ts = sign * (tacc + ds)
+                te = sign * (tacc + de)
+                if ts > te:
+                    ts, te = te, ts
+                out.append((ts, te))
+        return out
+
+    def test_matches_loop_reference(self):
+        """Vectorized output must equal the loop reference for random pieces."""
+        cp = ConformalLassoRegressor(lam=0.01, rnd_state=0)
+        rng = np.random.default_rng(0)
+        for _ in range(300):
+            n = int(rng.integers(2, 60))
+            r_train = rng.normal(size=n)
+            slopes = rng.normal(size=n)
+            r_test = rng.normal()
+            slope_test = rng.normal()
+            dt = float(rng.uniform(0, 5))
+            tacc = float(rng.uniform(0, 10))
+            sign = int(rng.choice([-1, 1]))
+            thr = int(rng.integers(1, n + 2))
+            new = cp._find_intervals_in_piece(r_train, r_test, slopes, slope_test, dt, tacc, sign, thr, n)
+            old = self._ref(cp, r_train, r_test, slopes, slope_test, dt, tacc, sign, thr, n)
+            assert len(new) == len(old), f"length mismatch: {len(new)} vs {len(old)}"
+            for a, b in zip(sorted(new), sorted(old)):
+                np.testing.assert_allclose(a, b, atol=1e-9)
+
+    def test_intervals_are_sorted_and_non_degenerate(self):
+        """Each returned interval must have start <= end."""
+        cp = ConformalLassoRegressor(lam=0.01, rnd_state=0)
+        rng = np.random.default_rng(1)
+        for _ in range(50):
+            n = int(rng.integers(2, 40))
+            r_train = rng.normal(size=n)
+            slopes = rng.normal(size=n)
+            dt = float(rng.uniform(0, 3))
+            sign = int(rng.choice([-1, 1]))
+            thr = int(rng.integers(1, n + 2))
+            out = cp._find_intervals_in_piece(
+                r_train, rng.normal(), slopes, rng.normal(), dt, 0.0, sign, thr, n
+            )
+            for ts, te in out:
+                assert ts <= te, f"interval ({ts}, {te}) has start > end"
+
+    def test_full_range_when_threshold_is_max(self):
+        """If the threshold equals n+1, every sub-interval is in the set.
+
+        With the paper's conformal criterion (Lei 2019, prelim.tex line 141)
+        the ascending rank of |r_{n+1}| (1 = smallest) must be NO HIGHER than
+        the threshold.  The rank is at most n+1, so threshold = n+1 keeps
+        every sub-interval.
+        """
+        cp = ConformalLassoRegressor(lam=0.01, rnd_state=0)
+        n = 20
+        rng = np.random.default_rng(2)
+        r_train = rng.normal(size=n)
+        slopes = rng.normal(size=n)
+        # threshold = n+1 means rank <= n+1 is always true (rank is at most n+1)
+        out = cp._find_intervals_in_piece(
+            r_train, 0.0, slopes, 1.0, dt_k=2.0, t_accumulated=5.0, sign=1, threshold=n + 1, n=n
+        )
+        # The union of returned intervals must cover the whole [5, 7] range.
+        assert out, "threshold=n+1 should keep every sub-interval"
+        lo = min(a for a, _ in out)
+        hi = max(b for _, b in out)
+        assert np.isclose(lo, 5.0, atol=1e-9)
+        assert np.isclose(hi, 7.0, atol=1e-9)
+
+
+class TestHomotopyCorrectness:
+    """Correctness regression tests for the Lasso homotopy predict().
+
+    These guard against a non-optimum starting Lasso fit breaking the
+    homotopy's piecewise-linear path.  The Lei (2019) conformal set keeps a
+    candidate label y_{n+1}(t) iff the ASCENDING rank of |r_{n+1}(t)| among
+    all (n+1) fitted residuals (1 = smallest) is NO HIGHER than
+    ceil((n+1)(1-alpha)); equivalently, the test residual must be among the
+    SMALLEST in magnitude.  The set is clipped to the range
+    [y_(0) - 0.25*(y_(n) - y_(0)), y_(n) + 0.25*(y_(n) - y_(0))].
+    """
+
+    @staticmethod
+    def _brute_set(cp, x_test, epsilon, n_grid=400):
+        """Brute-force reference: solve Lasso on the augmented data at each
+        grid point y and report the (enclosing) interval of points whose
+        residual ascending rank is NO HIGHER than ceil((n+1)(1-epsilon))."""
+        from online_cp.regressors import _solve_lasso
+
+        y0 = float(cp.y.min())
+        yn = float(cp.y.max())
+        rng_ = (yn - y0) if (yn - y0) > 0 else 1.0
+        y_lo = y0 - 0.25 * rng_
+        y_hi = yn + 0.25 * rng_
+        grid = np.linspace(y_lo, y_hi, n_grid)
+        thr = int(np.ceil((cp.X.shape[0] + 1) * (1 - epsilon)))
+        X_aug = np.vstack([cp.X, x_test.reshape(1, -1)])
+        in_set = np.zeros(len(grid), dtype=bool)
+        for i, g in enumerate(grid):
+            y_aug = np.append(cp.y, float(g))
+            b = _solve_lasso(X_aug, y_aug, cp.lam, rho=cp.rho, max_iter=3000, tol=1e-9)
+            resid = np.abs(y_aug - X_aug @ b)
+            # Ascending rank (1 = smallest): count of |r_i| <= |r_{n+1}|
+            # (the test residual always counts, so rank is 1-based).
+            in_set[i] = int(np.sum(resid <= resid[-1])) <= thr
+        if not in_set.any():
+            return None
+        return (grid[in_set].min(), grid[in_set].max())
+
+    def test_predict_covers_brute_force_set(self):
+        """predict() must cover the brute-force conformal set (no
+        under-coverage) on a range of random problems."""
+        rng = np.random.default_rng(0)
+        for trial in range(12):
+            p = int(rng.integers(3, 10))
+            n = int(rng.integers(14, 30))
+            lam = float(rng.uniform(1e-2, 0.4))
+            rho = float(rng.choice([0.0, 1.0]))
+            X = rng.normal(size=(n, p))
+            y = X.sum(1) * 0.5 + rng.normal(0, 0.5, n)
+            cp = ConformalLassoRegressor(
+                lam=lam, rho=rho, autotune=False, verbose=0, rnd_state=trial
+            )
+            cp.learn_initial_training_set(X[: n // 2], y[: n // 2])
+            x_test = X[n // 2]
+            eps = cp.epsilon
+
+            interval = cp.predict(x_test)
+            ref = self._brute_set(cp, x_test, eps)
+
+            if interval.is_empty:
+                # Homotopy found nothing; brute force must also be empty.
+                assert ref is None, f"trial {trial}: homotopy empty but brute set {ref}"
+                continue
+
+            assert ref is not None, f"trial {trial}: homotopy non-empty but brute set empty"
+            # The homotopy interval must COVER the brute-force set (superset),
+            # up to grid resolution.
+            res = (float(cp.y.max()) - float(cp.y.min())) / 200
+            if res < 1e-6:
+                res = 1e-3
+            assert interval.lower <= ref[0] + res, (
+                f"trial {trial}: under-coverage on the left: "
+                f"homotopy lower {interval.lower:.4f} < brute {ref[0]:.4f}"
+            )
+            assert interval.upper >= ref[1] - res, (
+                f"trial {trial}: under-coverage on the right: "
+                f"homotopy upper {interval.upper:.4f} < brute {ref[1]:.4f}"
+            )

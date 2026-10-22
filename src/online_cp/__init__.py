@@ -22,7 +22,10 @@ CPS
 venn
     Venn(-Abers) *calibrated probability* predictors.
 mondrian
-    Mondrian (group-/label-conditional) conformal wrappers.
+    Mondrian process partition (``MondrianTree``) and the group-conditional
+    conformal *taxonomy* wrappers. The Mondrian tree/forest conformal
+    predictors live in ``classifiers``/``regressors`` and the Mondrian Venn
+    predictor in ``venn``.
 martingale, betting
     Conformal test martingales for online change-point / exchangeability
     testing, and the betting strategies that drive them.
@@ -45,13 +48,19 @@ Examples
 True
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from online_cp._serialization import (
     SerializationError as SerializationError,
 )
 from online_cp._serialization import (
     register_callable as register_callable,
+)
+from online_cp.classifiers import (
+    ConformalMondrianForestClassifier as ConformalMondrianForestClassifier,
+)
+from online_cp.classifiers import (
+    ConformalMondrianTreeClassifier as ConformalMondrianTreeClassifier,
 )
 from online_cp.classifiers import (
     ConformalNearestNeighboursClassifier as ConformalNearestNeighboursClassifier,
@@ -64,6 +73,9 @@ from online_cp.CPS import (
 )
 from online_cp.CPS import (
     KernelRidgePredictionMachine as KernelRidgePredictionMachine,
+)
+from online_cp.CPS import (
+    MondrianTreePredictionMachine as MondrianTreePredictionMachine,
 )
 from online_cp.CPS import (
     NearestNeighboursPredictionMachine as NearestNeighboursPredictionMachine,
@@ -266,6 +278,9 @@ from online_cp.mondrian import (
 from online_cp.mondrian import (
     MondrianConformalRegressor as MondrianConformalRegressor,
 )
+from online_cp.mondrian import (
+    MondrianTree as MondrianTree,
+)
 from online_cp.pipeline import (
     Discard as Discard,
 )
@@ -314,6 +329,21 @@ from online_cp.plotting import (
 from online_cp.plotting import (
     plot_sharpness as plot_sharpness,
 )
+from online_cp.prediction_set import (
+    ConformalPredictionSet as ConformalPredictionSet,
+)
+from online_cp.prediction_set import (
+    ContinuousPredictionSet as ContinuousPredictionSet,
+)
+from online_cp.prediction_set import (
+    DiscretePredictionSet as DiscretePredictionSet,
+)
+from online_cp.prediction_set import (
+    EmptyPredictionSet as EmptyPredictionSet,
+)
+from online_cp.prediction_set import (
+    MultiLevelPredictionSet as MultiLevelPredictionSet,
+)
 from online_cp.preprocessing import (
     PCA as PCA,
 )
@@ -330,6 +360,12 @@ from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,
 )
 from online_cp.regressors import (
+    ConformalMondrianForestRegressor as ConformalMondrianForestRegressor,
+)
+from online_cp.regressors import (
+    ConformalMondrianTreeRegressor as ConformalMondrianTreeRegressor,
+)
+from online_cp.regressors import (
     ConformalNearestNeighboursRegressor as ConformalNearestNeighboursRegressor,
 )
 from online_cp.regressors import (
@@ -337,6 +373,9 @@ from online_cp.regressors import (
 )
 from online_cp.regressors import (
     KernelConformalRidgeRegressor as KernelConformalRidgeRegressor,
+)
+from online_cp.venn import (
+    MondrianVennPredictor as MondrianVennPredictor,
 )
 from online_cp.venn import (
     MulticlassVennPrediction as MulticlassVennPrediction,

@@ -3,7 +3,7 @@ import pytest
 
 from online_cp.regressors import (
     ConformalNearestNeighboursRegressor,
-    MultiLevelPredictionInterval,
+    MultiLevelPredictionSet,
 )
 
 
@@ -153,14 +153,14 @@ class TestConformalNearestNeighboursRegressor:
         assert np.allclose(cp.D, cp2.D)
 
     def test_multi_level_epsilon(self, nonlinear_dataset):
-        """Array-valued epsilon should return MultiLevelPredictionInterval."""
+        """Array-valued epsilon should return MultiLevelPredictionSet."""
         X, y = nonlinear_dataset
         cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
         cp.learn_initial_training_set(X[:30], y[:30])
 
         epsilons = np.array([0.05, 0.1, 0.2])
         result = cp.predict(X[30], epsilon=epsilons)
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert len(result) == 3
         # Wider intervals at lower epsilon
         assert result[0.05].width() >= result[0.1].width()
@@ -209,6 +209,40 @@ class TestConformalNearestNeighboursRegressor:
         # Should not crash — uses all available neighbours
         Gamma = cp.predict(np.array([1.5]), epsilon=0.5)
         assert Gamma.lower <= 1.5 <= Gamma.upper
+
+    def test_pvalue_tie_invariant_across_insertion_orders(self):
+        """Regression guard for the k-NN test-point tie-break fix (audit 2026-10).
+
+        The test point below is equidistant (distance 1.0) to the first four
+        training points, so a bare ``np.argpartition`` would break the tie by
+        insertion order and the p-value would change with the training-row
+        order. With the ``np.lexsort((y, d))`` canonical tie-break the p-value
+        is a bag function of the training data and must be identical across
+        orders.
+        """
+        X = np.array(
+            [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [2.0, 0.0], [3.0, 0.0]]
+        )
+        y = np.array([0.0, 2.0, 1.0, 3.0, 100.0, 101.0])
+        x_test = np.array([0.0, 0.0])
+
+        def p_for(order):
+            cp = ConformalNearestNeighboursRegressor(k=2, rnd_state=0)
+            cp.learn_initial_training_set(X[order], y[order])
+            return cp.compute_p_value(x_test, 1.0, smoothed=False)
+
+        orders = [
+            list(range(6)),
+            list(range(5, -1, -1)),
+            [3, 1, 4, 0, 5, 2],
+            [2, 4, 0, 5, 1, 3],
+        ]
+        ref = p_for(orders[0])
+        for order in orders[1:]:
+            assert np.isclose(p_for(order), ref), (
+                f"k-NN p-value is not invariant to insertion order "
+                f"(order {order}: {p_for(order)} vs ref {ref})"
+            )
 
     def test_bounds_lower(self, nonlinear_dataset):
         """Lower-only bound should have upper = inf."""

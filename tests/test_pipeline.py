@@ -147,7 +147,7 @@ def test_pipeline_predict_classifier_equals_estimator_on_transformed(
     x = X[10]
     result_pipe = pipe.predict(x, epsilon=0.1)
     result_ref = ref.predict(fn(x), epsilon=0.1)
-    # Both should return a ConformalPredictionSet; compare contained labels
+    # Both should return a DiscretePredictionSet; compare contained labels
     assert set(result_pipe.elements) == set(result_ref.elements)
 
 

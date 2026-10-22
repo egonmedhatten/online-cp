@@ -4,10 +4,42 @@ import pytest
 from online_cp.CPS import (
     DempsterHillConformalPredictiveSystem,
     KernelRidgePredictionMachine,
+    MondrianPredictiveDistributionFunction,
+    MondrianTreePredictionMachine,
     NearestNeighboursPredictionMachine,
     RidgePredictionMachine,
 )
 from online_cp.kernels import GaussianKernel
+from online_cp.mondrian.tree import MondrianTree, _compute_subtree_counts
+
+
+def _mondrian_category_labels(root, x, n, y):
+    """Category labels via an independent path-based walk-up.
+
+    Deliberately does not reuse ``_select_cps_category``: it re-derives the
+    deepest node on the root→leaf(x) path holding at least one training
+    point (indices ``< n``; the test point has index ``n``), using only the
+    leaf indices and subtree counts.
+    """
+
+    def _iter_leaves(node):
+        if node.is_leaf():
+            yield node
+        else:
+            yield from _iter_leaves(node.left)
+            yield from _iter_leaves(node.right)
+
+    counts = _compute_subtree_counts(root)
+    path, node = [root], root
+    while not node.is_leaf():
+        node = node.left if x[node.split_dim] <= node.split_loc else node.right
+        path.append(node)
+    for node in reversed(path):
+        # Every node on the path also contains the test point (index n).
+        if counts[id(node)] - 1 >= 1:
+            idx = np.concatenate([leaf.indices for leaf in _iter_leaves(node)])
+            return np.sort(y[np.asarray(idx)[np.asarray(idx) < n]])
+    raise AssertionError("root contains no training data")
 
 
 @pytest.fixture
@@ -273,10 +305,239 @@ class TestKernelRidgePredictionMachine:
         assert 0 <= cpd(0.0, tau=0.5) <= 1
 
 
+class TestMondrianTreePredictionMachine:
+    def test_cpd_monotone_in_tau(self):
+        """CPD(y, tau=0) <= CPD(y, tau=1) for all y."""
+        rng = np.random.default_rng(2024)
+        N = 50
+        X = rng.normal(size=(N, 4))
+        y = X.sum(axis=1) + rng.normal(scale=0.5, size=N)
+
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+        cps.learn_initial_training_set(X[:30], y[:30])
+
+        cpd = cps.predict_cpd(X[30])
+        y_test = np.linspace(y.min() - 2, y.max() + 2, 50)
+        for y_val in y_test:
+            assert cpd(y_val, tau=0) <= cpd(y_val, tau=1) + 1e-12
+
+    def test_cpd_bounded_zero_one(self):
+        """CPD values should be in [0, 1]."""
+        rng = np.random.default_rng(2024)
+        N = 50
+        X = rng.normal(size=(N, 4))
+        y = X.sum(axis=1) + rng.normal(scale=0.5, size=N)
+
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+        cps.learn_initial_training_set(X[:30], y[:30])
+
+        cpd = cps.predict_cpd(X[30])
+        y_test = np.linspace(y.min() - 5, y.max() + 5, 100)
+        for y_val in y_test:
+            val = cpd(y_val, tau=0.5)
+            assert -1e-10 <= val <= 1 + 1e-10
+
+    def test_coverage(self):
+        """Prediction sets should have valid coverage.
+
+        Uses pure-noise labels (independent of x) so that, given the
+        partition, the test label is exactly exchangeable with the
+        category labels — the regime where the leaf-local CPD is
+        strictly valid.  A 1-D feature keeps the leaves large enough
+        that the finite-sample deficit (≈ 2/(A+1)) stays small.  The
+        threshold is deliberately well below 1 − ε; the sharp
+        statistical check lives in the slow lane.
+        """
+        rng = np.random.default_rng(42)
+        N_train, N_test = 200, 100
+        X = rng.normal(size=(N_train + N_test, 1))
+        y = rng.normal(size=N_train + N_test)
+
+        epsilon = 0.1
+        cps = MondrianTreePredictionMachine(lifetime=1.0, epsilon=epsilon)
+        cps.learn_initial_training_set(X[:N_train], y[:N_train])
+
+        covered = 0
+        for i in range(N_train, N_train + N_test):
+            tau = rng.uniform()
+            cpd, precomputed = cps.predict_cpd(X[i], return_update=True)
+            Gamma = cpd.predict_set(tau=tau, epsilon=epsilon)
+            covered += int(y[i] in Gamma)
+            cps.learn_one(X[i], y[i], precomputed=precomputed)
+
+        coverage = covered / N_test
+        assert coverage >= 0.75
+
+    def test_learn_one(self):
+        """learn_one should update the model correctly."""
+        rng = np.random.default_rng(0)
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+
+        # Start with empty model (use learn_one after learn_initial_training_set)
+        X = rng.normal(size=(5, 2))
+        y = X.sum(axis=1)
+
+        cps.learn_initial_training_set(X[:3], y[:3])
+        assert cps.X.shape == (3, 2)
+        assert len(cps.y) == 3
+
+        cps.learn_one(X[3], y[3])
+        assert cps.X.shape == (4, 2)
+        assert len(cps.y) == 4
+
+        cps.learn_one(X[4], y[4])
+        assert cps.X.shape == (5, 2)
+        assert len(cps.y) == 5
+
+    def test_empty_training_set(self):
+        """Should handle empty training set gracefully."""
+        cps = MondrianTreePredictionMachine(lifetime=1.0)
+
+        # Try to predict with empty training set
+        cpd = cps.predict_cpd(np.array([0.0, 0.0]))
+        # Should return a CPD that's valid (flat distribution)
+        pi0, pi1 = cpd(0.0)
+        assert 0.0 <= pi0 <= pi1 <= 1.0
+
+    # -- Leaf-local CPD: category-structure verification ----------------------
+
+    def test_cpd_knots_match_category_labels(self):
+        """CPD knots must be exactly the training labels of the category.
+
+        Verifies the leaf-local CPD against an independent re-growth of the
+        partition (same seed) with its own descent and walk-up.
+        """
+        rng = np.random.default_rng(7)
+        N, d = 40, 2
+        X = rng.normal(size=(N, d))
+        y = X.sum(axis=1) + rng.normal(scale=0.3, size=N)
+
+        saw_proper_category = False
+        for _ in range(30):
+            x = rng.normal(size=d)
+            cps = MondrianTreePredictionMachine(lifetime=1.0, rnd_state=123)
+            cps.learn_initial_training_set(X, y)
+            cpd = cps.predict_cpd(x)
+
+            # Re-grow the same partition from the same RNG state.
+            cps_ref = MondrianTreePredictionMachine(lifetime=1.0, rnd_state=123)
+            cps_ref.learn_initial_training_set(X, y)
+            root = MondrianTree.grow(
+                np.vstack([X, x]), cps_ref.rnd_gen, lifetime=1.0, x_test=x
+            ).root
+            ref = _mondrian_category_labels(root, x, N, y)
+            if ref.size < N:
+                saw_proper_category = True
+            np.testing.assert_array_equal(np.asarray(cpd.Y[1:-1]), ref)
+
+        assert saw_proper_category, "no non-root category was exercised"
+
+    def test_cpd_leaf_local(self):
+        """An in-data test point must receive a leaf-local CPD.
+
+        With 2 training points the leaf-local CPD carries at most the
+        labels of one leaf — never the whole bag.
+        """
+        X = np.array([[0.0], [1.0]])
+        y = np.array([10.0, 20.0])
+        cps = MondrianTreePredictionMachine(lifetime=10.0, rnd_state=0)
+        cps.learn_initial_training_set(X, y)
+        cpd = cps.predict_cpd(np.array([0.0]))
+        knots = np.asarray(cpd.Y[1:-1])
+        assert knots.size == 1
+        np.testing.assert_array_equal(knots, [10.0])
+
+    def test_empty_leaf_walks_up(self):
+        """An empty leaf must be replaced by the deepest ancestor with data.
+
+        Test point 100 is split off from the data bag [0, 1] by the root
+        split (which falls in (1, 100)), so its leaf holds no training
+        data and the walk-up selects the root: both labels appear.
+        """
+        X = np.array([[0.0], [1.0]])
+        y = np.array([10.0, 20.0])
+        cps = MondrianTreePredictionMachine(lifetime=10.0, rnd_state=0)
+        cps.learn_initial_training_set(X, y)
+        cpd = cps.predict_cpd(np.array([100.0]))
+        np.testing.assert_array_equal(np.asarray(cpd.Y[1:-1]), [10.0, 20.0])
+        assert cpd(-50.0) == (0.0, 0.0)
+        assert cpd(15.0) == (0.5, 0.5)  # between the two knots
+        assert cpd(50.0) == (1.0, 1.0)
+
+
+class TestMondrianPredictiveDistributionFunction:
+    """Regression tests for the Mondrian CPD evaluation machinery."""
+
+    @staticmethod
+    def _cpd(labels):
+        """Build a Mondrian CPD from category labels, as predict_cpd does."""
+        A = len(labels)
+        Y = np.empty(A + 2)
+        Y[0] = -np.inf
+        Y[-1] = np.inf
+        Y[1:-1] = np.sort(labels)
+        L = np.empty(A + 2)
+        U = np.empty(A + 2)
+        L[0] = U[0] = 0.0
+        L[-1] = U[-1] = 1.0
+        L[1:-1] = np.searchsorted(Y[1:-1], Y[1:-1], side="left") / A
+        U[1:-1] = np.searchsorted(Y[1:-1], Y[1:-1], side="right") / A
+        return MondrianPredictiveDistributionFunction(Y, L, U, epsilon=0.1)
+
+    def test_bands_collapse_between_knots(self):
+        """Away from knots the band must collapse to the single CDF value."""
+        cpd = self._cpd([1.0, 2.0])
+        assert cpd(-3.0) == (0.0, 0.0)
+        assert cpd(0.5) == (0.0, 0.0)
+        assert cpd(1.5) == (0.5, 0.5)
+        assert cpd(3.0) == (1.0, 1.0)
+
+    def test_bands_at_knots(self):
+        """At a knot the band is [#{< y}/A, #{<= y}/A]."""
+        cpd = self._cpd([1.0, 1.0, 2.0])
+        assert cpd(1.0) == (0.0, 2.0 / 3.0)
+        assert cpd(2.0) == (2.0 / 3.0, 1.0)
+
+    def test_quantiles(self):
+        """Quantiles must match the hand-computed smoothed CDF.
+
+        Labels {1, 2}: smoothed CDF (tau=0.5) is 0.25 at the knot 1,
+        0.5 on (1, 2), and 0.75 at the knot 2.
+        """
+        cpd = self._cpd([1.0, 2.0])
+        assert cpd.quantile(0.25, 0.5) == 1.0
+        assert np.isclose(cpd.quantile(0.5, 0.5), np.nextafter(1.0, np.inf))
+        assert cpd.quantile(0.75, 0.5) == 2.0
+        ps = cpd.predict_set(tau=0.5, epsilon=0.2)
+        assert np.isfinite(ps.upper)
+
+    def test_quantile_single_label(self):
+        """A one-label CPD: smoothed CDF is tau at the knot, 1 above it."""
+        cpd = self._cpd([5.0])
+        # tau=0.5: knot value 0.5 -> q(0.5) is the knot itself
+        assert cpd.quantile(0.5, 0.5) == 5.0
+        # tau=0: knot value 0 -> q(0.3) just above the knot
+        assert np.isclose(cpd.quantile(0.3, 0.0), np.nextafter(5.0, np.inf))
+        # tau=1: knot value 1 -> q(0.7) is the knot
+        assert cpd.quantile(0.7, 1.0) == 5.0
+
+    def test_empty_category(self):
+        """No labels: band [0, 1] everywhere, quantiles ±inf, set = R."""
+        Y = np.array([-np.inf, np.inf])
+        cpd = MondrianPredictiveDistributionFunction(
+            Y, np.array([0.0, 1.0]), np.array([0.0, 1.0]), epsilon=0.1
+        )
+        assert cpd(0.0) == (0.0, 1.0)
+        assert cpd.quantile(0.3, 0.5) == -np.inf
+        assert cpd.quantile(0.7, 0.3) == np.inf
+        ps = cpd.predict_set(tau=0.5, epsilon=0.2)
+        assert ps.lower == -np.inf and ps.upper == np.inf
+
+
 class TestMultiLevelCPD:
     def test_predict_set_multi_level(self):
-        """CPD.predict_set with list of epsilons returns MultiLevelPredictionInterval."""
-        from online_cp.regressors import MultiLevelPredictionInterval
+        """CPD.predict_set with list of epsilons returns MultiLevelPredictionSet."""
+        from online_cp.regressors import MultiLevelPredictionSet
 
         rng = np.random.default_rng(42)
         X = rng.normal(size=(50, 2))
@@ -291,7 +552,7 @@ class TestMultiLevelCPD:
         epsilons = [0.01, 0.05, 0.1, 0.2]
         result = cpd.predict_set(tau, epsilon=epsilons)
 
-        assert isinstance(result, MultiLevelPredictionInterval)
+        assert isinstance(result, MultiLevelPredictionSet)
         assert result.levels == sorted(epsilons)
         assert len(result) == 4
 

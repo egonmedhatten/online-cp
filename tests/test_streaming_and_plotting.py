@@ -8,6 +8,21 @@ from online_cp.evaluate import iter_progressive_val, iter_progressive_val_venn, 
 from online_cp.metrics import BrierScore, ErrorRate, IntervalWidth
 
 
+@pytest.fixture(autouse=True)
+def _close_figures():
+    """Close all matplotlib figures after each test.
+
+    Plotting tests create figures via ``plt.subplots()`` (through the
+    ``plot_*`` helpers) and do not need to keep them open. Leaving >20
+    figures alive triggers matplotlib's ``figure.max_open_warning``
+    RuntimeWarning. Closing them after each test keeps the run quiet.
+    """
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+
+
 @pytest.fixture
 def ridge_model(linear_dataset):
     """A ridge regressor with initial training set."""

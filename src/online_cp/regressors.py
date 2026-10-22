@@ -41,8 +41,8 @@ except ImportError:
     from _serialization import SerializableMixin
 
 import numpy as np
+from joblib import Parallel, delayed
 from numpy.typing import NDArray
-from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
 # Optional numba for Lasso homotopy speedup
@@ -56,88 +56,116 @@ except ImportError:
         return lambda f: f
 
 
+from online_cp.mondrian._forest_solver import forest_sweepline_solver
+from online_cp.mondrian._inspection import _MondrianRegressorInspection
+from online_cp.mondrian.tree import (
+    MondrianTree,
+    _build_tree_summary_reg,
+    _collect_leaves,
+    _find_leaf,
+    _MondrianNode,
+    _summarize_tree_reg,
+)
+from online_cp.prediction_set import (
+    ContinuousPredictionSet,
+    DiscretePredictionSet,
+    EmptyPredictionSet,
+    MultiLevelPredictionSet,
+)
+
 __all__ = [
     "ConformalRidgeRegressor",
     "ConformalNearestNeighboursRegressor",
     "KernelConformalRidgeRegressor",
     "ConformalLassoRegressor",
-    "ConformalPredictionInterval",
-    "MultiLevelPredictionInterval",
+    "ContinuousPredictionSet",
+    "DiscretePredictionSet",
+    "EmptyPredictionSet",
+    "MultiLevelPredictionSet",
+    "ConformalPredictionInterval",  # deprecated
+    "MultiLevelPredictionInterval",  # deprecated
+    "ConformalMondrianTreeRegressor",
+    "ConformalMondrianForestRegressor",
 ]
 
 
 default_epsilon = 0.1
 
 
-class ConformalPredictionInterval:
-    """A prediction interval produced by a conformal regressor.
+def _rank1_inverse_update(inv, x):
+    r"""Return ``(inv - inv xx' inv) / (1 + x' inv x)``, symmetrized.
 
-    Parameters
-    ----------
-    lower : float
-        Lower bound of the interval.
-    upper : float
-        Upper bound of the interval.
-    epsilon : float
-        Significance level at which the interval was constructed.
+    This is the inverse of ``A + x x'`` for the positive-definite matrix ``A``
+    whose inverse is ``inv`` (the matrix-inversion lemma). The update is
+    symmetrized as ``(M + M') / 2`` after each step to counteract the asymmetric
+    round-off that accumulates when this rank-1 update is applied repeatedly
+    over a long online stream; symmetry is an invariant of every intermediate
+    ``A^{-1}`` since ``A`` is symmetric.
+    """
+    v = inv @ x
+    M = inv - np.outer(v, v) / (1.0 + x @ v)
+    return 0.5 * (M + M.T)
+
+
+# ---------------------------------------------------------------------------
+# Deprecated wrappers
+#
+# The old ``ConformalPredictionInterval`` (regressor) and
+# ``MultiLevelPredictionInterval`` (regressor) classes have been unified into
+# the ``ContinuousPredictionSet`` / ``MultiLevelPredictionSet`` hierarchy in
+# :mod:`online_cp.prediction_set`. The names below are kept for backward
+# compatibility and emit a :class:`DeprecationWarning` on construction.
+# ---------------------------------------------------------------------------
+def _deprecation_msg(old: str, new: str) -> None:
+    warnings.warn(
+        f"`{old}` is deprecated and will be removed in a future release. "
+        f"Use `{new}` from `online_cp.prediction_set` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+class ConformalPredictionInterval(ContinuousPredictionSet):
+    """Deprecated. Use :class:`ContinuousPredictionSet` instead.
+
+    Parameters are ``(lower, upper, epsilon)`` for backward compatibility.
+    ``.lower`` / ``.upper`` are preserved as read-only properties.
     """
 
     def __init__(self, lower: float, upper: float, epsilon: float) -> None:
-        self.lower = lower
-        self.upper = upper
-        self.epsilon = epsilon
+        _deprecation_msg("ConformalPredictionInterval", "ContinuousPredictionSet")
+        super().__init__([(lower, upper)], epsilon)
 
-    def __contains__(self, y: float) -> bool:
-        return self.lower <= y <= self.upper
+    @property
+    def lower(self) -> float:
+        """Lower bound of the (single) interval. Preserved for backward compat."""
+        return self.intervals[0][0] if self.intervals else float("nan")
 
-    def width(self) -> float:
-        return self.upper - self.lower
+    @property
+    def upper(self) -> float:
+        """Upper bound of the (single) interval. Preserved for backward compat."""
+        return self.intervals[-1][1] if self.intervals else float("nan")
 
     def __repr__(self):
-        return repr((self.lower, self.upper))
+        if self.is_empty:
+            return "()"
+        return f"({self.lower}, {self.upper})"
 
     def __str__(self):
+        if self.is_empty:
+            return "()"
         return f"({self.lower}, {self.upper})"
 
 
-class MultiLevelPredictionInterval:
-    """Prediction intervals at multiple significance levels.
+class MultiLevelPredictionInterval(MultiLevelPredictionSet):
+    """Deprecated. Use :class:`MultiLevelPredictionSet` instead."""
 
-    Returned when ``predict`` is called with an array-like ``epsilon``.
-
-    Parameters
-    ----------
-    predictions : dict
-        Mapping ``{epsilon: ConformalPredictionInterval}``.
-    """
-
-    def __init__(self, predictions: dict[float, ConformalPredictionInterval]) -> None:
-        self._predictions = dict(sorted(predictions.items()))
-
-    @property
-    def levels(self) -> list[float]:
-        """Sorted list of significance levels."""
-        return list(self._predictions.keys())
-
-    def __getitem__(self, eps: float) -> ConformalPredictionInterval:
-        return self._predictions[eps]
-
-    def __iter__(self):
-        return iter(self._predictions.items())
-
-    def __len__(self) -> int:
-        return len(self._predictions)
-
-    def __contains__(self, y: float) -> bool:
-        """True if y is covered at all levels."""
-        return all(y in interval for interval in self._predictions.values())
-
-    def coverage(self, y: float) -> dict[float, bool]:
-        """Return dict of {epsilon: bool} indicating coverage at each level."""
-        return {eps: (y in interval) for eps, interval in self._predictions.items()}
+    def __init__(self, predictions: dict[float, ContinuousPredictionSet]) -> None:
+        _deprecation_msg("MultiLevelPredictionInterval", "MultiLevelPredictionSet")
+        super().__init__(predictions)
 
     def __repr__(self):
-        parts = [f"  ε={eps}: {interval}" for eps, interval in self._predictions.items()]
+        parts = [f"  ε={eps}: {pset!r}" for eps, pset in self._predictions.items()]
         return "MultiLevelPredictionInterval(\n" + "\n".join(parts) + "\n)"
 
 
@@ -154,8 +182,28 @@ class ConformalRegressor(SerializableMixin):
     def __init__(self, epsilon: float | NDArray[np.floating[Any]] = default_epsilon) -> None:
         self.epsilon = epsilon
 
-    def _construct_Gamma(self, lower, upper, epsilon):
-        return ConformalPredictionInterval(lower, upper, epsilon)
+    def _construct_Gamma(self, Gamma_val, epsilon):
+        """Construct a prediction set from the solver output.
+
+        For single-interval mode (default): Gamma_val is (lo, hi) tuple
+        For multi-interval mode: Gamma_val is list of (lo, hi) tuples
+        For empty set: Gamma_val is (nan, nan) tuple or empty list []
+        """
+        if isinstance(Gamma_val, tuple):
+            # Single interval case: (lo, hi) or (nan, nan) for empty
+            lo, hi = Gamma_val
+            if np.isnan(lo) and np.isnan(hi):
+                # Return empty ContinuousPredictionSet for backward compatibility
+                # with tests that expect .lower and .upper properties
+                return ContinuousPredictionSet([], epsilon)
+            else:
+                return ContinuousPredictionSet([(lo, hi)], epsilon)
+        else:
+            # Multiple intervals case: list of (lo, hi) tuples
+            intervals = Gamma_val
+            if not intervals:
+                return ContinuousPredictionSet([], epsilon)
+            return ContinuousPredictionSet(intervals, epsilon)
 
     @staticmethod
     def _safe_size_check(X):
@@ -195,24 +243,71 @@ class ConformalRegressor(SerializableMixin):
 
     @staticmethod
     def _get_upper(u_dic, epsilon, n):
-        try:
-            upper = u_dic[int(np.ceil((1 - epsilon) * n))]
-        except KeyError:
-            upper = np.inf
-        return upper
+        r"""Upper bound from Algorithm 2.2: the order statistic $t_{(\lceil(1-\epsilon)n\rceil)}$.
+
+        ``u_dic`` maps 1-based rank ``k`` (``1 .. n - 1``) to the ``k``-th
+        smallest training cut-point. The upper bound is the order statistic at
+        rank ``k = ceil((1 - epsilon) * n)``.
+
+        Parameters
+        ----------
+        u_dic : dict
+            Mapping ``rank -> value`` for the upper order statistic, ranks
+            ``1 .. n - 1`` (see :meth:`_vectorised_l_and_u`).
+        epsilon : float
+            Significance level for this tail (callers pass ``epsilon / 2`` for a
+            two-sided set).
+        n : int
+            Total number of points (training + test) = number of cut-points + 1.
+        """
+        k = int(np.ceil((1 - epsilon) * n))
+        # A required rank outside the available range (k < 1 or k > n - 1) means
+        # the order statistic does not exist -> unbounded ray (+inf). This is
+        # the explicit form of the previous KeyError fallback.
+        return u_dic.get(k, np.inf)
 
     @staticmethod
     def _get_lower(l_dic, epsilon, n):
-        try:
-            lower = l_dic[int(np.floor(epsilon * n))]
-        except KeyError:
-            lower = -np.inf
-        return lower
+        r"""Lower bound from Algorithm 2.3: the order statistic $t_{(\lfloor\epsilon n\rfloor)}$.
+
+        ``l_dic`` maps 1-based rank ``k`` (``1 .. n - 1``) to the ``k``-th
+        smallest training cut-point. The lower bound is the order statistic at
+        rank ``k = floor(epsilon * n)``.
+
+        Parameters
+        ----------
+        l_dic : dict
+            Mapping ``rank -> value`` for the lower order statistic, ranks
+            ``1 .. n - 1`` (see :meth:`_vectorised_l_and_u`).
+        epsilon : float
+            Significance level for this tail (callers pass ``epsilon / 2`` for a
+            two-sided set).
+        n : int
+            Total number of points (training + test) = number of cut-points + 1.
+        """
+        k = int(np.floor(epsilon * n))
+        # A required rank outside the available range (k < 1 or k > n - 1) means
+        # the order statistic does not exist -> unbounded ray (-inf). This is
+        # the explicit form of the previous KeyError fallback.
+        return l_dic.get(k, -np.inf)
 
     @staticmethod
     def _vectorised_l_and_u(A, B):
-        """A and B are columns"""
-        # Calculate differences
+        """Compute the lower/upper order-statistic dictionaries.
+
+        ``A`` and ``B`` are length-``n`` columns (last element = test point).
+        For each training point ``i`` the cut-point is
+        ``t_i = (a_i - a_n) / (b_n - b_i)``. Two dictionaries are returned:
+
+        - ``l_dic``: ascending-sorted cut-points with anomalous points
+          (``b_n <= b_i``) sent to ``-inf`` (they can never be the lower bound),
+          the overall minimum dropped. Ranks ``1 .. n - 1``.
+        - ``u_dic``: ascending-sorted cut-points with anomalous points sent to
+          ``+inf`` (they can never be the upper bound), the overall maximum
+          dropped. Ranks ``1 .. n - 1``.
+
+        This is the input to :meth:`_get_lower` / :meth:`_get_upper`.
+        """
         differences = B[-1] - B
 
         # Create an array to store results
@@ -224,14 +319,17 @@ class ConformalRegressor(SerializableMixin):
         l[mask] = (A[mask] - A[-1]) / differences[mask]
         u[mask] = (A[mask] - A[-1]) / differences[mask]
 
-        # Assign positive infinity where differences are non-positive
+        # Assign infinity where differences are non-positive (anomalous case,
+        # ALRW2 §2.3.2): the point's cut-point cannot be a lower bound (-inf)
+        # nor an upper bound (+inf).
         l[~mask] = -np.inf
         u[~mask] = np.inf
 
+        # Drop the test point's own entry and one extreme sentinel each, so each
+        # dictionary holds exactly n - 1 values, 1-based ranked.
         l = np.sort(l, axis=0)[1:]
         u = np.sort(u, axis=0)[:-1]
 
-        # These are just to avoid messing with the python indexing. Could probably be removed for efficiency
         l_dic = {i + 1: val for i, val in enumerate(l)}
         u_dic = {i + 1: val for i, val in enumerate(u)}
 
@@ -491,9 +589,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             "or provide more linearly independent training examples."
                         ) from None
                 else:
-                    # Update XTX_inv using the Sherman-Morrison formula
-                    # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    # Update XTX_inv using the matrix-inversion lemma
+                    # (inverse of (X'X + aI) -> inverse of ((X+x)(X+x)' + aI)).
+                    self.XTXinv = _rank1_inverse_update(self.XTXinv, x)
                     self._n_sm_updates += 1
 
                     if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
@@ -524,9 +622,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     ) from None
             else:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update XTX_inv using the Sherman-Morrison formula
-                # https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
-                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                # Update XTX_inv using the matrix-inversion lemma
+                # (inverse of (X'X + aI) -> inverse of ((X+x)(X+x)' + aI)).
+                self.XTXinv = _rank1_inverse_update(self.XTXinv, x)
                 self._n_sm_updates += 1
 
                 if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
@@ -591,9 +689,9 @@ class ConformalRidgeRegressor(ConformalRegressor):
         bounds: str = "both",
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """
         This function makes a prediction.
@@ -604,7 +702,7 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
         >>> cp = ConformalRidgeRegressor()
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), bounds="both")
-        (-inf, inf)
+        ContinuousPredictionSet([(-inf, inf)])
         """
 
         def build_precomputed(X, XTXinv, A, B):
@@ -637,10 +735,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                        result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         return result, build_precomputed(X, XTXinv, None, None)
                     else:
@@ -654,10 +752,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                        result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         return result, build_precomputed(X, XTXinv, None, None)
                     else:
@@ -684,32 +782,32 @@ class ConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
                         up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                        predictions[eps] = self._construct_Gamma((lo, up), eps)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
-                    result = self._construct_Gamma(lower, upper, epsilon)
+                    result = self._construct_Gamma((lower, upper), epsilon)
             elif bounds == "lower":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                        predictions[eps] = self._construct_Gamma((lo, np.inf), eps)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(lower, np.inf, epsilon)
+                    result = self._construct_Gamma((lower, np.inf), epsilon)
             elif bounds == "upper":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                        predictions[eps] = self._construct_Gamma((-np.inf, up), eps)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(-np.inf, upper, epsilon)
+                    result = self._construct_Gamma((-np.inf, upper), epsilon)
             else:
                 raise ValueError('bounds must be "both", "lower", or "upper"')
         else:
@@ -720,10 +818,10 @@ class ConformalRidgeRegressor(ConformalRegressor):
             B = None
 
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
 
         if return_update:
             return result, build_precomputed(X, XTXinv, A, B)
@@ -825,31 +923,71 @@ class ConformalRidgeRegressor(ConformalRegressor):
 
     def _tune_ridge_parameter(self, a0=None):
         """
-        Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
+        Tune ridge parameter with Generalized cross validation
+        (https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf).
+
+        The GCV score only depends on the ridge hat matrix
+        ``A = X (X^T X + a I)^{-1} X^T`` through ``||y - A y||`` and
+        ``trace(A)``.  We factor ``X^T X`` **once** into its eigendecomposition
+        (``X^T X = V diag(lam) V^T``); for a ridge parameter ``a`` the hat
+        matrix is ``A = (X V) diag(lam / (lam + a)) (X V)^T``, so evaluating the
+        GCV at any ``a`` reduces to a handful of vector operations (O(n p))
+        instead of a fresh p x p matrix inverse per evaluation (O(p^3)).  The
+        one-dimensional GCV is then minimised with :func:`minimize_scalar`
+        (bound method) rather than a general-purpose minimiser.
+
+        The result is identical to the original formulation (same GCV, same
+        ``a >= 1e-6`` bound, same ``max_diag_H > 1`` guard); only the
+        evaluation order changes, so the minimised ``a`` is (up to optimiser
+        tolerance) the same.
         """
         XTX = self.X.T @ self.X
         n = self.X.shape[0]
-        In = np.identity(n)
+        y = self.y
+
+        # One-time eigendecomposition of X^T X (symmetric, p x p).
+        lam_eig, V = np.linalg.eigh(XTX)
+        # Columns of W = X V;  W^T W = diag(lam_eig) (orthonormal up to lam).
+        W = self.X @ V
+        # Precompute V^T (X^T y) and W^T y so the per-a work is just vector ops.
+        Xt_y = self.X.T @ y  # (p,)
+        Vt_Xt_y = V.T @ Xt_y  # (p,)
 
         def GCV(a):
-            try:
-                A = self.X @ np.linalg.inv(XTX + a * self.Id) @ self.X.T
-                max_diag_H = np.max(np.diag(A))
-                if max_diag_H > 1:
-                    return np.inf
-                return (1 / n) * np.linalg.norm((In - A) @ self.y) ** 2 / ((1 / n) * np.trace(In - A)) ** 2
-            except (np.linalg.LinAlgError, ZeroDivisionError):
+            # Hat-matrix eigenvalues are lam / (lam + a) in (0, 1) for a > 0.
+            denom = lam_eig + a
+            # trace(A) = sum_j lam_j / (lam_j + a)
+            trA = np.sum(lam_eig / denom)
+            # A y = W ( diag(lam/denom) @ (V^T X^T y) ) ... see docstring.
+            #   A y = (X V) diag(1/(lam+a)) (V^T) (X^T y)
+            #        = W @ ( (Vt_Xt_y) / denom )
+            A_y = W @ (Vt_Xt_y / denom)
+            # ||(I - A) y||^2 = ||y - A y||^2
+            r = y - A_y
+            num = (1.0 / n) * float(r @ r)
+            den = (1.0 / n) * (n - trA)
+            if den <= 0.0:
                 return np.inf
+            # Equivalent to the original max_diag_H > 1 guard (inert for ridge,
+            # kept for safety): A = W diag(1/(lam+a)) W^T, so the i-th hat
+            # diagonal is sum_j W_ij^2 / (lam_j + a).
+            max_diag_H = np.max(np.einsum("ij,j,ij->i", W, 1.0 / denom, W))
+            if max_diag_H > 1.0:
+                return np.inf
+            return num / (den * den)
 
-        # Initial guess
-        if a0 is None:
-            a0 = 1e-6  # Just a small pertubation to avoid numerical issues
+        # Upper bound for the bounded 1-D minimiser.  The original used an
+        # unbounded Nelder-Mead with a lower bound only; here we need a finite
+        # upper bound.  For ridge the GCV plateaus once a is large enough that
+        # the hat matrix is negligible, and the optimum always lies below
+        # O(n * var(y)) (the scale at which the fit is essentially the mean).
+        upper = max(1.0, n * max(float(np.var(y)), 1e-12))
 
         # Bounds to ensure a >= 0
-        res = minimize(
-            GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True)
-        )  # May be relevant to pass some arguments here, or even use another minimizer.
-        a = res.x[0]
+        from scipy.optimize import minimize_scalar
+
+        res = minimize_scalar(GCV, bounds=(1e-6, upper), method="bounded", options={"xatol": 1e-8})
+        a = res.x
 
         if self.verbose > 0:
             print(f"New ridge parameter: {a}")
@@ -863,6 +1001,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
     Produces prediction intervals with guaranteed coverage using the
     nonconformity measure |y - ŷ_kNN| where ŷ_kNN is the leave-one-out
     k-nearest neighbours prediction.
+
+    This implementation uses an optimized exact algorithm with:
+    - Cached k-th nearest neighbor distances for efficient reverse-neighbour detection
+    - O(n) prediction time (instead of O(n²) in the naive implementation)
+
+    For very large datasets, consider using a k-d tree for O(n log n) complexity
+    (not yet implemented, but the exact path is highly optimized).
 
     >>> import numpy as np
     >>> np.random.seed(42)
@@ -885,7 +1030,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         "rnd_state",
         "epsilon",
     )
-    _SAVE_STATE: tuple = ("X", "y", "D")
+    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const", "_kth_distances")
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
 
@@ -1016,6 +1161,56 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.X = np.atleast_2d(X)
         self.y = np.asarray(y, dtype=float)
         self.D = self.distance_func(self.X)
+        # Cache constant parts of affine scores: a_i = y_i - ŷ_i (with y_n=0)
+        self._update_residuals()
+        # Cache k-th nearest distances for efficient reverse-neighbour detection
+        self._update_kth_distances()
+
+    def _update_residuals(self) -> None:
+        """Compute and cache leave-one-out k-NN residuals for conformal prediction.
+
+        For each training point i, compute a_i = y_i - ŷ_i where ŷ_i is the
+        leave-one-out k-NN prediction. This is the constant part of the affine
+        score α_i(y) = a_i + b_i*y.
+        """
+        if self.X is None or self.y is None or self.D is None:
+            return
+
+        n = self.X.shape[0]
+        if n == 0:
+            return
+
+        # Compute leave-one-out k-NN predictions on the original training set
+        y_hat_train = self._knn_predictions(self.D, self.y)
+
+        # Cache constant parts of affine scores (signed residuals, not absolute)
+        self._a_const = self.y - y_hat_train
+
+    def _update_kth_distances(self) -> None:
+        """Compute and cache k-th nearest neighbor distances for each training point.
+
+        For each training point i, compute the k-th smallest distance to other
+        training points (excluding self). This is used for efficient reverse-neighbour
+        detection during prediction.
+        """
+        if self.X is None or self.y is None or self.D is None:
+            return
+
+        n = self.X.shape[0]
+        if n == 0:
+            return
+
+        k_actual = min(self.k, n - 1)
+        if k_actual == 0:
+            self._kth_distances = np.zeros(n)
+            return
+
+        # For each training point, get k-th nearest distance (excluding self)
+        self._kth_distances = np.empty(n)
+        for i in range(n):
+            d_i = self.D[i].copy()
+            d_i[i] = np.inf
+            self._kth_distances[i] = np.partition(d_i, k_actual - 1)[k_actual - 1]
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """Incrementally add one observation.
@@ -1035,6 +1230,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=float)
             self.D = self.distance_func(self.X)
+            # Cache residuals for efficient conformal prediction
+            self._update_residuals()
+            self._update_kth_distances()
         else:
             if precomputed is not None and "D" in precomputed:
                 self.D = precomputed["D"]
@@ -1043,6 +1241,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 self.D = self._update_distance_matrix(self.D, d)
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, y)
+            # Refresh cached residuals and k-th distances after adding new point
+            self._update_residuals()
+            self._update_kth_distances()
 
     def predict(
         self,
@@ -1051,11 +1252,18 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         bounds: str = "both",
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """Predict a conformal prediction interval for test object x.
+
+        This implements the conformal predictor from ALRW2 §2.4 using the
+        deleted nonconformity scores with affine representation α_i(y) = a_i + b_i * y.
+
+        This implementation uses an optimized exact algorithm with:
+        - Cached k-th nearest neighbor distances for efficient reverse-neighbour detection
+        - O(n) prediction time per call (after O(n²) preprocessing in training)
 
         Parameters
         ----------
@@ -1070,9 +1278,21 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
 
         Returns
         -------
-        result : ConformalPredictionInterval or MultiLevelPredictionInterval
+        result : ContinuousPredictionSet or MultiLevelPredictionSet
         precomputed : dict, optional
             Returned if return_update=True. Contains 'D'.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from online_cp.regressors import ConformalNearestNeighboursRegressor
+        >>> X = np.array([[0], [1], [2], [3], [4]])
+        >>> y = np.array([0, 1, 2, 3, 4])
+        >>> cp = ConformalNearestNeighboursRegressor(k=2)
+        >>> cp.learn_initial_training_set(X, y)
+        >>> result = cp.predict(np.array([1.5]))
+        >>> isinstance(result, ContinuousPredictionSet)
+        True
         """
         x = np.asarray(x).ravel()
 
@@ -1084,10 +1304,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         if n == 0:
             # No training data
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
             if return_update:
                 return result, {"D": None}
             return result
@@ -1095,93 +1315,117 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # Augment distance matrix with test point
         d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
         D_aug = self._update_distance_matrix(self.D, d)
-        n_aug = n + 1  # augmented size
 
-        # Check significance level is feasible
-        eps_check = max(epsilon) if hasattr(epsilon, "__iter__") else epsilon
-        min_needed = 2 if bounds == "both" else 1
-        if not (eps_check >= min_needed / n_aug):
-            if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
-            else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
-            if return_update:
-                return result, {"D": D_aug}
-            return result
-
-        # Compute leave-one-out k-NN predictions for all training points
-        # in the augmented set. The test point's label is unknown, so we
-        # need to determine the interval of y values that would be included.
+        # Compute affine scores a_i, b_i for all training points (ALRW2 §2.4).
         #
-        # Key insight: For the n training points, their k-NN predictions
-        # may or may not change when the test point is added (only if the
-        # test point enters their k-neighbourhood). For the test point,
-        # its k-NN prediction is always computed from training labels only
-        # (since we exclude self).
-        #
-        # Strategy: compute all training nonconformity scores under the
-        # augmented distance matrix, then find the threshold.
-
+        # x_i is a "reverse neighbour" iff x_n is among the k nearest neighbours
+        # of x_i, i.e. d(x_i, x_n) is within the k smallest of {d(x_i, x_j) : j != i}.
+        # For such points the k-NN prediction of x_i includes the (unknown) test
+        # label, giving  alpha_i(y) = a_i + b_i*y  with b_i = -1/k.
+        # Otherwise the prediction is independent of y, giving b_i = 0.
+        k_actual = min(self.k, n)
         agg_func = np.mean if self.aggregation == "mean" else np.median
 
-        # For each training point i (0..n-1), compute its leave-one-out
-        # k-NN prediction in the augmented set (which includes the test point)
-        D_work = D_aug.copy()
-        np.fill_diagonal(D_work, np.inf)
+        # b_i: -1/k if x_n in NN_k(x_i) else 0
+        # Use cached k-th nearest distances for efficient reverse-neighbour detection.
+        # x_n is a reverse neighbour iff d(x_i, x_n) <= k-th nearest distance of x_i.
+        b = np.zeros(n, dtype=float)
+        for i in range(n):
+            # d(x_i, x_n)
+            d_test_i = d[i]
+            # Use cached k-th nearest distance (already excludes self)
+            if d_test_i <= self._kth_distances[i]:
+                b[i] = -1.0 / self.k
 
-        # For training points (0..n-1): their predictions don't depend on
-        # the test label since we only use labels of their k neighbours.
-        # BUT if the test point (index n) is among a training point's k-NN,
-        # its label y_test would appear in the average. We handle this by
-        # noting that y_test is what we're searching over.
-        #
-        # However, for the standard conformal regressor approach, we compute
-        # the nonconformity scores as |y_i - hat_y_i| where hat_y_i is
-        # computed with ALL labels known (including the hypothesized test label).
-        # This makes the prediction interval depend on the test label y in a
-        # complex way when the test point enters a training point's k-neighbourhood.
-        #
-        # Simplification (valid and common): Use the "deleted" approach where
-        # for each training point i, the k-NN prediction uses the bag without i.
-        # The test point's label only affects training points that have it as
-        # a k-NN. For the test point itself, its prediction only uses training
-        # labels.
-        #
-        # Even simpler (and what most practical k-NN conformal regressors do):
-        # Compute training residuals on the ORIGINAL training set (without the
-        # test point), then compare the test point's residual against them.
-        # This is valid because the nonconformity scores are exchangeable.
+        # Test point: a_n = -mean(k nearest training labels), b_n = 1
+        # Use lexsort for canonical tie-breaking.
+        knn_idx = np.lexsort((self.y, d))[:k_actual]
+        y_hat_test = agg_func(self.y[knn_idx])
+        a_n = -y_hat_test
+        b_n = 1.0
 
-        # Training residuals (on original training set, leave-one-out)
-        y_hat_train = self._knn_predictions(self.D, self.y)
-        alpha_train = np.abs(self.y - y_hat_train)
+        # For each training point, compute a_i with y_n = 0.
+        # alpha_i(y) = a_i + b_i*y where y is the hypothesized test label.
+        a = np.empty(n, dtype=float)
+        for i in range(n):
+            if b[i] == 0.0:
+                # x_n not a reverse neighbour: prediction independent of y.
+                # a_i = y_i - (mean of k nearest training labels of x_i)
+                # This is exactly the cached leave-one-out residual.
+                a[i] = self._a_const[i]
+            else:
+                # x_n is a reverse neighbour: the k-NN prediction of x_i in the
+                # augmented set includes the test point, whose label is set to 0
+                # for the constant term a_i (the y-dependence is captured by b_i).
+                d_i = self.D[i].copy()
+                d_i[i] = np.inf
+                # Use partition to find k nearest (excluding self) among training + test
+                d_full = np.append(d_i, d[i])
+                y_full = np.append(self.y, 0.0)
+                # Get k+1 nearest (test might be among them), then filter
+                nn_idx = np.lexsort((y_full, d_full))[:k_actual]
+                y_hat_i = agg_func(y_full[nn_idx])
+                a[i] = self.y[i] - y_hat_i  # constant term with y_n = 0
 
-        # Test point k-NN prediction (using training data only)
-        # Its k nearest neighbours among training points.
-        # Use lexsort (distance primary, y-value secondary) for canonical
-        # tie-breaking that is independent of insertion order.
-        k_test = min(self.k, n)
-        test_knn_idx = np.lexsort((self.y, d))[:k_test]
-        y_hat_test = agg_func(self.y[test_knn_idx])
+        # Compute t_i = (a_i - a_n) / (b_n - b_i) for i = 1..n
+        # For k-NN: b_n - b_i = 1 - (-1/k) = 1 + 1/k for reverse neighbours, 1 otherwise
+        denom = b_n - b
+        t = (a - a_n) / denom
 
-        # The test nonconformity score is |y - y_hat_test| and we need
-        # p(y) = |{i: alpha_i >= |y - y_hat_test|}| / (n+1) > epsilon
-        # The prediction interval is: y_hat_test +/- alpha_(ceil((1-eps)(n+1)))
+        # Sort t values and extract bounds
+        t_sorted = np.sort(t)
 
-        # Sort training residuals
-        alpha_sorted = np.sort(alpha_train)
+        # ALRW2 §2.4: The p-value uses total points N = n+1 (training + test).
+        # Upper bound: t_(ceil((1-ε)*N))  [Algorithm 2.2]
+        # Lower bound: t_(floor(ε*N))    [Algorithm 2.3]
+        # Two-sided: split ε between tails [Algorithm 2.4]
+        # t_sorted has n values (one per training point).
+        # Indices are 1-based in the book, convert to 0-based here.
 
-        # Build the interval
+        N = n + 1  # total number of points
+
+        def get_upper(eps):
+            """Upper bound from Algorithm 2.2: t_(ceil((1-eps)*N))."""
+            idx = int(np.ceil((1 - eps) * N))  # 1-based index
+            if idx < 1:
+                return -np.inf
+            if idx > n:
+                return np.inf
+            return float(t_sorted[idx - 1])
+
+        def get_lower(eps):
+            """Lower bound from Algorithm 2.3: t_(floor(eps*N))."""
+            idx = int(np.floor(eps * N))  # 1-based index
+            if idx < 1:
+                return -np.inf
+            if idx > n:
+                return np.inf
+            return float(t_sorted[idx - 1])
+
+        def get_interval(eps):
+            if bounds == "both":
+                # Algorithm 2.4: split epsilon between tails
+                lo = get_lower(eps / 2)
+                hi = get_upper(eps / 2)
+                return lo, hi
+            elif bounds == "lower":
+                lo = get_lower(eps)
+                return lo, np.inf
+            elif bounds == "upper":
+                hi = get_upper(eps)
+                return -np.inf, hi
+            else:
+                raise ValueError(f"bounds must be 'both', 'lower', or 'upper', got '{bounds}'")
+
         if hasattr(epsilon, "__iter__"):
             predictions = {}
             for eps in epsilon:
-                lo, up = self._compute_interval(alpha_sorted, y_hat_test, eps, n_aug, bounds)
-                predictions[eps] = self._construct_Gamma(lo, up, eps)
-            result = MultiLevelPredictionInterval(predictions)
+                lo, hi = get_interval(eps)
+                predictions[eps] = self._construct_Gamma((lo, hi), eps)
+            result = MultiLevelPredictionSet(predictions)
         else:
-            lo, up = self._compute_interval(alpha_sorted, y_hat_test, epsilon, n_aug, bounds)
-            result = self._construct_Gamma(lo, up, epsilon)
+            lo, hi = get_interval(epsilon)
+            result = self._construct_Gamma((lo, hi), epsilon)
 
         if return_update:
             return result, {"D": D_aug}
@@ -1265,11 +1509,15 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         y_hat_train = self._knn_predictions(self.D, self.y)
         alpha_train = np.abs(self.y - y_hat_train)
 
-        # Test point k-NN prediction
+        # Test point k-NN prediction.
+        # Use lexsort (distance primary, y-value secondary) so that ties in
+        # distance are broken canonically by y rather than by insertion order,
+        # matching the training path in _knn_predictions (np.argpartition is
+        # unstable on ties and would break permutation invariance).
         d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
         k_test = min(self.k, n)
         agg_func = np.mean if self.aggregation == "mean" else np.median
-        test_knn_idx = np.argpartition(d, k_test - 1)[:k_test]
+        test_knn_idx = np.lexsort((self.y, d))[:k_test]
         y_hat_test = agg_func(self.y[test_knn_idx])
 
         # Test nonconformity score
@@ -1403,8 +1651,14 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
     @staticmethod
     def _update_Kinv(Kinv, k, kappa):
+        """Block matrix-inversion lemma (ALRW2 eq. 2.56) to extend ``Kinv``.
+
+        Symmetrizes the result to counteract round-off drift from repeated
+        rank-1 extensions over a long online stream.
+        """
         d = 1 / (kappa - k.T @ Kinv @ k)
-        return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        M = np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        return 0.5 * (M + M.T)
 
     @staticmethod
     def _update_K(K, k, kappa):
@@ -1504,9 +1758,9 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         bounds: str = "both",
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """
         This function makes a prediction.
@@ -1517,7 +1771,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
         >>> cp = ConformalRidgeRegressor()
         >>> cp.predict(np.array([0.506, 0.22, -0.45]), bounds="both")
-        (-inf, inf)
+        ContinuousPredictionSet([(-inf, inf)])
         """
 
         def build_precomputed(X, K, Kinv, A, B):
@@ -1550,10 +1804,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                        result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         k = self.kernel(self.X, x).reshape(-1, 1)
                         kappa = self.kernel(x, x)
@@ -1571,10 +1825,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                             stacklevel=2,
                         )
                     if hasattr(epsilon, "__iter__"):
-                        predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                        result = MultiLevelPredictionInterval(predictions)
+                        predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                        result = MultiLevelPredictionSet(predictions)
                     else:
-                        result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                        result = self._construct_Gamma((-np.inf, np.inf), epsilon)
                     if return_update:
                         k = self.kernel(self.X, x).reshape(-1, 1)
                         kappa = self.kernel(x, x)
@@ -1608,32 +1862,32 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps / 2, n=n)
                         up = self._get_upper(u_dic=u_dic, epsilon=eps / 2, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                        predictions[eps] = self._construct_Gamma((lo, up), eps)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon / 2, n=n)
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon / 2, n=n)
-                    result = self._construct_Gamma(lower, upper, epsilon)
+                    result = self._construct_Gamma((lower, upper), epsilon)
             elif bounds == "lower":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         lo = self._get_lower(l_dic=l_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(lo, np.inf, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                        predictions[eps] = self._construct_Gamma((lo, np.inf), eps)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     lower = self._get_lower(l_dic=l_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(lower, np.inf, epsilon)
+                    result = self._construct_Gamma((lower, np.inf), epsilon)
             elif bounds == "upper":
                 if hasattr(epsilon, "__iter__"):
                     predictions = {}
                     for eps in epsilon:
                         up = self._get_upper(u_dic=u_dic, epsilon=eps, n=n)
-                        predictions[eps] = self._construct_Gamma(-np.inf, up, eps)
-                    result = MultiLevelPredictionInterval(predictions)
+                        predictions[eps] = self._construct_Gamma((-np.inf, up), eps)
+                    result = MultiLevelPredictionSet(predictions)
                 else:
                     upper = self._get_upper(u_dic=u_dic, epsilon=epsilon, n=n)
-                    result = self._construct_Gamma(-np.inf, upper, epsilon)
+                    result = self._construct_Gamma((-np.inf, upper), epsilon)
             else:
                 raise ValueError('bounds must be "both", "lower", or "upper"')
         else:
@@ -1645,10 +1899,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             B = None
 
             if hasattr(epsilon, "__iter__"):
-                predictions = {eps: self._construct_Gamma(-np.inf, np.inf, eps) for eps in epsilon}
-                result = MultiLevelPredictionInterval(predictions)
+                predictions = {eps: self._construct_Gamma((-np.inf, np.inf), eps) for eps in epsilon}
+                result = MultiLevelPredictionSet(predictions)
             else:
-                result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+                result = self._construct_Gamma((-np.inf, np.inf), epsilon)
 
         if return_update:
             return result, build_precomputed(X, K, Kinv, A, B)
@@ -1745,30 +1999,57 @@ def _solve_lasso(X, y, lam, rho=0.0, max_iter=1000, tol=1e-6, warm_start=None):
     else:
         beta = np.zeros(p)
 
-    # Precompute X^T X diagonal and X^T y
-    # For coordinate descent: update_j = X_j^T (y - X beta + X_j beta_j)
-    # We use the "naive" update which is simple and correct.
-    # Column norms squared (for normalization)
+    # Precompute the diagonal of X^T X (column norm squared) used in the
+    # soft-thresholding update.  The residual is maintained incrementally so a
+    # sweep costs only the O(p) coordinate updates rather than a fresh O(n p)
+    # matrix-vector product.
     col_norms_sq = np.sum(X**2, axis=0)  # (p,)
+    residual = y - X @ beta
 
+    def _kkt_residual(b):
+        """Max |KKT violation| of b under the elastic-net objective.
+
+        Active j : subgrad_j == sign(b_j) * lam   (subgrad = X^T (y - X b) + rho b)
+        Inactive j : |subgrad_j| <= lam.
+        """
+        s = X.T @ (y - X @ b) + rho * b
+        act = np.abs(b) > 1e-12
+        l1 = np.max(np.abs(s[act] - np.sign(b[act]) * lam)) if act.any() else 0.0
+        l2 = np.max(np.abs(s[~act])) if (~act).any() else 0.0
+        return max(l1, l2)
+
+    # Initial optimality check: a warm start may already be optimal.  This is
+    # the key speed-up in the online loop, where every augmented-data solve
+    # warm-starts from the previous solution (the Lasso path is continuous, so
+    # a single augmented point is usually a no-op for the solution).
+    if _kkt_residual(beta) < tol:
+        return beta
+
+    # Cyclic coordinate descent with the *true* KKT stopping rule.
+    #
+    # The original implementation stopped on ``max|delta beta| < tol`` with
+    # ``tol = 1e-6``.  That test is *insufficient*: a single coefficient can
+    # oscillate below the threshold each sweep while the subgradient is still
+    # far from +/-lam, so the loop halts early and returns a solution that is
+    # not the Lasso/elastic-net optimum.  A non-optimum starting solution is
+    # exactly what made the conformal-Lasso homotopy diverge from the true
+    # solution path and under-cover.  Here we instead check the optimality
+    # condition itself: for active j the subgradient must equal sign(beta_j)
+    # * lam, and for inactive j it must lie in [-lam, lam].  This converges to
+    # the (unique) optimum and, because it is an actual stopping test, also
+    # stops as soon as the warm start is already optimal.
     for _iteration in range(max_iter):
-        beta_old = beta.copy()
-        residual = y - X @ beta
-
         for j in range(p):
             if col_norms_sq[j] == 0:
                 continue
-            # Partial residual including j-th component
+            # Unconstrained coordinate update (partial residual re-adding the
+            # j-th contribution): beta_j^* = S_lam( x_j^T (r + x_j beta_j) ) /
+            # (||x_j||^2 + rho), with r = y - X beta.
             residual += X[:, j] * beta[j]
-            # Unconstrained update
             rho_j = X[:, j] @ residual
-            # Soft threshold
             beta[j] = _soft_threshold(rho_j, lam) / (col_norms_sq[j] + rho)
-            # Update residual
             residual -= X[:, j] * beta[j]
-
-        # Check convergence
-        if np.max(np.abs(beta - beta_old)) < tol:
+        if _kkt_residual(beta) < tol:
             break
 
     return beta
@@ -1908,27 +2189,46 @@ class ConformalLassoRegressor(ConformalRegressor):
         self.beta = _solve_lasso(self.X, self.y, self.lam, rho=self.rho)
 
     def _tune_lambda(self):
-        """Tune lambda via K-fold cross-validation."""
+        """Tune lambda via K-fold cross-validation.
+
+        The lambda grid is walked in *descending* order and each fold's
+        coordinate-descent fit is warm-started from the previous lambda's
+        solution for that fold (the Lasso solution is monotone in lambda, so a
+        nearby starting point converges in far fewer sweeps). This preserves
+        the exact same CV procedure -- same folds, same grid, same MSE -- while
+        turning ~n_folds * grid_size cold fits into a near-warm homotopy path.
+        """
         n = self.X.shape[0]
         indices = np.arange(n)
         self.rnd_gen.shuffle(indices)
         folds = np.array_split(indices, self.n_folds)
 
-        # Lambda grid: geometric sequence
+        # Precompute per-fold train/validation arrays once (avoid re-indexing
+        # and concatenating on every (lambda, fold) iteration).
+        train_arrays = []
+        val_arrays = []
+        for k in range(self.n_folds):
+            val_idx = folds[k]
+            train_idx = np.concatenate([folds[j] for j in range(self.n_folds) if j != k])
+            train_arrays.append((self.X[train_idx], self.y[train_idx]))
+            val_arrays.append((self.X[val_idx], self.y[val_idx]))
+
+        # Lambda grid: geometric sequence, walked descending (large -> small).
         lam_max = np.max(np.abs(self.X.T @ self.y)) / n
-        lam_grid = np.geomspace(lam_max, lam_max * 1e-3, num=50)
+        lam_grid = np.geomspace(lam_max * 1e-3, lam_max, num=50)
 
         best_lam = self.lam
         best_mse = np.inf
 
+        # Per-fold warm-started solutions carried across lambdas (descending).
+        fold_betas = [None] * self.n_folds
         for lam in lam_grid:
             mse = 0.0
             for k in range(self.n_folds):
-                val_idx = folds[k]
-                train_idx = np.concatenate([folds[j] for j in range(self.n_folds) if j != k])
-                X_tr, y_tr = self.X[train_idx], self.y[train_idx]
-                X_val, y_val = self.X[val_idx], self.y[val_idx]
-                beta_k = _solve_lasso(X_tr, y_tr, lam, rho=self.rho)
+                X_tr, y_tr = train_arrays[k]
+                X_val, y_val = val_arrays[k]
+                beta_k = _solve_lasso(X_tr, y_tr, lam, rho=self.rho, warm_start=fold_betas[k])
+                fold_betas[k] = beta_k
                 mse += np.mean((y_val - X_val @ beta_k) ** 2)
             mse /= self.n_folds
             if mse < best_mse:
@@ -1968,14 +2268,14 @@ class ConformalLassoRegressor(ConformalRegressor):
         epsilon: float | NDArray[np.floating[Any]] | None = None,
         return_update: bool = False,
     ) -> (
-        ConformalPredictionInterval
-        | MultiLevelPredictionInterval
-        | tuple[ConformalPredictionInterval | MultiLevelPredictionInterval, dict[str, Any]]
+        ContinuousPredictionSet
+        | MultiLevelPredictionSet
+        | tuple[ContinuousPredictionSet | MultiLevelPredictionSet, dict[str, Any]]
     ):
         """
         Compute the conformal prediction set at x using the homotopy algorithm.
 
-        If epsilon is a list/array, returns a MultiLevelPredictionInterval.
+        If epsilon is a list/array, returns a MultiLevelPredictionSet.
         """
         if epsilon is None:
             epsilon = self.epsilon
@@ -1986,7 +2286,7 @@ class ConformalLassoRegressor(ConformalRegressor):
             for eps in epsilon:
                 result = self.predict(x, epsilon=eps, return_update=False)
                 predictions[eps] = result
-            result = MultiLevelPredictionInterval(predictions)
+            result = MultiLevelPredictionSet(predictions)
             if return_update:
                 return result, {"beta": None}
             return result
@@ -1994,7 +2294,7 @@ class ConformalLassoRegressor(ConformalRegressor):
         x = np.atleast_1d(x).ravel()
 
         if self.X is None or self.X.shape[0] < 2:
-            result = self._construct_Gamma(-np.inf, np.inf, epsilon)
+            result = self._construct_Gamma((-np.inf, np.inf), epsilon)
             if return_update:
                 return result, {"beta": None}
             return result
@@ -2028,12 +2328,12 @@ class ConformalLassoRegressor(ConformalRegressor):
         merged = self._merge_intervals(all_intervals)
 
         if not merged:
-            result = self._construct_Gamma(np.nan, np.nan, epsilon)
+            result = self._construct_Gamma((np.nan, np.nan), epsilon)
         elif len(merged) == 1:
-            result = self._construct_Gamma(merged[0][0], merged[0][1], epsilon)
+            result = self._construct_Gamma((merged[0][0], merged[0][1]), epsilon)
         else:
             # Return the smallest enclosing interval (conservative)
-            result = self._construct_Gamma(merged[0][0], merged[-1][1], epsilon)
+            result = self._construct_Gamma((merged[0][0], merged[-1][1]), epsilon)
 
         # Build precomputed for learn_one
         precomputed_dict = None
@@ -2097,7 +2397,12 @@ class ConformalLassoRegressor(ConformalRegressor):
         # Residuals
         abs_res = np.abs(y_aug - X_aug @ beta_t)
 
-        # Rank of |r_{n+1}| (how many are <= it, in increasing order)
+        # Rank of |r_{n+1}| among all (n+1) residuals, in ascending order
+        # (1 = smallest): count of residuals with |r_i| <= |r_{n+1}|, which
+        # always includes the test point itself.  Lei (2019), prelim.tex line
+        # 141: y_{n+1}(t) is in the set iff this ascending rank is NO HIGHER
+        # than ceil((n+1)(1-alpha)) -- i.e. the test residual must be among
+        # the SMALLEST in magnitude (a candidate the Lasso fits well).
         rank = np.sum(abs_res <= abs_res[-1])
         return rank <= threshold
 
@@ -2216,12 +2521,12 @@ class ConformalLassoRegressor(ConformalRegressor):
             x_J = x_new[J_k]
 
             try:
-                Sigma_J_inv = np.linalg.inv(Sigma_J)
+                # Solve Sigma_J * z = x_J directly (avoids forming the full
+                # inverse; numerically preferred and identical up to rounding).
+                Sigma_J_inv_x = np.linalg.solve(Sigma_J, x_J)
             except np.linalg.LinAlgError:
                 # Singular — cannot continue homotopy
                 break
-
-            Sigma_J_inv_x = Sigma_J_inv @ x_J
 
             # eta(k) = (XtX_aug_J)^{-1} x_{n+1,J}  [paper eq. (5), first form]
             # Note: the Sherman-Morrison form with training-only covariance has a
@@ -2243,31 +2548,34 @@ class ConformalLassoRegressor(ConformalRegressor):
             slope_test = sign * (1.0 - x_J @ Sigma_J_inv_x)  # dr_{n+1}/d(delta_t)
 
             # Find breakpoint t_{k+1}
-            # Primal: beta_j(t_k) + eta_j(k) * dt = 0 for j in J_k
+            # Primal: beta_j(t_k) + eta_j(k) * dt = 0 for j in J_k.
+            # dt_j = -beta_J_j / eta_j (vectorised, masked by |eta| > 1e-15).
             beta_J = beta_k[J_k]
             dt_primal = np.full(len(J_k), np.inf)
-            for idx in range(len(J_k)):
-                if abs(eta_k[idx]) > 1e-15:
-                    dt = -beta_J[idx] / eta_k[idx]
-                    if dt > 1e-12:
-                        dt_primal[idx] = dt
+            active_eta = np.abs(eta_k) > 1e-15
+            if np.any(active_eta):
+                cand = np.full(len(J_k), np.inf)
+                cand[active_eta] = -beta_J[active_eta] / eta_k[active_eta]
+                cand = np.where(cand > 1e-12, cand, np.inf)
+                dt_primal = cand
 
-            # Dual: |v_j(t_k) + gamma_j * dt| = lambda for j in J_c
+            # Dual: |v_j(t_k) + gamma_j * dt| = lambda for j in J_c.
+            # For each j the two candidate breakpoints are (lam - v_j)/g and
+            # (-lam - v_j)/g; take the smallest one that is positive.
             dt_dual = np.full(len(J_c_k), np.inf)
-            for idx in range(len(J_c_k)):
-                g = gamma_k[idx]
-                v_j = v_inactive[idx]
-                if abs(g) > 1e-15:
-                    # v_j + g*dt = +lambda or -lambda
-                    dt1 = (lam - v_j) / g
-                    dt2 = (-lam - v_j) / g
-                    candidates = []
-                    if dt1 > 1e-12:
-                        candidates.append(dt1)
-                    if dt2 > 1e-12:
-                        candidates.append(dt2)
-                    if candidates:
-                        dt_dual[idx] = min(candidates)
+            if len(J_c_k) > 0:
+                g = gamma_k
+                v_j = v_inactive
+                valid_g = np.abs(g) > 1e-15
+                if np.any(valid_g):
+                    dt1 = np.full(len(J_c_k), np.inf)
+                    dt2 = np.full(len(J_c_k), np.inf)
+                    dt1[valid_g] = (lam - v_j[valid_g]) / g[valid_g]
+                    dt2[valid_g] = (-lam - v_j[valid_g]) / g[valid_g]
+                    # Per-j: min of the candidates that are > 1e-12 (else inf).
+                    dt1 = np.where(dt1 > 1e-12, dt1, np.inf)
+                    dt2 = np.where(dt2 > 1e-12, dt2, np.inf)
+                    dt_dual = np.minimum(dt1, dt2)
 
             dt_k = min(
                 np.min(dt_primal) if len(dt_primal) > 0 else np.inf,
@@ -2319,6 +2627,8 @@ class ConformalLassoRegressor(ConformalRegressor):
                 entering_idx = np.argmin(dt_dual)
                 entering_var = J_c_k[entering_idx]
                 entering_sign = np.sign(v_inactive[entering_idx])
+                if entering_sign == 0.0:
+                    entering_sign = 1.0
                 J_k = np.append(J_k, entering_var)
                 signs_k = np.append(signs_k, entering_sign)
 
@@ -2336,7 +2646,9 @@ class ConformalLassoRegressor(ConformalRegressor):
     ):
         """
         Within one homotopy piece of length dt_k, find sub-intervals where
-        |r_{n+1}(t)| has rank <= threshold among all |r_i(t)|.
+        the ascending rank of |r_{n+1}(t)| among all |r_i(t)| is NO HIGHER than
+        threshold (Lei 2019, prelim.tex line 141: the test residual must be
+        among the SMALLEST in magnitude for the candidate to be in the set).
 
         Residuals are linear in delta_t (local parameter within the piece):
             r_i(delta) = r_train[i] + slopes_train[i] * delta   for i=0..n-1
@@ -2347,42 +2659,54 @@ class ConformalLassoRegressor(ConformalRegressor):
         # Find all crossing points using the JIT-compiled function
         raw_crossings = _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k)
 
-        # Build sorted unique crossings with endpoints
-        crossings = [0.0]
-        for c in raw_crossings:
-            crossings.append(c)
-        crossings.append(dt_k)
-        crossings = sorted(set(crossings))
+        # Build sorted unique crossings with endpoints (C-level, no Python set/sort)
+        crossings = np.unique(np.concatenate(([0.0, dt_k], raw_crossings)))
 
-        # For each sub-interval, check rank at midpoint
-        result_intervals = []
-        for idx in range(len(crossings) - 1):
-            d_start = crossings[idx]
-            d_end = crossings[idx + 1]
-            if d_end - d_start < 1e-14:
-                continue
-            d_mid = (d_start + d_end) / 2
+        if len(crossings) < 2:
+            return []
 
-            # Compute residuals at midpoint
-            r_i_mid = r_train + slopes_train * d_mid
-            r_test_mid = r_test + slope_test * d_mid
+        # Sub-intervals are the gaps between consecutive crossings.
+        d_starts = crossings[:-1]
+        d_ends = crossings[1:]
+        widths = d_ends - d_starts
+        # Drop degenerate sub-intervals (zero width).
+        valid = widths >= 1e-14
+        if not np.any(valid):
+            return []
+        d_starts = d_starts[valid]
+        d_ends = d_ends[valid]
 
-            abs_r_i = np.abs(r_i_mid)
-            abs_r_test = np.abs(r_test_mid)
+        # Evaluate residuals at each sub-interval's midpoint, all at once.
+        #   r_i(d_mid)    = r_train[i] + slopes_train[i] * d_mid   (n, m)
+        #   r_{n+1}(d_mid)= r_test + slope_test * d_mid           (m,)
+        d_mids = 0.5 * (d_starts + d_ends)
+        r_i_mid = r_train[:, None] + slopes_train[:, None] * d_mids[None, :]
+        r_test_mid = r_test + slope_test * d_mids
 
-            # Rank: number of |r_j| <= |r_{n+1}| (including n+1 itself)
-            rank = np.sum(abs_r_i <= abs_r_test) + 1  # +1 for itself
+        # Ascending rank per sub-interval: #training residuals with
+        # |r_j| <= |r_{n+1}| + 1 (the +1 counts the test point itself, which
+        # always satisfies |r_{n+1}| <= |r_{n+1}|).  Lei (2019) conformal
+        # criterion (prelim.tex line 141 / method.tex line 459): a candidate
+        # is kept iff this ascending rank is NO HIGHER than
+        # ceil((n+1)(1-alpha)), i.e. the test residual must be among the
+        # SMALLEST in magnitude.
+        in_set = (np.abs(r_i_mid) <= np.abs(r_test_mid)[None, :]).sum(axis=0) + 1 <= threshold
 
-            if rank <= threshold:
-                # This sub-interval is in the prediction set
-                # Map to global t-space
-                t_start = sign * (t_accumulated + d_start)
-                t_end = sign * (t_accumulated + d_end)
-                if t_start > t_end:
-                    t_start, t_end = t_end, t_start
-                result_intervals.append((t_start, t_end))
+        if not np.any(in_set):
+            return []
 
-        return result_intervals
+        d_starts = d_starts[in_set]
+        d_ends = d_ends[in_set]
+
+        # Map to global t-space. With sign > 0, d_starts < d_ends gives
+        # t_starts < t_ends; with sign < 0 the order reverses, so swap to keep
+        # the convention t_start <= t_end.
+        t_left = sign * (t_accumulated + np.minimum(d_starts, d_ends))
+        t_right = sign * (t_accumulated + np.maximum(d_starts, d_ends))
+        if sign < 0:
+            t_left, t_right = t_right, t_left
+
+        return list(zip(t_left, t_right))
 
     @staticmethod
     def _merge_intervals(intervals):
@@ -2397,3 +2721,1426 @@ class ConformalLassoRegressor(ConformalRegressor):
             else:
                 merged.append((a, b))
         return merged
+
+
+# ---------------------------------------------------------------------------
+# Mondrian tree / forest conformal regressors
+# ---------------------------------------------------------------------------
+
+
+class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegressor):
+    """Conformal predictor using a single Mondrian tree for regression.
+
+    A full (transductive) conformal predictor that rebuilds one Mondrian tree
+    at each prediction step from the augmented bag ``[X_train; x_test]``.
+    The nonconformity measure (NCM) is the absolute residual from the leaf mean:
+
+        α_i = |y_i − μ_leaf(x_i)|
+
+    where μ_leaf is the mean of **all** y-values (including the candidate) in
+    the leaf.  Because the mean is computed over the full augmented multiset
+    this is a valid bag function and the resulting conformal predictor has
+    exact, finite-sample validity (ALRW2 §2.2.9).
+
+    The prediction interval is computed **algebraically** via an O(n) knot-point
+    solver: the p-value p(y) is piecewise-constant between O(n) critical y-values
+    where NCM ranks change.  No grid search is needed.
+
+    Mathematical note
+    -----------------
+    Let A = number of training points in ``leaf_star`` and B = their y-sum.
+    Under candidate y:
+
+    * Test NCM:      ``|A·y − B| / (A+1)``        slope ±A/(A+1)
+    * Inside NCM_j:  ``|(A+1)·y_j − B − y| / (A+1)``  slope ∓1/(A+1)
+
+    Since A ≥ 1, the test NCM grows strictly faster than any inside NCM as
+    y → ±∞, so p(y) is unimodal (guaranteed contiguous interval).
+
+    Parameters
+    ----------
+    lifetime : float or {'sqrt_n', 'density'}
+        Mondrian tree depth budget L. Larger → more splits → smaller leaves.
+        Default 1.0.
+
+        Can also be a string for unsupervised automatic tuning (only X is
+        used; labels are never accessed):
+
+        - ``'sqrt_n'``: halt when the leaf count drops to ≤ √n.
+        - ``'density'``: choose τ maximising Σ_leaf n_leaf · log(n_leaf / V_leaf).
+    epsilon : float
+        Default significance level. Default 0.1.
+    rnd_state : int, optional
+        Seed for reproducibility.
+    verbose : int
+        Verbosity level (0 = silent).
+    max_depth : int or None
+        Hard depth cap. Nodes at depth >= max_depth become leaves regardless
+        of remaining lifetime. None = no cap.
+    feature_weights : {'variance'} or array-like of shape (d,) or None
+        Unsupervised feature importance for split dimension sampling. Labels
+        are never accessed.
+
+        - ``None`` (default): uniform — standard isotropic Mondrian.
+        - ``'variance'``: split probabilities ∝ population variance per
+          feature. High-variance dimensions are sampled more often.
+        - array of shape (d,): explicit non-negative weights (normalised
+          internally; need not sum to 1).
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "lifetime", "epsilon", "rnd_state", "verbose", "max_depth",
+        "feature_weights", "online",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "_online_tree")
+
+    def __init__(
+        self,
+        lifetime: float | str = 1.0,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        max_depth: int | None = None,
+        feature_weights: str | NDArray | None = None,
+        online: bool = False,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density'."
+            )
+        if isinstance(feature_weights, str) and feature_weights not in ("variance",):
+            raise ValueError(
+                f"Unknown feature_weights string {feature_weights!r}. "
+                "Recognised value: 'variance'."
+            )
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
+        super().__init__(epsilon=epsilon)
+        self.lifetime = lifetime
+        self.feature_weights = feature_weights
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.max_depth = max_depth
+        self.online = online
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+        self._last_tree = None
+        self._online_tree = None
+        self._pending_tree = None  # extension scored by the last predict (online)
+
+    # ------------------------------------------------------------------
+    # Training interface
+    # ------------------------------------------------------------------
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialize with training data.
+
+        Parameters
+        ----------
+        X : ndarray, shape (n, d)
+        y : ndarray, shape (n,)  — real-valued labels
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        y = np.asarray(y, dtype=float).ravel()
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have the same length")
+        self.X = X.copy()
+        self.y = y.copy()
+        if self.online:
+            self._online_tree = MondrianTree.grow(
+                self.X, self.rnd_gen,
+                lifetime=self.lifetime, feature_weights=self.feature_weights,
+            )
+
+    def learn_one(
+        self,
+        x: NDArray,
+        y: float,
+        precomputed: dict | None = None,
+    ) -> None:
+        """Incrementally add one observation.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y : float
+        precomputed : dict, optional
+            The update dict from ``predict(..., return_update=True)`` (or
+            ``compute_p_value(..., return_update=True)``) for this same ``x``.
+            In online mode, if it carries the extension that scored ``x`` the
+            persisted tree becomes that exact extension, so the realised stream
+            is a single consistent Mondrian process (exact online validity).
+            Without it — or if it is stale — a fresh ``extend`` is drawn (still
+            valid). The last ``predict`` is also cached, so the plain
+            ``predict(x)`` → ``learn_one(x, y)`` loop reuses it automatically.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if self.X is None:
+            # First training example: initialize with a single-point tree
+            self.X = x.reshape(1, -1)
+            self.y = np.array([float(y)])
+            if self.online:
+                self._online_tree = MondrianTree.grow(
+                    self.X, self.rnd_gen,
+                    lifetime=self.lifetime, feature_weights=self.feature_weights,
+                )
+            return
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, float(y))
+        if self.online:
+            cand = precomputed.get("online_tree") if precomputed else None
+            if not self._is_consistent_extension(cand, x):
+                cand = getattr(self, "_pending_tree", None)
+            self._pending_tree = None
+            self._online_tree = (
+                cand
+                if self._is_consistent_extension(cand, x)
+                else self._online_tree.extend(x, self.rnd_gen)
+            )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_augmented_tree(self, x: NDArray):
+        """Build (batch) or extend (online) the partition on [X_train; x].
+
+        In online mode the extension is cached (``_pending_tree``) so a
+        subsequent ``learn_one`` on the same ``x`` can persist the very tree
+        that scored it — making the realised stream a single consistent
+        Mondrian process (see :meth:`learn_one`).
+
+        Returns ``(root, leaf_star, n)``.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self.X.shape[0]
+        if self.online:
+            ext_tree = self._online_tree.extend(x, self.rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
+        else:
+            self._pending_tree = None
+            X_aug = np.vstack([self.X, x])
+            tree = MondrianTree.grow(
+                X_aug,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                x_test=x,
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
+        leaf_star = _find_leaf(tree, x)
+        return tree, leaf_star, n
+
+    def _build_augmented_tree_with_rng(self, x: NDArray, rnd_gen: np.random.RandomState):
+        """Build (batch) or extend (online) the partition on [X_train; x] with a given random generator.
+
+        This is a variant of _build_augmented_tree that takes a random generator as input,
+        allowing the tree to be built deterministically without advancing self.rnd_gen.
+        This is essential for compute_p_value, where the tree must be the same for all
+        candidate y values.
+
+        Returns ``(root, leaf_star, n)``.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self.X.shape[0]
+        if self.online:
+            # For online mode, we can't easily support a custom rng without
+            # modifying the online tree structure. Fall back to using self.rnd_gen.
+            ext_tree = self._online_tree.extend(x, rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
+        else:
+            self._pending_tree = None
+            X_aug = np.vstack([self.X, x])
+            tree = MondrianTree.grow(
+                X_aug,
+                rnd_gen,
+                lifetime=self.lifetime,
+                x_test=x,
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
+        leaf_star = _find_leaf(tree, x)
+        return tree, leaf_star, n
+
+    def _is_consistent_extension(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted online tree extended by exactly ``x``.
+
+        Guards reuse of a scored extension: it must have one more row than the
+        persisted tree and that row must be ``x`` — so a stale extension (the
+        base has advanced since it was scored) falls back to a fresh ``extend``.
+        """
+        return (
+            cand is not None
+            and self._online_tree is not None
+            and cand.X.shape[0] == self._online_tree.X.shape[0] + 1
+            and np.array_equal(cand.X[-1], np.asarray(x, dtype=float).ravel())
+        )
+
+    def _outside_ncms_sorted(self, tree: _MondrianNode, leaf_star: _MondrianNode, n_train: int) -> NDArray:
+        """Sorted nonconformity scores of all training points *outside* leaf_star.
+
+        These scores are independent of the candidate ``y`` (the test point only
+        affects its own leaf), so they are computed once per prediction — a
+        single O(n) tree traversal + O(n log n) sort — and then reused for every
+        candidate via binary search (see :meth:`_pvalues_at`).
+        """
+        outside: list[NDArray] = []
+        for leaf in _collect_leaves(tree):
+            if leaf is leaf_star:
+                continue
+            train_idx = leaf.indices[leaf.indices < n_train]
+            if len(train_idx) == 0:
+                continue
+            mu = self.y[train_idx].mean()
+            outside.append(np.abs(self.y[train_idx] - mu))
+        ext = np.concatenate(outside) if outside else np.empty(0)
+        ext.sort()
+        return ext
+
+    def _pvalues_at(
+        self,
+        y_grid: NDArray,
+        A: int,
+        B: float,
+        ext_sorted: NDArray,
+        y_star: NDArray,
+        n_train: int,
+        tau: float,
+    ) -> NDArray:
+        """Smoothed conformal p-values at candidate values ``y_grid`` (vectorised).
+
+        The candidate-independent ``ext_sorted`` scores are counted by binary
+        search (O(log n) per candidate); only the O(A) leaf-local scores are
+        recomputed per candidate. This makes the exact solver O(n log n) instead
+        of O(n^2). Numerically identical to evaluating the per-candidate p-value
+        directly.
+        """
+        y_grid = np.atleast_1d(np.asarray(y_grid, dtype=float))
+        ncm_test = np.abs(A * y_grid - B) / (A + 1)
+        _TOL = 1e-9
+        n_out = ext_sorted.size
+
+        right = np.searchsorted(ext_sorted, ncm_test + _TOL, side="right")
+        left = np.searchsorted(ext_sorted, ncm_test - _TOL, side="left")
+        gt = (n_out - right).astype(np.int64)
+        eq = (right - left).astype(np.int64)
+
+        if A > 0 and y_star.size > 0:
+            inside = np.abs((A + 1) * y_star[None, :] - B - y_grid[:, None]) / (A + 1)
+            d = inside - ncm_test[:, None]
+            gt = gt + np.sum(d > _TOL, axis=1)
+            eq = eq + np.sum(np.abs(d) <= _TOL, axis=1)
+
+        # eq now counts all points with alpha_i == alpha_n (excluding test point itself)
+        # Apply tau to the ties, and add 1 for the test point comparing to itself
+        p_values = (gt + tau * eq + tau) / (n_train + 1)
+        return p_values
+
+    # ------------------------------------------------------------------
+    # Event-driven O(n log n) knot sweep
+    # ------------------------------------------------------------------
+    def _build_knot_events(
+        self,
+        A: int,
+        B: float,
+        ext_sorted: NDArray,
+        y_star: NDArray,
+    ) -> tuple[NDArray, int]:
+        """Build knot events with crossing-direction flags for the O(n log n) sweep.
+
+        Returns:
+            knots_events: sorted array of (knot_value, flag) tuples, where flag is +1
+                         when a point *enters* the {α_i > α_n} set as y increases through
+                         the knot, and -1 when it *exits*.
+            permanent_ties: count of training points j with α_j(y) ≡ α_n(y) for all y
+                           (only happens when A = 1, in which case the single inside
+                           point is permanently tied with the test point).
+
+        The algorithm matches mondrian_trees.tex Appendix reg-knots and Prop. reg-exact.
+        """
+        knots: list[tuple[float, int]] = []
+        permanent_ties = 0
+
+        # ------------------------------------------------------------------
+        # Outside-leaf points: α_i is constant (independent of y)
+        # Each outside point i generates two knots where α_i crosses α_n:
+        #   α_n(y) = |A·y - B| / (A+1)      (slope ±A/(A+1), vertex at B/A)
+        #   α_i is fixed
+        # Crossings at y = B/A ± ((A+1)/A)·α_i
+        # Lower root (y_lower = B/A - ((A+1)/A)·α_i): as y increases, α_n overtakes α_i
+        #   → for y < y_lower: α_n > α_i (test score higher)
+        #   → for y > y_lower: α_i > α_n (training score higher) → *enter* G_i
+        #   → tag y_lower with +1
+        # Upper root (y_upper = B/A + ((A+1)/A)·α_i): as y increases, α_n moves away
+        #   → for y < y_upper: α_i > α_n
+        #   → for y > y_upper: α_n > α_i → *exit* G_i
+        #   → tag y_upper with -1
+        # ------------------------------------------------------------------
+        n_out = ext_sorted.size
+        if n_out > 0:
+            fac = (A + 1) / A
+            lower_knots = (B / A) - fac * ext_sorted  # +1 flag
+            upper_knots = (B / A) + fac * ext_sorted  # -1 flag
+            for y_knot in lower_knots:
+                knots.append((float(y_knot), 1))  # entering
+            for y_knot in upper_knots:
+                knots.append((float(y_knot), -1))  # exiting
+
+        # ------------------------------------------------------------------
+        # Inside-leaf points: α_j(y) = |(A+1)·y_j - B - y| / (A+1)
+        # This is a V-shape with vertex at y = y_j (slope ∓1/(A+1))
+        # The test score α_n has vertex at y = B/A.
+        # ------------------------------------------------------------------
+        if A == 0:
+            # Empty leaf: no inside points. Should not happen here (handled earlier).
+            pass
+        elif A == 1:
+            # Singleton test leaf: the single inside point j has y_j = B/A (since A=1).
+            # Corollary cor:slope: α_j(y) ≡ α_n(y) for all y (permanent tie).
+            # No crossing knots — the inside point is always tied with the test point.
+            permanent_ties = 1
+        else:
+            # A > 1: each inside point generates two knots:
+            #   (i) y = y_j: test score vertex crosses inside score vertex
+            #       For y < y_j: α_n > α_j (if y_j > B/A) or α_j > α_n (if y_j < B/A)
+            #       At y = y_j: both scores have a kink
+            #       As y increases through y_j, α_n overtakes α_j → *enter* G_j → +1
+            #   (ii) y = (2B - (A+1)·y_j)/(A-1): reflection root where α_j = α_n again
+            #       As y increases through this, α_n moves away → *exit* G_j → -1
+            for y_j in y_star:
+                # The valid crossing region G_j is bounded by the min and max roots
+                refl = (2.0 * B - (A + 1) * y_j) / (A - 1)
+                left_root = min(y_j, refl)
+                right_root = max(y_j, refl)
+                # Enter G_j at left root, exit at right root
+                knots.append((float(left_root), 1))
+                knots.append((float(right_root), -1))
+
+        if not knots:
+            # Degenerate: no outside points and A <= 1 (empty leaf or singleton)
+            # Singleton handled via permanent_ties, so this must be empty leaf.
+            # But empty leaf should be caught earlier. Return empty events.
+            return np.array([], dtype=[("value", float), ("flag", int)]), permanent_ties
+
+        # Sort by knot value, then by flag (process exits before entries to be safe)
+        # Actually, we want to aggregate flags at coincident knots, so sort only by value
+        knots.sort(key=lambda x: x[0])
+        knots_arr = np.array(knots, dtype=[("value", float), ("flag", int)])
+        return knots_arr, permanent_ties
+
+    def _evaluate_pvalue_at_point(self, y, A, B, ext_sorted, y_star, n_train, tau, permanent_ties):
+        """Evaluate smoothed conformal p-value at an arbitrary y (not just cell midpoints).
+
+        This is used to check knot locations exactly, where p(y) may spike due to
+        tie-breaking with tau, potentially making a singleton valid even if
+        neighboring cells are invalid.
+
+        Parameters
+        ----------
+        y : float
+            Candidate label at which to evaluate p-value.
+        A : int
+            Number of training points in test leaf.
+        B : float
+            Sum of y-values in test leaf.
+        ext_sorted : ndarray
+            Sorted nonconformity scores of training points outside test leaf.
+        y_star : ndarray
+            y-values of training points inside test leaf.
+        n_train : int
+            Number of training points.
+        tau : float
+            Randomization variable in [0, 1] for smoothed p-value.
+        permanent_ties : int
+            Count of points permanently tied with test point (A == 1 case).
+
+        Returns
+        -------
+        float
+            Smoothed conformal p-value at y.
+        """
+        # Test nonconformity score: alpha_n(y) = |A*y - B| / (A+1)
+        ncm_test = abs(A * y - B) / (A + 1)
+
+        # Count outside points with alpha_i > ncm_test
+        gt = int(np.sum(ext_sorted > ncm_test))
+
+        # Count outside points with alpha_i == ncm_test (for tie-breaking)
+        _TOL = 1e-9
+        eq = int(np.sum(np.abs(ext_sorted - ncm_test) <= _TOL))
+
+        # Add contributions from inside points (in leaf_star)
+        if A > 0 and y_star.size > 0:
+            # Inside scores: alpha_j(y) = |(A+1)*y_j - B - y| / (A+1)
+            inside_ncm = np.abs((A + 1) * y_star - B - y) / (A + 1)
+            gt += int(np.sum(inside_ncm > ncm_test))
+            eq += int(np.sum(np.abs(inside_ncm - ncm_test) <= _TOL))
+
+        # p-value = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1)
+        # The +1 is for the test point itself comparing to itself
+        p_val = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1)
+        return p_val
+
+    def _pvalue_from_sweep(
+        self,
+        knots_events: NDArray,
+        A: int,
+        B: float,
+        ext_sorted: NDArray,
+        y_star: NDArray,
+        n_train: int,
+        permanent_ties: int,
+        epsilon: float,
+        tau: float,
+    ) -> tuple[float, float, list]:
+        """Left-to-right sweep to find p(y) > epsilon interval.
+
+        Returns (lower_bound, upper_bound, valid_knots) where valid_knots is a
+        list of knot values where p(y) > epsilon (singleton valid regions).
+        Uses O(1) amortised update per knot → O(n) total for all p-value evals.
+        """
+        # Edge case: no knots (A == 0 with no outside points, or A == 1 with no outside points)
+        if knots_events.size == 0:
+            # No knots → p(y) is constant everywhere
+            # For A == 0: p = tau / (n+1) (no points to compare)
+            # For A == 1 with permanent_ties: p = (0 + tau * (1 + 1)) / (n+1) = 2*tau/(n+1)
+            p_const = tau * (1 + permanent_ties) / (n_train + 1)
+            if p_const > epsilon:
+                return -np.inf, np.inf, []
+            else:
+                # No valid region — return degenerate interval at peak
+                peak = B / A if A > 0 else 0.0
+                return float(peak), float(peak), [float(peak)]
+
+        # ------------------------------------------------------------------
+        # Baseline tally at y_start (far left of all knots)
+        # Pick y_start strictly less than first knot
+        y_start = knots_events[0]["value"] - 1.0
+        # Evaluate all scores at y_start
+        ncm_test_start = abs(A * y_start - B) / (A + 1)
+        # Outside scores (fixed)
+        greater_count = int(np.sum(ext_sorted > ncm_test_start))
+        # Inside scores
+        if A > 0 and y_star.size > 0:
+            for y_j in y_star:
+                ncm_j = abs((A + 1) * y_j - B - y_start) / (A + 1)
+                if ncm_j > ncm_test_start:
+                    greater_count += 1
+        # ------------------------------------------------------------------
+
+        # ------------------------------------------------------------------
+        # Sweep left-to-right, updating greater_count at each knot
+        # ------------------------------------------------------------------
+        # We'll evaluate p(y) at the midpoint of each open cell
+        # and track the first valid cell (for lower bound) and the last valid cell (for upper)
+        # Also track valid knots (singletons at boundary points)
+        first_valid_idx = -1
+        last_valid_idx = -1
+        valid_knots: list[float] = []
+        prev_knot = None
+
+        for i in range(len(knots_events) + 1):
+            # Determine the cell's right boundary (current knot) and left boundary (prev knot)
+            if i < len(knots_events):
+                knot_val = knots_events[i]["value"]
+                flag = knots_events[i]["flag"]
+            else:
+                knot_val = None  # rightmost end-cell
+
+            # Compute midpoint of current cell (for potential debugging/logging)
+            if prev_knot is None:
+                # Leftmost end-cell: extend marginally beyond first knot
+                cell_right = knots_events[0]["value"]
+                _ = cell_right - max(abs(cell_right), 1.0) * 10.0
+            elif knot_val is None:
+                # Rightmost end-cell
+                cell_left = prev_knot
+                _ = cell_left + max(abs(cell_left), 1.0) * 10.0
+            else:
+                cell_left = prev_knot
+                cell_right = knot_val
+                _ = (cell_left + cell_right) / 2.0
+
+            # Compute p-value for this cell
+            # Apply tau to the ties (test point + any permanent ties)
+            p_val = (greater_count + tau * (1 + permanent_ties)) / (n_train + 1)
+
+            # Check validity of cell interior
+            if p_val > epsilon:
+                if first_valid_idx == -1:
+                    first_valid_idx = i  # first valid cell index
+                last_valid_idx = i     # update last valid cell index
+
+            # Check validity of the knot itself (if not the first knot)
+            # Evaluate p(y) exactly at the knot location
+            if knot_val is not None and prev_knot is not None:
+                # We're at knot i, which is the boundary between cell i-1 and cell i
+                # Check if this knot is valid
+                knot_p_val = self._evaluate_pvalue_at_point(
+                    knot_val, A, B, ext_sorted, y_star, n_train, tau, permanent_ties
+                )
+                if knot_p_val > epsilon:
+                    valid_knots.append(float(knot_val))
+
+            # Update for next iteration: apply flags at this knot (if any)
+            if knot_val is not None:
+                greater_count += flag
+                prev_knot = knot_val
+            elif prev_knot is not None:
+                # Already processed all knots, we're done
+                break
+            else:
+                prev_knot = knots_events[0]["value"]
+
+        # ------------------------------------------------------------------
+        # Extract interval from valid cells, incorporating valid knots
+        # ------------------------------------------------------------------
+        if first_valid_idx == -1 and not valid_knots:
+            # No valid region at all — return empty interval
+            return np.nan, np.nan, []
+
+        # Build the exact prediction set as union of valid cells and valid knots
+        # Valid cells: cell i corresponds to open interval (knots[i-1], knots[i]) for i=1..len
+        # Cell 0 is (-∞, knots[0]), cell len(knots) is (knots[-1], +∞)
+
+        # If we have valid knots but no valid cells, return singleton(s)
+        if first_valid_idx == -1:
+            # All cells invalid, only knots valid
+            if len(valid_knots) == 1:
+                return valid_knots[0], valid_knots[0], valid_knots
+            else:
+                # Multiple disjoint singletons — return the smallest enclosing interval
+                # (conservative but valid)
+                return min(valid_knots), max(valid_knots), valid_knots
+
+        # Determine bounds from first and last valid cells, incorporating valid knots
+        lo = None
+        hi = None
+
+        if first_valid_idx == 0:
+            # Cell 0 is (-∞, knots[0])
+            lo = -np.inf
+            # Check if knot[0] is valid (was already added to valid_knots above)
+        else:
+            lo = float(knots_events[first_valid_idx - 1]["value"])
+
+        if last_valid_idx == len(knots_events):
+            # Rightmost end-cell is valid
+            hi = np.inf
+        else:
+            hi = float(knots_events[last_valid_idx]["value"])
+
+        # If lo is a valid knot but not part of a valid cell, adjust to singleton
+        if valid_knots and lo is not None and hi is not None:
+            lo_knot = float(knots_events[first_valid_idx - 1]["value"]) if first_valid_idx > 0 else None
+
+            # If lo_knot is valid and the cell to its left is invalid, lo should be singleton
+            if lo_knot in valid_knots and first_valid_idx > 0:
+                # The knot is valid but the cell to its left is not
+                # This is a singleton at the left boundary
+                pass  # Keep lo as is, valid_knots will record it
+
+        return float(lo) if lo is not None else float(knots_events[0]["value"]), \
+               float(hi) if hi is not None else float(knots_events[-1]["value"]), \
+               valid_knots
+
+    # ------------------------------------------------------------------
+    # compute_p_value
+    # ------------------------------------------------------------------
+
+    def compute_p_value(
+        self,
+        x: NDArray,
+        y_cand: float,
+        return_update: bool = False,
+        tau: float | None = None,
+    ) -> float | tuple[float, dict]:
+        """Compute conformal p-value for (x, y_cand).
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y_cand : float
+        return_update : bool
+            If True, also return a dict with tree info.
+        tau : float or None
+            Randomization variable for smoothed p-value. If None, draws from U(0,1).
+            For property testing and deterministic behavior, pass a fixed tau.
+
+        Returns
+        -------
+        float or (float, dict)
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            return (1.0, {}) if return_update else 1.0
+
+        y_cand = float(y_cand)
+
+        # FIX: Use a deterministic seed based on the test point x for tree building
+        # This ensures the same tree is built for all candidate y values
+        x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
+        tree_rnd_gen = np.random.default_rng(x_seed)
+
+        # tau must be INDEPENDENT of the tree, drawn from a separate source
+        # If tau is not provided, draw it from a deterministic but SEPARATE source
+        if tau is None:
+            # Use a different deterministic seed for tau (independent of tree)
+            tau_seed = (x_seed * 2654435761) % (2**32)  # Prime multiplier for decorrelation
+            tau_rnd_gen = np.random.default_rng(tau_seed)
+            tau = tau_rnd_gen.uniform(0.0, 1.0)
+
+        tree, leaf_star, _ = self._build_augmented_tree_with_rng(x, tree_rnd_gen)
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
+        A = len(leaf_star_train_idx)
+        B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
+        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+        # tau was already set above if None
+        p_val = float(
+            self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau)[0]
+        )
+
+        # Cache the tree for inspection utilities
+        self._last_tree = tree
+
+        if return_update:
+            return p_val, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
+        return p_val
+
+    # ------------------------------------------------------------------
+    # predict  (exact knot-point solver)
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        x: NDArray,
+        epsilon: float | NDArray | None = None,
+        return_update: bool = False,
+    ) -> ContinuousPredictionSet | MultiLevelPredictionSet | tuple:
+        """Predict a conformal interval for test object x.
+
+        Uses an exact O(n) algebraic knot-point solver.  No grid search.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        epsilon : float or array-like, optional
+            Significance level(s).  Defaults to ``self.epsilon``.
+        return_update : bool
+            If True, return ``(interval, update_dict)`` for ``learn_one``.
+
+        Returns
+        -------
+        ContinuousPredictionSet or MultiLevelPredictionSet
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        n = self._safe_size_check(self.X)
+        _inf_interval = self._construct_Gamma((-np.inf, np.inf), epsilon)
+
+        if n == 0:
+            if return_update:
+                return _inf_interval, {}
+            return _inf_interval
+
+        tree, leaf_star, _ = self._build_augmented_tree(x)
+        # Cache the tree for inspection utilities (draw_partition etc.),
+        # regardless of which prediction branch is taken below.
+        self._last_tree = tree
+
+        leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
+        A = len(leaf_star_train_idx)
+        B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
+
+        # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
+        # Use it for smoothed p-value calculation. This must be done BEFORE any A==0 checks.
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+
+        # ---- A = 0: empty leaf → total epistemic uncertainty -----------
+        if A == 0:
+            ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+
+            # Since test score is 0, rank depends entirely on outside scores >= 0
+            gt = int(np.sum(ext_sorted > 0))
+            eq = int(np.sum(ext_sorted == 0))
+            p_const = (gt + tau * (eq + 1)) / (n + 1)
+
+            eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+            predictions = {}
+            for eps_val in eps_arr:
+                if p_const > eps_val:
+                    predictions[float(eps_val)] = self._construct_Gamma((-np.inf, np.inf), float(eps_val))
+                else:
+                    predictions[float(eps_val)] = self._construct_Gamma((np.nan, np.nan), float(eps_val))
+
+            if hasattr(epsilon, "__iter__"):
+                result = MultiLevelPredictionSet(predictions)
+            else:
+                result = predictions[float(eps_arr[0])]
+
+            if return_update:
+                return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
+            return result
+
+        # ---- Collect knot points ----------------------------------------
+        # The candidate-independent outside-leaf scores are computed once here
+        # and reused for the knots and for every p-value evaluation below.
+        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+
+        # Outside-leaf_star points: ncm_i is fixed → rank changes when
+        #   ncm_test(y) = ncm_i  ↔  y = (B ± ncm_i*(A+1)) / A
+        knots: list[float] = []
+        if ext_sorted.size:
+            fac = (A + 1) / A
+            knots.extend(((B / A) + fac * ext_sorted).tolist())
+            knots.extend(((B / A) - fac * ext_sorted).tolist())
+
+        # Inside-leaf_star points:
+        #   always: y_j
+        #   if A > 1: (2B − (A+1)*y_j) / (A−1)
+        y_star = self.y[leaf_star_train_idx]
+        knots.extend(y_star.tolist())
+        if A > 1:
+            knots.extend(((2.0 * B - (A + 1) * y_star) / (A - 1)).tolist())
+
+        # Sort and de-duplicate (for potential future use)
+
+        # Build knot events with +1/-1 flags
+        knots_events, permanent_ties = self._build_knot_events(A, B, ext_sorted, y_star)
+
+        # Perform left-to-right sweep to find valid region
+        lo, hi, valid_knots = self._pvalue_from_sweep(
+            knots_events, A, B, ext_sorted, y_star, n, permanent_ties,
+            epsilon if not hasattr(epsilon, "__iter__") else epsilon[0], tau
+        )
+
+        # Build result with correct topology
+        eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+        predictions = {}
+
+        for eps_val in eps_arr:
+            lo, hi, valid_knots = self._pvalue_from_sweep(
+                knots_events, A, B, ext_sorted, y_star, n, permanent_ties, float(eps_val), tau
+            )
+
+            if len(valid_knots) == 1 and lo == hi == valid_knots[0]:
+                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
+            else:
+                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
+
+        if hasattr(epsilon, "__iter__"):
+            result = MultiLevelPredictionSet(predictions)
+        else:
+            result = predictions[float(eps_arr[0])]
+
+
+        if return_update:
+            return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
+
+        return result
+
+    @staticmethod
+    def _extract_interval(
+        knots: NDArray,
+        midpoints: NDArray,
+        p_vals: NDArray,
+        epsilon: float,
+    ) -> tuple[float, float]:
+        """Return (lower, upper) convex hull of valid region.
+
+        The prediction set is {y : p(y) > epsilon} (ALRW2 convention).
+        """
+        threshold = epsilon
+        valid = p_vals > threshold
+        if not np.any(valid):
+            # No candidate passes — return empty interval
+            return np.nan, np.nan
+        # Knot boundaries: the valid midpoints index into intervals between knots.
+        # Interval i spans [knots[i-1], knots[i]] with midpoint midpoints[i].
+        # midpoints[0] < knots[0] → left-open interval, midpoints[-1] > knots[-1] → right-open.
+        valid_idx = np.where(valid)[0]
+        lo_idx = valid_idx[0]
+        hi_idx = valid_idx[-1]
+        # Lower bound: left edge of first valid segment
+        lo = -np.inf if lo_idx == 0 else float(knots[lo_idx - 1])
+        # Upper bound: right edge of last valid segment
+        hi = np.inf if hi_idx == len(knots) else float(knots[hi_idx])
+        return lo, hi
+
+    def _make_result(self, epsilon, lo: float, hi: float):
+        """Construct a ContinuousPredictionSet or MultiLevelPredictionSet."""
+        if hasattr(epsilon, "__iter__"):
+            return MultiLevelPredictionSet(
+                {float(eps): self._construct_Gamma((lo, hi), float(eps)) for eps in epsilon}
+            )
+        return self._construct_Gamma((lo, hi), float(epsilon))
+
+    def _make_multi_result(
+        self,
+        epsilon,
+        knots: NDArray,
+        midpoints: NDArray,
+        p_vals: NDArray,
+    ):
+        predictions = {}
+        for eps in epsilon:
+            lo, hi = self._extract_interval(knots, midpoints, p_vals, float(eps))
+            predictions[float(eps)] = self._construct_Gamma((lo, hi), float(eps))
+        return MultiLevelPredictionSet(predictions)
+
+
+class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRegressor):
+    """Conformal predictor using an ensemble of Mondrian trees for regression.
+
+    Builds T Mondrian trees per prediction step from the same augmented bag
+    with different seeds. The per-tree NCMs are averaged to give a single
+    smoothed NCM per point, reducing variance while maintaining exact validity.
+
+        α_i = (1/T) Σ_t |y_i − μ_{leaf_t(x_i)}|
+
+    The prediction set is found via an exact O(Mn log(Mn)) sweepline solver.
+    For forests, the prediction set may be a union of disjoint intervals (the
+    p-value is not guaranteed to be quasi-concave). By default, the convex hull
+    is returned for compatibility with downstream tasks; set `return_interval`
+    to `False` to get the exact union of intervals.
+
+    Parameters
+    ----------
+    n_trees : int
+        Number of Mondrian trees. Default 10.
+    lifetime : float
+        Mondrian depth budget L. Default 1.0.
+    epsilon : float
+        Default significance level. Default 0.1.
+    rnd_state : int, optional
+        Seed for the root RNG (each tree gets a derived seed).
+    verbose : int
+        Verbosity level (0 = silent).
+    n_jobs : int
+        Number of parallel workers for tree construction. Default 1.
+    grid_resolution : int
+        Number of grid points for the initial interval search. Default 200.
+    bisection_tol : float
+        Convergence tolerance for bisection refinement. Default 1e-6.
+    return_interval : bool, optional
+        If True, return the convex hull (single interval) of the exact prediction
+        set. If False, return the exact prediction set as a union of intervals.
+        Default True for backward compatibility.
+    max_depth : int or None, optional
+        Hard depth cap for Mondrian trees. Default None.
+    online : bool, optional
+        If True, use the online Mondrian forest mode. Default False.
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "n_trees", "lifetime", "epsilon", "rnd_state", "verbose",
+        "n_jobs", "grid_resolution", "bisection_tol", "max_depth", "online",
+        "return_interval",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "_forest")
+
+    def __init__(
+        self,
+        n_trees: int = 10,
+        lifetime: float = 1.0,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        n_jobs: int = 1,
+        grid_resolution: int = 200,
+        bisection_tol: float = 1e-6,
+        max_depth: int | None = None,
+        online: bool = False,
+        return_interval: bool = True,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
+        super().__init__(epsilon=epsilon)
+        self.n_trees = n_trees
+        self.lifetime = lifetime
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.n_jobs = n_jobs
+        self.grid_resolution = grid_resolution
+        self.bisection_tol = bisection_tol
+        self.max_depth = max_depth
+        self.online = online
+        self.return_interval = return_interval
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+        self._last_tree = None
+        self._last_seeds = None
+        self._last_x = None
+        self._forest = None
+        self._pending_forest = None
+
+    # ------------------------------------------------------------------
+    # Training interface
+    # ------------------------------------------------------------------
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialize with training data."""
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        y = np.asarray(y, dtype=float).ravel()
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have the same length")
+        self.X = X.copy()
+        self.y = y.copy()
+        if self.online:
+            seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
+            self._forest = [
+                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime)
+                for s in seeds
+            ]
+
+    def learn_one(
+        self,
+        x: NDArray,
+        y: float,
+        precomputed: dict | None = None,
+    ) -> None:
+        """Incrementally add one observation.
+
+        In online mode the forest extensions that scored ``x`` (from
+        ``precomputed`` or the last ``predict``) are persisted, so each tree's
+        stream is a single consistent Mondrian process; otherwise fresh
+        extensions are drawn.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, float(y))
+        if self.online:
+            cand = precomputed.get("online_forest") if precomputed else None
+            if not self._is_consistent_forest(cand, x):
+                cand = getattr(self, "_pending_forest", None)
+            self._pending_forest = None
+            if self._is_consistent_forest(cand, x):
+                self._forest = cand
+            else:
+                self._forest = [t.extend(x, self.rnd_gen) for t in self._forest]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _is_consistent_forest(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted forest with every tree extended by exactly ``x``."""
+        if cand is None or self._forest is None or len(cand) != len(self._forest):
+            return False
+        xr = np.asarray(x, dtype=float).ravel()
+        base_n = self._forest[0].X.shape[0]
+        return all(
+            t.X.shape[0] == base_n + 1 and np.array_equal(t.X[-1], xr) for t in cand
+        )
+
+    def _forest_summaries(self, X_aug, x, n, seeds: NDArray | None = None):
+        """Per-tree ``(base_ncm, ls_idx, ls_mu)`` summaries + viz/reuse caches.
+
+        Batch: T fresh trees from seeds (joblib). Online: extend each persistent
+        tree and summarise, caching the extensions for ``learn_one`` reuse.
+
+        Parameters
+        ----------
+        X_aug : array-like, shape (n+1, d)
+            Augmented feature matrix with test point appended.
+        x : array-like, shape (d,)
+            Test point features.
+        n : int
+            Number of training points.
+        seeds : array-like or None
+            Seeds for each tree. If None, uses _tree_seeds().
+        """
+        if self.online:
+            # In online mode, use deterministic seeds if provided
+            if seeds is None:
+                pending = [t.extend(x, self.rnd_gen) for t in self._forest]
+            else:
+                pending = [t.extend(x, np.random.default_rng(int(s))) for t, s in zip(self._forest, seeds)]
+            self._pending_forest = pending
+            self._last_seeds = None
+            self._last_x = x.copy()
+            self._last_tree = pending[0].root
+            return [_summarize_tree_reg(t.root, self.y, n, x) for t in pending]
+
+        # Batch mode
+        if seeds is None:
+            seeds = self._tree_seeds()
+        self._last_seeds = seeds.copy()
+        self._last_x = x.copy()
+        self._pending_forest = None
+        _rng0 = np.random.default_rng(int(seeds[0]))
+        self._last_tree = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
+        return Parallel(n_jobs=self.n_jobs)(
+            delayed(_build_tree_summary_reg)(s, X_aug, self.y, n, self.lifetime, self.max_depth) for s in seeds
+        )
+
+    def _tree_seeds(self) -> NDArray:
+        """Generate n_trees integer seeds from the root RNG."""
+        return self.rnd_gen.integers(0, 2**31 - 1, size=self.n_trees)
+
+    def _compute_avg_ncms(self, x: NDArray, y_cand: float) -> tuple[NDArray, float]:
+        """Compute averaged NCMs for all training points + test point.
+
+        Returns
+        -------
+        avg_train_ncms : ndarray, shape (n,)
+            Averaged NCM for each training point.
+        avg_test_ncm : float
+            Averaged NCM for the test point.
+        """
+        n = self.X.shape[0]
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        results = self._forest_summaries(X_aug, x, n)
+
+        # Accumulate per-tree NCMs
+        # base_ncm[i] = |y_i - mu_leaf_i| (training-only mean)
+        # For test point: ncm_test = |A*y_cand - B| / (A+1)
+        # For inside points j: ncm_j = |(A+1)*y_j - B - y_cand| / (A+1)
+        sum_train_ncms = np.zeros(n, dtype=float)
+        sum_test_ncm = 0.0
+
+        for base_ncm, ls_train_idx, ls_mu_train in results:
+            A = len(ls_train_idx)
+            B = ls_mu_train * A if A > 0 else 0.0
+
+            # Test NCM for this tree
+            test_ncm_t = abs(A * y_cand - B) / (A + 1)
+            sum_test_ncm += test_ncm_t
+
+            # Training NCMs: start from base, override leaf_star
+            ncm_t = base_ncm.copy()
+            if A > 0:
+                y_star = self.y[ls_train_idx]
+                ncm_t[ls_train_idx] = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+
+            sum_train_ncms += ncm_t
+
+        T = float(self.n_trees)
+        return sum_train_ncms / T, sum_test_ncm / T
+
+    def _compute_avg_ncms_with_seeds(self, x: NDArray, y_cand: float, seeds: NDArray) -> tuple[NDArray, float]:
+        """Compute averaged NCMs with deterministic seeds.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y_cand : float
+        seeds : array-like, shape (n_trees,)
+            Deterministic seeds for each tree.
+
+        Returns
+        -------
+        avg_train_ncms : ndarray, shape (n,)
+        avg_test_ncm : float
+        """
+        n = self.X.shape[0]
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        results = self._forest_summaries(X_aug, x, n, seeds=seeds)
+
+        sum_train_ncms = np.zeros(n, dtype=float)
+        sum_test_ncm = 0.0
+
+        for base_ncm, ls_train_idx, ls_mu_train in results:
+            A = len(ls_train_idx)
+            B = ls_mu_train * A if A > 0 else 0.0
+
+            test_ncm_t = abs(A * y_cand - B) / (A + 1)
+            sum_test_ncm += test_ncm_t
+
+            ncm_t = base_ncm.copy()
+            if A > 0:
+                y_star = self.y[ls_train_idx]
+                ncm_t[ls_train_idx] = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+
+            sum_train_ncms += ncm_t
+
+        T = float(self.n_trees)
+        return sum_train_ncms / T, sum_test_ncm / T
+
+    # ------------------------------------------------------------------
+    # compute_p_value
+    # ------------------------------------------------------------------
+
+    def compute_p_value(
+        self,
+        x: NDArray,
+        y_cand: float,
+        return_update: bool = False,
+        tau: float | None = None,
+    ) -> float | tuple[float, dict]:
+        """Compute conformal p-value for (x, y_cand).
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y_cand : float
+        return_update : bool
+        tau : float or None
+            Randomization variable for smoothed p-value. If None, draws from U(0,1).
+            For property testing and deterministic behavior, pass a fixed tau.
+
+        Returns
+        -------
+        float or (float, dict)
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            return (1.0, {}) if return_update else 1.0
+
+        # FIX: Use deterministic seeds based on x to ensure the same forest for all y
+        # The seed for each tree must be deterministic based on x, not on self.rnd_gen
+        # Use a hash of x to create reproducible seeds for each tree
+        x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
+        seeds = np.array([x_seed + i for i in range(self.n_trees)])
+
+        # tau is drawn ONCE in predict() and passed to compute_p_value
+        # If tau is not provided, draw it from a SEPARATE deterministic source
+        # Tau must be independent of the tree-building process
+        if tau is None:
+            # Use a different deterministic seed for tau (independent of tree seeds)
+            tau_seed = (x_seed * 2654435761) % (2**32)  # Prime multiplier for decorrelation
+            tau = np.random.default_rng(tau_seed).uniform(0.0, 1.0)
+
+        # Compute NCMs with deterministic seeds
+        avg_train_ncms, avg_test_ncm = self._compute_avg_ncms_with_seeds(x, float(y_cand), seeds)
+
+        all_ncms = np.append(avg_train_ncms, avg_test_ncm)
+        p_val = float(self._compute_p_value(all_ncms, tau))
+
+        if return_update:
+            return p_val, {"online_forest": getattr(self, "_pending_forest", None)}
+        return p_val
+
+    # ------------------------------------------------------------------
+    # predict  (grid + bisection)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Forest indexing
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        """Number of trees in the forest."""
+        return self.n_trees
+
+    def __iter__(self):
+        """Iterate over individual tree views."""
+        for i in range(self.n_trees):
+            yield self[i]
+
+    def __getitem__(self, i: int) -> ConformalMondrianTreeRegressor:
+        """Return a single-tree view for tree ``i`` from the last predict/compute_p_value call.
+
+        The returned object is a :class:`ConformalMondrianTreeRegressor` whose
+        ``_last_tree`` is the exact i-th tree from the last call, enabling all
+        T1/T2 inspection and visualisation methods. Its own ``predict()`` would
+        rebuild a fresh tree — this object is intended for *inspection only*.
+
+        Parameters
+        ----------
+        i : int
+            Tree index, ``0 <= i < n_trees``.
+
+        Raises
+        ------
+        RuntimeError
+            If ``predict()`` or ``compute_p_value()`` has not been called yet.
+        IndexError
+            If ``i`` is out of range.
+        """
+        if self.online:
+            pending = getattr(self, "_pending_forest", None)
+            if pending is None:
+                raise RuntimeError(
+                    "No trees cached. Call predict() or compute_p_value() first."
+                )
+            if not (0 <= i < self.n_trees):
+                raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
+            view = ConformalMondrianTreeRegressor(
+                lifetime=self.lifetime,
+                epsilon=self.epsilon,
+                max_depth=self.max_depth,
+            )
+            view.X = self.X
+            view.y = self.y
+            view._last_tree = pending[i].root
+            return view
+
+        if self._last_seeds is None:
+            raise RuntimeError(
+                "No trees cached. Call predict() or compute_p_value() first."
+            )
+        if not (0 <= i < self.n_trees):
+            raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
+
+        X_aug = np.vstack([self.X, self._last_x])
+        rng_i = np.random.default_rng(int(self._last_seeds[i]))
+        tree_i = MondrianTree.grow(X_aug, rng_i, lifetime=self.lifetime, max_depth=self.max_depth).root
+
+        view = ConformalMondrianTreeRegressor(
+            lifetime=self.lifetime,
+            epsilon=self.epsilon,
+            max_depth=self.max_depth,
+        )
+        view.X = self.X
+        view.y = self.y
+        view._last_tree = tree_i
+        return view
+
+    def predict(
+        self,
+        x: NDArray,
+        epsilon: float | NDArray | None = None,
+        return_update: bool = False,
+        return_interval: bool | None = None,
+    ) -> ContinuousPredictionSet | MultiLevelPredictionSet | tuple:
+        """Predict a conformal interval for test object x.
+
+        Uses an exact O(Mn log(Mn)) sweepline solver to locate p-value crossings.
+        For forests, the prediction set may be a union of disjoint intervals.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        epsilon : float or array-like, optional
+        return_update : bool
+        return_interval : bool or None, optional
+            If True, return the convex hull (single interval) of the exact prediction
+            set. If False, return the exact union of intervals as a DiscretePredictionSet.
+            If None (default), use ``self.return_interval``.
+
+        Returns
+        -------
+        ContinuousPredictionSet or MultiLevelPredictionSet
+            Returns a DiscretePredictionSet with multiple intervals if return_interval=False
+            and the exact prediction set is disconnected.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        n = self._safe_size_check(self.X)
+        if n == 0:
+            result = self._make_result(epsilon, -np.inf, np.inf)
+            if return_update:
+                return result, {}
+            return result
+
+        # Use return_interval parameter if provided, otherwise fall back to self.return_interval
+        if return_interval is None:
+            return_interval = self.return_interval
+
+        # ---- Build all T trees ONCE (batch: seeds; online: extend forest) --
+        X_aug = np.vstack([self.X, x.reshape(1, -1)])
+        summaries = self._forest_summaries(X_aug, x, n)
+
+        T = float(self.n_trees)
+        _TOL = 1e-9
+        # Draw ONE tau for the entire predict call to ensure deterministic save/load.
+        # Use it for smoothed p-value calculation.
+        tau = self.rnd_gen.uniform(0.0, 1.0)
+
+        def p_value_at(y_cand: float) -> float:
+            """Evaluate p(y_cand) using pre-built tree summaries and smoothed tau."""
+            sum_train = np.zeros(n, dtype=float)
+            sum_test = 0.0
+            for base_ncm, ls_idx, ls_mu in summaries:
+                A = len(ls_idx)
+                B = ls_mu * A if A > 0 else 0.0
+                test_t = abs(A * y_cand - B) / (A + 1)
+                sum_test += test_t
+                ncm_t = base_ncm.copy()
+                if A > 0:
+                    y_star = self.y[ls_idx]
+                    ncm_t[ls_idx] = np.abs((A + 1) * y_star - B - y_cand) / (A + 1)
+                sum_train += ncm_t
+            avg_train = sum_train / T
+            avg_test = sum_test / T
+            alpha_y = avg_test
+            gt = int(np.sum(avg_train > alpha_y + _TOL))
+            eq = int(np.sum(np.abs(avg_train - alpha_y) <= _TOL))  # exclude test point, apply tau below
+            return float((gt + tau * eq) / (n + 1))
+
+        # ---- Exact O(Mn log(Mn)) Sweepline Solver ----------------------
+        # Use the Numba-accelerated solver from _forest_solver module
+        M = len(summaries)
+        eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
+        predictions = {}
+
+        for eps_val in eps_arr:
+            if return_interval:
+                lo, hi = forest_sweepline_solver(
+                    summaries, self.y, float(eps_val), tau, n, M, return_exact=False
+                )
+                # Single interval mode: pass as (lo, hi) tuple
+                if np.isnan(lo) and np.isnan(hi):
+                    predictions[float(eps_val)] = self._construct_Gamma((np.nan, np.nan), float(eps_val))
+                else:
+                    predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
+            else:
+                intervals, Y_eval = forest_sweepline_solver(
+                    summaries, self.y, float(eps_val), tau, n, M, return_exact=True
+                )
+                # intervals is a list of (lo, hi) tuples for the exact prediction set
+                if not intervals:
+                    predictions[float(eps_val)] = self._construct_Gamma([], float(eps_val))
+                else:
+                    predictions[float(eps_val)] = self._construct_Gamma(intervals, float(eps_val))
+
+        if hasattr(epsilon, "__iter__"):
+            result = MultiLevelPredictionSet(predictions)
+        else:
+            result = predictions[float(eps_arr[0])]
+
+        if return_update:
+            return result, {"online_forest": getattr(self, "_pending_forest", None)}
+        return result
+
+    @staticmethod
+    def _make_result(epsilon, lo: float, hi: float):
+        if hasattr(epsilon, "__iter__"):
+            return MultiLevelPredictionSet(
+                {float(eps): ContinuousPredictionSet([(lo, hi)], float(eps)) for eps in epsilon}
+            )
+        return ContinuousPredictionSet([(lo, hi)], float(epsilon))

@@ -578,7 +578,11 @@ class TestWrapperWarmStart:
             )
 
         cp.learn_initial_training_set(X[:20], y[:20])
-        Gamma, pv = cp.predict(X[20], return_p_values=True)
+        # sklearn's warm-start fit (deferred until predict) emits its own
+        # UserWarning; this test is about prediction validity, so absorb it.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            Gamma, pv = cp.predict(X[20], return_p_values=True)
 
         assert set(pv.keys()) == {0, 1}
         for p in pv.values():

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from online_cp.classifiers import ConformalPredictionSet
+from online_cp.classifiers import DiscretePredictionSet
 from online_cp.metrics import (
     CRPS,
     BrierScore,
@@ -17,27 +17,27 @@ from online_cp.metrics import (
     Width,
     WinklerScore,
 )
-from online_cp.regressors import ConformalPredictionInterval
+from online_cp.regressors import ContinuousPredictionSet
 from online_cp.venn import VennPrediction
 
 
 class TestErrorRate:
     def test_no_error_when_y_in_gamma(self):
         m = ErrorRate()
-        Gamma = ConformalPredictionSet(np.array([0, 1, 2]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([0, 1, 2]), epsilon=0.1)
         result = m.update(y=1, Gamma=Gamma)
         assert result == 0.0
 
     def test_error_when_y_not_in_gamma(self):
         m = ErrorRate()
-        Gamma = ConformalPredictionSet(np.array([0, 2]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([0, 2]), epsilon=0.1)
         result = m.update(y=1, Gamma=Gamma)
         assert result == 1.0
 
     def test_running_mean(self):
         m = ErrorRate()
-        Gamma_hit = ConformalPredictionSet(np.array([1]), epsilon=0.1)
-        Gamma_miss = ConformalPredictionSet(np.array([0]), epsilon=0.1)
+        Gamma_hit = DiscretePredictionSet(np.array([1]), epsilon=0.1)
+        Gamma_miss = DiscretePredictionSet(np.array([0]), epsilon=0.1)
         m.update(y=1, Gamma=Gamma_hit)
         m.update(y=1, Gamma=Gamma_miss)
         m.update(y=1, Gamma=Gamma_hit)
@@ -45,8 +45,8 @@ class TestErrorRate:
 
     def test_values_history(self):
         m = ErrorRate()
-        Gamma_hit = ConformalPredictionSet(np.array([1]), epsilon=0.1)
-        Gamma_miss = ConformalPredictionSet(np.array([0]), epsilon=0.1)
+        Gamma_hit = DiscretePredictionSet(np.array([1]), epsilon=0.1)
+        Gamma_miss = DiscretePredictionSet(np.array([0]), epsilon=0.1)
         m.update(y=1, Gamma=Gamma_hit)
         m.update(y=1, Gamma=Gamma_miss)
         m.update(y=1, Gamma=Gamma_hit)
@@ -54,7 +54,7 @@ class TestErrorRate:
 
     def test_works_with_intervals(self):
         m = ErrorRate()
-        Gamma = ConformalPredictionInterval(lower=0.0, upper=2.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(0.0, 2.0)], 0.1)
         assert m.update(y=1.0, Gamma=Gamma) == 0.0
         assert m.update(y=5.0, Gamma=Gamma) == 1.0
 
@@ -62,17 +62,17 @@ class TestErrorRate:
 class TestObservedExcess:
     def test_no_excess_when_singleton(self):
         m = ObservedExcess()
-        Gamma = ConformalPredictionSet(np.array([1]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([1]), epsilon=0.1)
         assert m.update(y=1, Gamma=Gamma) == 0.0
 
     def test_excess_when_multiple_labels(self):
         m = ObservedExcess()
-        Gamma = ConformalPredictionSet(np.array([0, 1, 2]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([0, 1, 2]), epsilon=0.1)
         assert m.update(y=1, Gamma=Gamma) == 2.0
 
     def test_excess_when_y_not_in_gamma(self):
         m = ObservedExcess()
-        Gamma = ConformalPredictionSet(np.array([0, 2]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([0, 2]), epsilon=0.1)
         assert m.update(y=1, Gamma=Gamma) == 2.0
 
 
@@ -91,7 +91,7 @@ class TestObservedFuzziness:
 
     def test_raises_without_p_values(self):
         m = ObservedFuzziness()
-        Gamma = ConformalPredictionSet(np.array([1]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([1]), epsilon=0.1)
         with pytest.raises(ValueError):
             m.update(y=1, Gamma=Gamma)
 
@@ -99,51 +99,51 @@ class TestObservedFuzziness:
 class TestSetSize:
     def test_size(self):
         m = SetSize()
-        Gamma = ConformalPredictionSet(np.array([0, 1, 2]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([0, 1, 2]), epsilon=0.1)
         assert m.update(y=1, Gamma=Gamma) == 3.0
 
     def test_empty_set(self):
         m = SetSize()
-        Gamma = ConformalPredictionSet(np.array([]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([]), epsilon=0.1)
         assert m.update(y=1, Gamma=Gamma) == 0.0
 
 
 class TestIntervalWidth:
     def test_finite_interval(self):
         m = IntervalWidth()
-        Gamma = ConformalPredictionInterval(lower=1.0, upper=3.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(1.0, 3.0)], 0.1)
         assert np.isclose(m.update(y=2.0, Gamma=Gamma), 2.0)
 
     def test_zero_width(self):
         m = IntervalWidth()
-        Gamma = ConformalPredictionInterval(lower=5.0, upper=5.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(5.0, 5.0)], 0.1)
         assert m.update(y=5.0, Gamma=Gamma) == 0.0
 
 
 class TestWinklerScore:
     def test_no_penalty_when_covered(self):
         m = WinklerScore()
-        Gamma = ConformalPredictionInterval(lower=0.0, upper=2.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(0.0, 2.0)], 0.1)
         result = m.update(y=1.0, Gamma=Gamma, epsilon=0.1)
         assert np.isclose(result, 2.0)
 
     def test_penalty_below(self):
         m = WinklerScore()
-        Gamma = ConformalPredictionInterval(lower=2.0, upper=4.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(2.0, 4.0)], 0.1)
         result = m.update(y=1.0, Gamma=Gamma, epsilon=0.1)
         expected = 2.0 + (2.0 / 0.1) * (2.0 - 1.0)
         assert np.isclose(result, expected)
 
     def test_penalty_above(self):
         m = WinklerScore()
-        Gamma = ConformalPredictionInterval(lower=0.0, upper=2.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(0.0, 2.0)], 0.1)
         result = m.update(y=5.0, Gamma=Gamma, epsilon=0.1)
         expected = 2.0 + (2.0 / 0.1) * (5.0 - 2.0)
         assert np.isclose(result, expected)
 
     def test_uses_gamma_epsilon_if_not_provided(self):
         m = WinklerScore()
-        Gamma = ConformalPredictionInterval(lower=0.0, upper=2.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(0.0, 2.0)], 0.1)
         result = m.update(y=1.0, Gamma=Gamma)
         assert np.isclose(result, 2.0)
 
@@ -160,7 +160,7 @@ class TestMetrics:
 
     def test_update_all(self):
         m = ErrorRate() + IntervalWidth()
-        Gamma = ConformalPredictionInterval(lower=0.0, upper=2.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(0.0, 2.0)], 0.1)
         m.update(y=1.0, Gamma=Gamma)
         result = m.get()
         assert result["ErrorRate"] == 0.0
@@ -176,13 +176,13 @@ class TestMetrics:
 
     def test_repr(self):
         m = ErrorRate()
-        Gamma = ConformalPredictionSet(np.array([1]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([1]), epsilon=0.1)
         m.update(y=1, Gamma=Gamma)
         assert "ErrorRate" in repr(m)
 
     def test_reset(self):
         m = ErrorRate()
-        Gamma = ConformalPredictionSet(np.array([0]), epsilon=0.1)
+        Gamma = DiscretePredictionSet(np.array([0]), epsilon=0.1)
         m.update(y=1, Gamma=Gamma)
         m.reset()
         assert m.get() == 0.0
@@ -190,8 +190,8 @@ class TestMetrics:
 
     def test_cumulative_mean(self):
         m = ErrorRate()
-        Gamma_hit = ConformalPredictionSet(np.array([1]), epsilon=0.1)
-        Gamma_miss = ConformalPredictionSet(np.array([0]), epsilon=0.1)
+        Gamma_hit = DiscretePredictionSet(np.array([1]), epsilon=0.1)
+        Gamma_miss = DiscretePredictionSet(np.array([0]), epsilon=0.1)
         m.update(y=1, Gamma=Gamma_hit)
         m.update(y=1, Gamma=Gamma_miss)
         m.update(y=1, Gamma=Gamma_hit)
@@ -588,13 +588,13 @@ class TestValidation:
 
     def test_winkler_epsilon_zero_raises(self):
         m = WinklerScore()
-        Gamma = ConformalPredictionInterval(lower=1.0, upper=3.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(1.0, 3.0)], 0.1)
         with pytest.raises(ValueError, match="epsilon must be positive"):
             m.update(y=2.0, Gamma=Gamma, epsilon=0.0)
 
     def test_winkler_epsilon_negative_raises(self):
         m = WinklerScore()
-        Gamma = ConformalPredictionInterval(lower=1.0, upper=3.0, epsilon=0.1)
+        Gamma = ContinuousPredictionSet([(1.0, 3.0)], 0.1)
         with pytest.raises(ValueError, match="epsilon must be positive"):
             m.update(y=2.0, Gamma=Gamma, epsilon=-0.1)
 

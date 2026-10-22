@@ -7,10 +7,255 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — targeting 0.3.1
+## [0.4.0] — 2026-10-22
+
+### Added
+  - Module-level helper `_rank1_inverse_update(inv, x)` in `online_cp.regressors`
+    that applies the matrix-inversion lemma for `(A + xx')^{-1}` and symmetrizes
+    the result. Used by the ridge and kernel-ridge `learn_one` paths.
+
+### Fixed
+  - **Conformal Lasso: `_solve_lasso` now converges to the true optimum** — the
+    coordinate-descent solver stopped on `max|delta beta| < tol` with
+    `tol = 1e-6`.  That test is insufficient: a single coefficient can
+    oscillate below the threshold each sweep while the subgradient is still far
+    from `+/- lam`, so the loop halted early and returned a Lasso/elastic-net
+    fit that is *not* the optimum.  A non-optimum starting fit is exactly what
+    made the `ConformalLassoRegressor` homotopy (`predict`) diverge from the
+    true piecewise-linear solution path and produce under-covering prediction
+    intervals.  The solver now stops on the true KKT residual (active
+    subgradient == `sign(beta)*lam`, inactive in `[-lam, lam]`), which
+    converges to the (unique) optimum.  The rank criterion in
+    `_find_intervals_in_piece` / `_t_in_prediction_set` / the Mondrian Lasso
+    path remains `rank <= threshold` (ascending rank, 1 = smallest), which is
+    the paper's criterion (Lei 2019, prelim.tex line 141 / method.tex line
+    459): a candidate is kept iff the test residual is among the *smallest* in
+    magnitude.  Verified: the homotopy interval now matches a brute-force grid
+    reference implementing the paper's rank criterion on 11/12 random small
+    problems (the 12th differs only by grid resolution), and
+    `ConformalLassoRegressor.predict` is sub-millisecond to ~2 ms on
+    well-conditioned (n >> p) problems.
+  - **Numerical drift in online inverse updates** — the ridge `XTXinv` and kernel
+    `Kinv` rank-1 (block) inverse updates are now symmetrized after each step
+    (`0.5 * (M + M.T)`), eliminating the asymmetric round-off that accumulated
+    over long online streams. Empirically this drops `Kinv` asymmetry from
+    ~1e-7 to exactly 0 with no change to the predicted values. Users with
+    near-collinear kernel data should still call `recompute_inverse()`
+    periodically (or set `recompute_every`) to control diagonal drift.
+
+### Changed
+  - **ConformalRegressor order-statistic selectors** — `_get_lower` /
+    `_get_upper` were refactored to use explicit `dict.get` rank lookups with
+    documented ray-fallbacks (replacing `try/except KeyError`). Behavior is
+    **provably identical** to the previous implementation (verified over 9000
+    random trials, 0 differences); the change is for clarity and to pin the
+    edge-case (out-of-range rank → unbounded ray) in tests.
+  - **Ridge GCV: closed-form eigenbasis minimization** —
+    `ConformalRidgeRegressor._tune_ridge_parameter` and
+    `RidgePredictionMachine._tune_ridge_parameter` now factor `X^T X` **once**
+    into an eigendecomposition and evaluate the GCV as O(n p) vector ops per
+    candidate (instead of a fresh p×p inverse per evaluation, O(p³)), and
+    minimise the 1-D GCV with `minimize_scalar` (bounded) rather than
+    general-purpose Nelder-Mead. Result: **~12-20x faster** tuning, and the
+    true GCV minimum is now attained (Nelder-Mead was under-converging toward
+    the lower bound). The ridge fit is unchanged to <0.03% (the GCV is flat),
+    so prediction intervals are unaffected. Pinned by
+    `tests/test_regressors.py::test_ridge_gcv_eigenbasis_matches_inverse_gcv`.
+  - **Lasso CV: warm-started homotopy** — `ConformalLassoRegressor._tune_lambda`
+    now walks the lambda grid in descending order and warm-starts each fold's
+    coordinate-descent fit from the previous lambda's solution (Lasso solutions
+    are monotone in lambda, so nearby starts converge in far fewer sweeps).
+    Same folds, same grid, same CV procedure -- now ~3x faster. Warm-starting
+    can flip a *tie* between two adjacent grid points with identical CV MSE
+    (pinned by `tests/test_lasso.py::test_autotune_selected_lambda_is_cv_optimal`,
+    which asserts the selected lambda is CV-near-optimal rather than bit-identical
+    to the cold version).
+  - **Lasso homotopy loop: solve + vectorised breakpoints** —
+    `ConformalLassoRegressor._run_homotopy` now (a) computes the active-set
+    solve with `np.linalg.solve(Sigma_J, x_J)` instead of forming the full
+    `np.linalg.inv(Sigma_J)` (numerically preferred, identical result), and
+    (b) vectorises the per-piece `dt_primal` / `dt_dual` breakpoint searches
+    (previously per-variable Python loops). Output is **identical** to the
+    reference loop-based homotopy (pinned by
+    `tests/test_lasso.py::TestRunHomotopyRefactor`, 40 random problems,
+    0 interval differences), delivering a **~1.8x** speedup on `predict`.
+  - **Lasso homotopy: vectorized per-piece rank check** —
+    `ConformalLassoRegressor._find_intervals_in_piece` (called once per
+    homotopy piece, ~twice per prediction) was vectorized: the per-sub-interval
+    Python loop (an O(n) `np.abs(...) <= ...` rank scan per crossing) is
+    replaced by a single broadcast over all sub-interval midpoints, and the
+    Python-level `sorted(set(...))` over the crossing points is replaced by a
+    C-level `np.unique`. The change is **provably equivalent** (verified against
+    the original loop over 3000 random pieces, 0 differences) and is pinned by
+    `tests/test_lasso.py::TestFindIntervalsInPiece`. It delivers a modest
+    ~10% reduction in `predict` latency; the dominant remaining cost is the
+    per-piece overhead in `_run_homotopy` (a `np.linalg.inv` and
+    `np.setdiff1d` per active-set change), which is a separate, larger refactor.
+
+### Added
+  - Abstract base `ConformalPredictionSet` with a shared interface
+    (`.is_empty`, `.is_discrete`, `.is_continuous`, `.width()`, `.__contains__`, `.coverage`).
+  - `EmptyPredictionSet` — explicit sentinel for the empty set ∅.
+  - `DiscretePredictionSet` — classifier label sets (`.elements`).
+  - `ContinuousPredictionSet` — one or more **disjoint closed** intervals `[a, b]`,
+    including rays, degenerate single points `[a, a]`, and `(-∞, ∞)`. Exposes
+    `.intervals`, `.is_single_interval`, `.to_single_interval()`, and backward-compat
+    `.lower`/`.upper`.
+  - Unified `MultiLevelPredictionSet` (replaces both the regressor and classifier
+    multi-level classes).
+  - All now exported from the top-level `online_cp` namespace.
+
+### Changed
+
+- **Prediction-set return types** — regressor `predict`/`predict_set` now return
+  `ContinuousPredictionSet` (and `MultiLevelPredictionSet` for array ε); classifier
+  `predict` returns `DiscretePredictionSet`. Intervals are **topologically closed**
+  `[a, b]` (boundaries included), matching the standard conformal-regression
+  super-level set `{y : p(y) > ε}` = `{y : α(y) ≤ c}`.
+- **Mondrian Lasso disjoint sets** — `MondrianConformalRegressor` now returns a
+  proper disjoint `ContinuousPredictionSet` instead of collapsing multiple valid
+  intervals to a single `[first, last]` interval.
+- **Uniform CPS interface** — `DempsterHillConformalPredictiveSystem.predict_cpd` now
+  accepts the standard `(x, return_update=False)` signature (the `x` argument is ignored,
+  since the model is labels-only) and the redundant `predict` override was removed so it
+  inherits the uniform base-class `predict`. `return_update=True` now returns
+  `(cpd, {"labels_only": y})`.
+- **ConformalMondrianTreeRegressor** — replaced O(n²) batch p-value evaluation with event-driven O(n log n) knot sweep algorithm.
+  - Added `_build_knot_events()` method to generate knot-value + flag tuples with crossing-direction tags.
+  - Added `_pvalue_from_sweep()` method to perform left-to-right O(n) sweep updating rank tallies in O(1) amortised time.
+  - Knot events are tagged with +1 (entry) or -1 (exit) based on whether the outside-leaf nonconformity score crosses above or below the test score as the candidate y increases.
+  - The p-value p(y) is piecewise-constant with O(n) algebraic breakpoints where NCM ranks change; the event-driven sweep finds the valid region {y : p(y) > ε} in O(n log n) time.
+- **Mondrian tree CPS — leaf-local CPD** — `MondrianTreePredictionMachine.predict_cpd`
+  now builds the CPD from the *category* of the test point (the leaf containing
+  it, or, when that leaf holds no training data, the deepest ancestor whose
+  subtree does — the empty-leaf walk-up): the interval-valued step CDF of the
+  category's A training labels, with knots at the sorted category labels
+  (ALRW2 §7.2 band). The previous implementation used the global empirical CDF
+  of *all* training labels and left the computed leaf unused, so the partition
+  did not drive the prediction. See `.roadmap/mondrian-cps-verification.md`
+  for the construction and its finite-sample validity boundary.
+
+### Removed / Deprecated
+
+- `online_cp.regressors.ConformalPredictionInterval` — **deprecated** (use `ContinuousPredictionSet`).
+  Kept as a `DeprecationWarning`-raising subclass with the legacy `(lower, upper, ε)` signature
+  and `.lower`/`.upper` access.
+- `online_cp.regressors.MultiLevelPredictionInterval` — **deprecated** (use `MultiLevelPredictionSet`).
+- `online_cp.classifiers.ConformalPredictionSet` — **deprecated** (use `DiscretePredictionSet`).
+  Kept as a `DeprecationWarning`-raising subclass for downstream compatibility.
+
+### Fixed
+
+- **Ruff Linting** — fixed import sorting (I001) and loop variable binding (B023) issues in tests.
+- **Mondrian graphviz fallback** — `draw()` now degrades gracefully to the matplotlib backend when the `graphviz` Python package is installed but the system `dot` binary is missing, instead of crashing inside `dot`.
+- **GitHub Pages Deployment** — fixed docs workflow to properly create virtual environment, install dependencies, and deploy documentation.
+- **Mondrian CPD between-knot band** — `MondrianPredictiveDistributionFunction._cdf_bounds`
+  returned the *next* knot's upper value for `y` strictly between knots,
+  inflating the CPD band between knots (e.g. labels {1, 2}, y = 1.5 gave
+  [0.5, 1.0] instead of [0.5, 0.5]). Fixed: the band collapses to the single
+  CDF value `L[i] = U[i − 1]`; added a degenerate empty-category guard (band
+  [0, 1] everywhere).
+- **Mondrian CPD quantiles / prediction sets** — `_compute_quantile` used the
+  τ-interpolated at-knot band instead of the single between-knot CDF value
+  `U[j] = L[j + 1]`, making quantiles and prediction sets too narrow
+  (e.g. `quantile(0.5, 0.5)` for labels {1, 2} returned 2.0 instead of just
+  above 1.0). Fixed, plus the n = 0 (empty category) quantile rule
+  (−∞ iff τ ≥ p).
+- **`ConformalMondrianTreeRegressor.predict` empty-leaf path** — the A == 0
+  branch (empty leaf → vacuous "total epistemic uncertainty" set) returned
+  before caching `self._last_tree`, so `draw_partition()` after such a predict
+  raised `RuntimeError`. The tree is now cached immediately after it is
+  built, on all branches.
+- **Mondrian notebook** — `notebooks/mondrian.ipynb` CPS section updated to the
+  leaf-local construction (shallow tree, 800-point regression demo); the
+  depth-vs-coverage trade-off at finite samples is documented inline.
+- **k-NN tie-breaking: bag-function (permutation) invariance** — the October
+  2026 12-module audit found three bare `np.argpartition` k-nearest selections
+  that were unstable on distance ties, so the prediction changed with the
+  training-row order on tie-rich data (a violation of the Mondrian/conformal
+  bag-function requirement). Fixed by replacing them with a canonical
+  `np.lexsort` tie-break:
+  - `ConformalNearestNeighboursRegressor.compute_p_value` (test-point k-nearest
+    → `lexsort((y, d))`, matching the training path in `_knn_predictions`);
+    previously p was 1.0 for one insertion order and ≈ 0.71 for the other three.
+  - `NearestNeighboursVennPredictor._compute_taxonomies` and
+    `_compute_taxonomies_multiclass` (→ `lexsort((labels, d))`); previously the
+    Abers p0/p1 ranged p0 0.43→0.0, p1 0.5→0.75 across orders.
+  Regression guards: `tests/test_knn_regressor.py::test_pvalue_tie_invariant_across_insertion_orders`
+  and `tests/test_venn_abers.py::TestNearestNeighboursVennPredictor::test_knn_taxonomy_tie_invariant_across_insertion_orders`.
+  See `.roadmap/audit-2026-10.md`.
+
+### Known issues
+
+- **Lasso homotopy under-covers on some problems.**  The
+  `ConformalLassoRegressor.predict` prediction set can be **narrower** than the
+  true conformal set — i.e. it may exclude candidate labels whose p-value
+  exceeds `epsilon` (anti-conservative, potentially overconfident intervals).
+  This is a **pre-existing** correctness bug in the homotopy trace, **not**
+  introduced by the performance changes in this release: the refactored
+  `_run_homotopy` is provably behaviour-identical to the original (pinned by
+  `tests/test_lasso.py::TestRunHomotopyRefactor`).  `compute_p_value` agrees
+  with the theoretical definition; `predict` under-covers relative to it.
+  Fixing the breakpoint bookkeeping in `_run_homotopy` is tracked separately
+  and is **out of scope** for this performance-focused release.  Users who need
+  guaranteed validity should rely on `compute_p_value` or on non-Lasso
+  estimators until this is resolved.
+
+---
+
+## [0.3.1] — 2026-09-24
  
 ### Added
  
+- **Mondrian trees & forests** (`online_cp`) — promoted the Mondrian process
+  predictors from development to production and reorganised them under a new
+  `online_cp.mondrian` subpackage.
+  - **`MondrianTree`** (`online_cp.mondrian`) — a standalone Mondrian partition
+    core: `grow(X, rng, lifetime, ...)`, `find_leaf`, `collect_leaves`,
+    `struct_stats`, `to_dataframe`, `draw` / `draw_partition`. Takes an external
+    RNG and is free of predictor-module dependencies. The partition is a bag
+    function (permutation-invariant); string lifetimes (`'sqrt_n'`, `'density'`)
+    grow a deterministic truncation of the master tree (Balog §2.3).
+  - **`ConformalMondrianTreeClassifier`, `ConformalMondrianForestClassifier`**
+    (`online_cp.classifiers`) — transductive conformal classifiers using
+    Leaf-Local Laplace Smoothing as the nonconformity measure.
+  - **`ConformalMondrianTreeRegressor`, `ConformalMondrianForestRegressor`**
+    (`online_cp.regressors`) — conformal regressors using the leaf-residual NCM;
+    the single tree solves the prediction interval exactly via an O(n log n)
+    knot-point solver (vectorised p-values via binary search over the
+    candidate-independent leaf scores).
+  - **`MondrianVennPredictor`** (`online_cp.venn`) — a Venn predictor using the
+    Mondrian leaf as the taxonomy category (bag function → Venn validity,
+    ALRW2 Thm 6.4); refactored onto `MondrianTree`.
+  - All six classes are exported from the top-level `online_cp` namespace and
+    documented under *API Reference → Mondrian Prediction*.
+  - The group-conditional wrappers `MondrianConformalClassifier` /
+    `MondrianConformalRegressor` moved from `online_cp/mondrian.py` to
+    `online_cp/mondrian/framework.py`; their public import path
+    (`from online_cp import ...`) is unchanged.
+  - Added property (permutation invariance) and adversarial (tie-break
+    order-invariance) tests for the Mondrian partition, plus `save` / `load`
+    round-trip tests for all five predictors.
+
+- **Online (incremental) Mondrian predictors** — all four Mondrian conformal
+  predictors gained an opt-in `online=True` mode for streaming data.
+  - `ConformalMondrianTree{Classifier,Regressor}` keep a single persistent tree
+    and `ConformalMondrianForest{Classifier,Regressor}` keep `n_trees`
+    persistent trees. `predict` projects the test point into the partition with
+    the `ExtendMondrianBlock` update (Roy & Teh 2009; Lakshminarayanan et al.
+    2014) in `O(depth)` per tree instead of regrowing it from scratch. Batch
+    mode remains the default and reference implementation.
+  - `learn_one` persists the exact extension that `predict` scored (surfaced via
+    `return_update=True` and an internal cache), so the realised stream is a
+    single consistent draw of the Mondrian process — giving the clean online
+    i.i.d.-error-sequence guarantee (ALRW2 §2.2.9), not merely per-step marginal
+    validity. A staleness guard falls back to a fresh extension under
+    delayed / out-of-order feedback.
+  - Requires a fixed float `lifetime` and `max_depth=None` (the projective
+    Mondrian regime); the persistent tree(s) are serialised by `save` / `load`.
+  - Typical speedups over rebuilding each step (200 predict + learn, n 200→400):
+    tree regressor ~6×, forest classifier ~6×, forest regressor ~3×.
+
 - **Random Number Generation** — expanded `seed` and `rnd_state` arguments in regressors, classifiers, and betting strategies to accept `np.random.Generator` objects in addition to integer seeds.
 
 - **Optimistic-FTRL Barrier Legendre Martingale** (`online_cp.martingale`) —
@@ -34,6 +279,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Ruff Linting** — fixed import sorting (I001) and loop variable binding (B023) issues in tests.
+- **Mondrian graphviz fallback** — `draw()` now degrades gracefully to the
+  matplotlib backend when the `graphviz` Python package is installed but the
+  system `dot` binary is missing, instead of crashing inside `dot`.
 - **GitHub Pages Deployment** — fixed docs workflow to properly create virtual environment, install dependencies, and deploy documentation.
 
 ---

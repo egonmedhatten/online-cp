@@ -34,6 +34,23 @@ from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize
 from scipy.spatial.distance import cdist, pdist, squareform
 
+
+# Lazy imports to avoid circular dependencies
+def _get_mondrian_tree():
+    """Lazy import of MondrianTree."""
+    from online_cp.mondrian.tree import MondrianTree
+    return MondrianTree
+
+def _get_find_leaf():
+    """Lazy import of _find_leaf."""
+    from online_cp.mondrian.tree import _find_leaf
+    return _find_leaf
+
+def _get_cps_helpers():
+    """Lazy import of the CPS category-selection helpers."""
+    from online_cp.mondrian.tree import _select_cps_category, _subtree_training_indices
+    return _select_cps_category, _subtree_training_indices
+
 try:
     from ._serialization import SerializableMixin
 except ImportError:
@@ -44,16 +61,22 @@ __all__ = [
     "KernelRidgePredictionMachine",
     "NearestNeighboursPredictionMachine",
     "DempsterHillConformalPredictiveSystem",
+    "MondrianTreePredictionMachine",
 ]
 
 
 default_epsilon = 0.1
 
 
-def get_ConformalPredictionInterval():
-    from .regressors import ConformalPredictionInterval  # Lazy import
+def get_ContinuousPredictionSet():
+    """Return the :class:`ContinuousPredictionSet` class (lazy import).
 
-    return ConformalPredictionInterval
+    .. deprecated::
+        Use ``online_cp.prediction_set.ContinuousPredictionSet`` directly.
+    """
+    from .prediction_set import ContinuousPredictionSet
+
+    return ContinuousPredictionSet
 
 
 class ConformalPredictiveSystem(SerializableMixin):
@@ -174,8 +197,11 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                 if self.X.shape[0] == 1:
                     self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
                 else:
-                    # Update (X^T X + aI)^{-1} via Sherman-Morrison
-                    self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                    # Update (X^T X + aI)^{-1} via the matrix-inversion lemma,
+                    # symmetrized to counteract round-off drift over long streams.
+                    v = self.XTXinv @ x
+                    M = self.XTXinv - np.outer(v, v) / (1.0 + x @ v)
+                    self.XTXinv = 0.5 * (M + M.T)
 
                     # Check the rank
                     if self.warnings:
@@ -192,8 +218,11 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
                 self.XTXinv = np.linalg.inv(self.X.T @ self.X + self.a * self.Id)
             else:
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
-                # Update (X^T X + aI)^{-1} via Sherman-Morrison
-                self.XTXinv -= (self.XTXinv @ np.outer(x, x) @ self.XTXinv) / (1 + x.T @ self.XTXinv @ x)
+                # Update (X^T X + aI)^{-1} via the matrix-inversion lemma,
+                # symmetrized to counteract round-off drift over long streams.
+                v = self.XTXinv @ x
+                M = self.XTXinv - np.outer(v, v) / (1.0 + x @ v)
+                self.XTXinv = 0.5 * (M + M.T)
 
                 # Check the rank
                 if self.warnings:
@@ -236,31 +265,42 @@ class RidgePredictionMachine(ConformalPredictiveSystem):
 
     def _tune_ridge_parameter(self, a0=None):
         """
-        Tune ridge parameter with Generalized cross validation https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf
+        Tune ridge parameter with Generalized cross validation
+        (https://pages.stat.wisc.edu/~wahba/stat860public/pdf1/golub.heath.wahba.pdf).
+
+        Same eigenbasis approach as ``ConformalRidgeRegressor._tune_ridge_parameter``:
+        factor ``X^T X`` once into ``V diag(lam) V^T``; the hat matrix is
+        ``A = (X V) diag(1/(lam + a)) (X V)^T`` so each GCV evaluation is O(n p)
+        instead of an O(p^3) inverse.  Minimised with ``minimize_scalar`` (bounded).
         """
         XTX = self.X.T @ self.X
         n = self.X.shape[0]
-        In = np.identity(n)
+        y = self.y
+
+        lam_eig, V = np.linalg.eigh(XTX)
+        W = self.X @ V
+        Xt_y = self.X.T @ y
+        Vt_Xt_y = V.T @ Xt_y
 
         def GCV(a):
-            try:
-                A = self.X @ np.linalg.inv(XTX + a * self.Id) @ self.X.T
-                max_diag_H = np.max(np.diag(A))  # Maximum diagonal element of the hat matrix
-                if max_diag_H > 1:
-                    return np.inf
-                return (1 / n) * np.linalg.norm((In - A) @ self.y) ** 2 / ((1 / n) * np.trace(In - A)) ** 2
-            except (np.linalg.LinAlgError, ZeroDivisionError):
+            denom = lam_eig + a
+            trA = np.sum(lam_eig / denom)
+            A_y = W @ (Vt_Xt_y / denom)
+            r = y - A_y
+            num = (1.0 / n) * float(r @ r)
+            den = (1.0 / n) * (n - trA)
+            if den <= 0.0:
                 return np.inf
+            max_diag_H = np.max(np.einsum("ij,j,ij->i", W, 1.0 / denom, W))
+            if max_diag_H > 1.0:
+                return np.inf
+            return num / (den * den)
 
-        # Initial guess
-        if a0 is None:
-            a0 = 1e-6  # Small perturbation to avoid numerical issues
+        upper = max(1.0, n * max(float(np.var(y)), 1e-12))
+        from scipy.optimize import minimize_scalar
 
-        # Bounds to ensure a >= 0
-        res = minimize(
-            GCV, x0=a0, bounds=Bounds(lb=1e-6, keep_feasible=True)
-        )  # May be relevant to pass some arguments here, or even use another minimizer.
-        a = res.x[0]
+        res = minimize_scalar(GCV, bounds=(1e-6, upper), method="bounded", options={"xatol": 1e-8})
+        a = res.x
 
         if self.verbose > 0:
             print(f"New ridge parameter: {a}")
@@ -387,7 +427,10 @@ class KernelRidgePredictionMachine(ConformalPredictiveSystem):
             self.Hy = H @ self.y
 
     def _update_Kinv(self, Kinv, k, d):
-        return np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        """Block matrix-inversion lemma to extend ``Kinv``; symmetrized to
+        counteract round-off drift over long online streams."""
+        M = np.block([[Kinv + d * Kinv @ k @ k.T @ Kinv, -d * Kinv @ k], [-d * k.T @ Kinv, d]])
+        return 0.5 * (M + M.T)
 
     @staticmethod
     def _update_K(K, k, kappa):
@@ -760,17 +803,30 @@ class DempsterHillConformalPredictiveSystem(ConformalPredictiveSystem):
     def learn_many(self, y):
         self.y = np.append(self.y, y)
 
-    def predict(self):
-        return self.predict_cpd()
+    def predict_cpd(self, x=None, return_update=False):
+        """Compute the conformal predictive distribution (labels only).
 
-    def predict_cpd(self):
+        Parameters
+        ----------
+        x : array-like, optional
+            Accepted for interface uniformity with other CPS classes; ignored
+            because the Dempster–Hill model uses only the labels.
+        return_update : bool, default False
+            If True, return ``(cpd, {"labels_only": y})``.
+
+        Returns
+        -------
+        DempsterHillConformalPredictiveDistribution
+        """
         Y = np.zeros(shape=self.y.shape[0] + 2)
         Y[0] = -np.inf
         Y[-1] = np.inf
         Y[1:-1] = self.y
         Y.sort()
-
-        return DempsterHillConformalPredictiveDistribution(Y, epsilon=self.epsilon)
+        cpd = DempsterHillConformalPredictiveDistribution(Y, epsilon=self.epsilon)
+        if return_update:
+            return cpd, {"labels_only": self.y.copy()}
+        return cpd
 
 
 class ConformalPredictiveDistributionFunction:
@@ -852,19 +908,19 @@ class ConformalPredictiveDistributionFunction:
         The convex hull of the epsilon/2 and 1-epsilon/2 quantiles make up
         the prediction set Gamma(epsilon)
 
-        If epsilon is a list/array, returns a MultiLevelPredictionInterval.
+        If epsilon is a list/array, returns a MultiLevelPredictionSet.
         """
         if epsilon is None:
             epsilon = self.epsilon
 
         # Handle multi-level epsilon
         if hasattr(epsilon, "__iter__"):
-            from .regressors import MultiLevelPredictionInterval
+            from .prediction_set import MultiLevelPredictionSet
 
             predictions = {}
             for eps in epsilon:
                 predictions[eps] = self.predict_set(tau, epsilon=eps, bounds=bounds, minimise_width=minimise_width)
-            return MultiLevelPredictionInterval(predictions)
+            return MultiLevelPredictionSet(predictions)
 
         if minimise_width:
             if bounds != "both":
@@ -926,8 +982,8 @@ class ConformalPredictiveDistributionFunction:
             else:
                 raise ValueError('bounds must be "both", "lower", or "upper"')
 
-        CP_int = get_ConformalPredictionInterval()
-        return CP_int(lower, upper, epsilon)
+        CPS = get_ContinuousPredictionSet()
+        return CPS([(lower, upper)], epsilon)
 
     def find_smallest_epsilon(self, tau, increment=0.001):
         """
@@ -1153,3 +1209,416 @@ class DempsterHillConformalPredictiveDistribution(ConformalPredictiveDistributio
             return np.nextafter(self.Y[j_between], np.inf)
         else:
             return np.inf
+
+
+class MondrianTreePredictionMachine(ConformalPredictiveSystem):
+    r"""Conformal predictive system based on Mondrian trees with leaf-local signed residuals.
+
+    This CPS uses the Mondrian tree partition together with the
+    **leaf-local signed residual** as the conformity measure.  For a
+    test point ``x``, the *category* is the leaf of the partition
+    containing ``x`` — or, when that leaf holds no training data, the
+    deepest ancestor whose subtree does (the empty-leaf walk-up
+    convention, see below).  If the category holds ``A`` training
+    points with y-sum ``B``, then for a candidate response ``y`` the
+    signed residuals (category mean **including** the candidate) are
+
+    * test point:       ``(A·y − B) / (A+1)``
+    * category point j: ``((A+1)·y_j − B − y) / (A+1)``
+
+    so that ``α_n^y − α_j^y = y − y_j`` is strictly increasing in ``y``
+    (slope 1).  The critical values are therefore exactly the ``A``
+    category labels, and the conformal predictive distribution is the
+    interval-valued step CDF of those labels (ALRW2 §7.2 band):
+
+        P̂(y) ∈ [ #{j : y_j < y}/A ,  #{j : y_j ≤ y}/A ].
+
+    The CPD is thus genuinely *Mondrian*: test points in different
+    categories (different label sets) receive different CPDs, and the
+    partition drives the prediction.  Once the partition is known the
+    CPD costs O(A log A) in the category size A.
+
+    Validity
+    --------
+    Given the X-only partition, the test label is exchangeable with the
+    category training labels (ALRW2 §2.2.9, Mondrian taxonomy) whenever
+    the conditional label distribution is (approximately) constant over
+    the category box, so the CPD is calibrated conditional on the
+    category — asymptotically in the category size A:
+
+        P( y ∈ Γ^ε | category ) → 1 − ε   as A → ∞.
+
+    At finite A the two-sided quantile set under-covers by ≈ (1 − Aε/2)/(A+1)
+    under exact exchangeability (see `.roadmap/archive/mondrian-cps-verification.md`).
+
+    Empty-leaf convention
+    ---------------------
+    A leaf may contain the test point but no training data.  The
+    category is then the deepest ancestor holding at least one
+    training point.  (Using the empty leaf itself would give a
+    p-value that is identically the randomisation ``τ`` for every ``y``
+    — not a valid randomised predictive system, as it never moves from
+    0 to 1.)
+
+    Note
+    ----
+    The partition is grown with the shared ``rnd_gen`` (advanced in
+    place), as in the Mondrian predictors; within one prediction step
+    use the ``return_update`` pattern if you evaluate the CPD more than
+    once.
+
+    Parameters
+    ----------
+    lifetime : float or {'sqrt_n', 'density'}
+        Mondrian tree depth budget L. Larger → more splits → smaller leaves.
+        Default 1.0.
+
+        Can also be a string for unsupervised automatic tuning (only X is
+        used; labels are never accessed):
+
+        - ``'sqrt_n'``: halt when the leaf count drops to ≤ √n.
+        - ``'density'``: choose τ maximising Σ_leaf n_leaf · log(n_leaf / V_leaf).
+    epsilon : float
+        Default significance level. Default 0.1.
+    rnd_state : int, optional
+        Seed for reproducibility.
+    verbose : int
+        Verbosity level (0 = silent).
+    max_depth : int or None
+        Hard depth cap. Nodes at depth >= max_depth become leaves regardless
+        of remaining lifetime. None = no cap.
+    feature_weights : {'variance'} or array-like of shape (d,) or None
+        Unsupervised feature importance for split dimension sampling. Labels
+        are never accessed.
+
+        - ``None`` (default): uniform — standard isotropic Mondrian.
+        - ``'variance'``: split probabilities ∝ population variance per
+          feature. High-variance dimensions are sampled more often.
+        - array of shape (d,): explicit non-negative weights (normalised
+          internally; need not sum to 1).
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "lifetime", "epsilon", "rnd_state", "verbose", "max_depth",
+        "feature_weights",
+    )
+    _SAVE_STATE: tuple = ("X", "y")
+
+    def __init__(
+        self,
+        lifetime: float | str = 1.0,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        max_depth: int | None = None,
+        feature_weights: str | NDArray | None = None,
+    ) -> None:
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density'."
+            )
+        if isinstance(feature_weights, str) and feature_weights not in ("variance",):
+            raise ValueError(
+                f"Unknown feature_weights string {feature_weights!r}. "
+                "Recognised value: 'variance'."
+            )
+        super().__init__(epsilon=epsilon)
+        self.lifetime = lifetime
+        self.feature_weights = feature_weights
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.max_depth = max_depth
+        self.X: NDArray | None = None
+        self.y: NDArray | None = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch-initialize with training data.
+
+        Parameters
+        ----------
+        X : ndarray, shape (n, d)
+        y : ndarray, shape (n,)  — real-valued labels
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        y = np.asarray(y, dtype=float).ravel()
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have the same length")
+        self.X = X.copy()
+        self.y = y.copy()
+
+    def learn_one(self, x: NDArray, y: float, precomputed: dict | None = None) -> None:
+        """Incrementally add one observation.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        y : float
+        precomputed : dict, optional
+            Not used. Present for API consistency.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, float(y))
+
+    def predict_cpd(self, x, return_update=False):
+        r"""Compute the conformal predictive distribution for test object x.
+
+        The CPD is the interval-valued step CDF of the training labels
+        in the *category* of ``x`` — the leaf of the Mondrian partition
+        containing ``x``, or, when that leaf holds no training data,
+        the deepest ancestor whose subtree does.
+
+        Parameters
+        ----------
+        x : array-like, shape (d,)
+        return_update : bool
+            If True, return ``(cpd, precomputed)`` where ``precomputed`` is a
+            dict that can be passed to ``learn_one``. For Mondrian trees this
+            is currently empty but reserved for future incremental updates.
+
+        Returns
+        -------
+        MondrianPredictiveDistributionFunction
+            The conformal predictive distribution for x.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        n = self._safe_size_check(self.X)
+
+        if n == 0:
+            # Empty training set → completely non-informative CPS
+            Y = np.array([-np.inf, np.inf])
+            cpd = MondrianPredictiveDistributionFunction(Y, np.array([0.0, 1.0]), np.array([0.0, 1.0]), epsilon=self.epsilon)
+            if return_update:
+                return cpd, {}
+            return cpd
+
+        # Lazy imports
+        MondrianTree = _get_mondrian_tree()
+        _select_category, _training_indices = _get_cps_helpers()
+
+        # Build Mondrian tree on augmented data [X; x]
+        X_aug = np.vstack([self.X, x])
+        tree = MondrianTree.grow(
+            X_aug,
+            self.rnd_gen,
+            lifetime=self.lifetime,
+            x_test=x,
+            max_depth=self.max_depth,
+            feature_weights=self.feature_weights,
+            verbose=self.verbose,
+        ).root
+
+        # Category: the leaf containing x, or (empty-leaf convention) the
+        # deepest ancestor holding at least one training point.
+        category = _select_category(tree, x, n)
+        labels = self.y[_training_indices(category, n)]
+
+        # Knots at the sorted category labels; signed-residual monotonicity
+        # (α_n^y − α_j^y = y − y_j) makes the category labels the critical
+        # values, so the category mean B does not appear in the final CPD.
+        A = labels.size
+        Y = np.empty(A + 2)
+        Y[0] = -np.inf
+        Y[-1] = np.inf
+        Y[1:-1] = np.sort(labels)
+
+        # Knot bands: L[j] = #{labels < Y[j]}/A, U[j] = #{labels <= Y[j]}/A
+        L = np.empty(A + 2)
+        U = np.empty(A + 2)
+        L[0] = U[0] = 0.0
+        L[-1] = U[-1] = 1.0
+        L[1:-1] = np.searchsorted(Y[1:-1], Y[1:-1], side="left") / A
+        U[1:-1] = np.searchsorted(Y[1:-1], Y[1:-1], side="right") / A
+
+        cpd = MondrianPredictiveDistributionFunction(Y, L, U, epsilon=self.epsilon)
+
+        if return_update:
+            return cpd, {}
+        else:
+            return cpd
+
+    def _safe_size_check(self, X):
+        """Helper to check if X is None or empty."""
+        if X is None:
+            return 0
+        return X.shape[0]
+
+
+class MondrianPredictiveDistributionFunction(ConformalPredictiveDistributionFunction):
+    r"""Conformal predictive distribution for the Mondrian signed-residual CPS.
+
+    The CPD is a step function whose knots are at the sorted *category*
+    labels ``Y[1:-1]``.  At each knot ``Y[j]`` the lower and upper CDF
+    bounds are
+
+    .. math::
+
+        L[j] = \frac{|\{i : y_i < Y[j]\}|}{A}, \qquad
+        U[j] = \frac{|\{i : y_i \le Y[j]\}|}{A},
+
+    where :math:`A` is the category size (number of training points in
+    the Mondrian category).  The use of strict ``<`` for ``L`` and ``<=``
+    for ``U`` follows the interval-valued CPD definition in [ALRW2 §7.2]:
+    the lower bound excludes ties whereas the upper bound includes them,
+    so that :math:`L(y) \le U(y)` for every :math:`y`.
+
+    Parameters
+    ----------
+    Y : ndarray
+        Sorted array of length ``A+2`` with ``Y[0] = -inf``, ``Y[-1] = +inf``,
+        and ``Y[1:-1]`` = the sorted category labels.
+    L : ndarray
+        Lower CDF bounds, same length as ``Y``.
+    U : ndarray
+        Upper CDF bounds, same length as ``Y``.
+    epsilon : float, default 0.1
+        Default significance level.
+    """
+
+    def __init__(self, Y, L, U, epsilon=default_epsilon):
+        """Initialise the CPD.
+
+        Parameters
+        ----------
+        Y : ndarray
+            Sorted knot locations with ``Y[0] = -inf``, ``Y[-1] = +inf``.
+        L : ndarray
+            Lower CDF bounds at each knot.
+        U : ndarray
+            Upper CDF bounds at each knot.
+        epsilon : float, optional
+            Default significance level.
+        """
+        super().__init__(epsilon=epsilon)
+        self.Y = Y
+        self.L = L
+        self.U = U
+
+    def _cdf_bounds(self, y):
+        r"""Compute the lower and upper CDF bounds at ``y``.
+
+        Uses binary search (``np.searchsorted``) on ``Y[1:-1]`` to locate
+        ``y``.  When ``y`` coincides with one or more knots, the lower bound
+        is ``L[left]`` (first matching knot's ``L``) and the upper bound is
+        ``U[right-1]`` (last matching knot's ``U``).  When ``y`` lies strictly
+        between two knots the band collapses to the single CDF value
+        ``L[i] = U[i - 1]``, where ``i`` is the first knot strictly above
+        ``y`` (no ties occur between knots, so no randomisation is needed).
+        """
+        if y == self.Y[0]:
+            return 0.0, 0.0
+        if y == self.Y[-1]:
+            return 1.0, 1.0
+        if self.Y.size == 2:
+            # No knots (empty category): completely non-informative band.
+            return 0.0, 1.0
+        # Search in Y[1:-1] which contains the actual data points
+        left = np.searchsorted(self.Y[1:-1], y, side="left") + 1
+        right = np.searchsorted(self.Y[1:-1], y, side="right") + 1
+        if left < right:
+            # y matches one or more breakpoints (multiple occurrences in Y[1:-1])
+            # left and right are indices in Y (after +1 offset)
+            # Matches span from Y[left] to Y[right-1] (in Y indexing)
+            return self.L[left], self.U[right - 1]
+        else:
+            # y lies strictly between knots Y[i-1] and Y[i]; the CDF is the
+            # single value #{labels <= y}/A = L[i] = U[i - 1].
+            i = left
+            return self.L[i], self.U[i - 1]
+
+    def _compute_quantile(self, p, tau):
+        """Compute the p-quantile of the CPD.
+
+        Returns the smallest ``y`` such that :math:`\\Pi(y, \\tau) \\ge p`.
+
+        Two types of CDF level are checked:
+
+        * **At knot** ``Y[j]`` (``j = 1,\\dots,n``): the smoothed CDF is
+          :math:`(1-\\tau) L[j] + \\tau U[j]` (the randomisation band only
+          exists at knots, where ties occur).
+        * **Between** ``Y[j]`` and ``Y[j+1]`` (``j = 0,\\dots,n``): the CDF
+          is the single, non-randomised value ``U[j] = L[j+1]``
+          (``#{labels <= Y[j]} / A``).
+
+        The quantile is whichever yields the smaller ``y``: the knot
+        ``Y[j_{\\text{at}}]`` or the value just above ``Y[j_{\\text{between}}]``.
+        Tie-breaking is consistent with :meth:`_cdf_bounds` — ties cause
+        ``L`` and ``U`` to differ but the smallest feasible ``y`` is always
+        returned.
+        """
+        n = len(self.Y) - 2  # number of category labels
+
+        if p <= 0:
+            return -np.inf
+        if p > 1:
+            return np.inf
+        if n == 0:
+            # No knots: the band is [0, 1] everywhere, so the smoothed CDF
+            # is the constant tau; the quantile is -inf iff tau >= p.
+            return -np.inf if tau >= p else np.inf
+
+        # At-knot CDF values for j = 1..n.
+        at_levels = (1 - tau) * self.L[1:-1] + tau * self.U[1:-1]
+        at_idx = np.where(at_levels >= p)[0]
+        j_at = at_idx[0] + 1 if len(at_idx) > 0 else len(self.Y)
+
+        # Between-knot CDF values for j = 0..n: U[j] = L[j + 1].
+        between_levels = self.U[: n + 1]
+        between_idx = np.where(between_levels >= p)[0]
+        j_between = between_idx[0] if len(between_idx) > 0 else n + 1
+
+        if j_at <= j_between and j_at < len(self.Y):
+            # At-breakpoint reached first (or simultaneously)
+            return self.Y[j_at]
+        elif j_between < len(self.Y):
+            # Between-level reached first; quantile is just above Y[j_between]
+            if j_between == 0:
+                return -np.inf
+            return np.nextafter(self.Y[j_between], np.inf)
+        else:
+            return np.inf
+
+    def plot(self, tau=None, ax=None):
+        """Plot the conformal predictive distribution.
+
+        Parameters
+        ----------
+        tau : float, optional
+            Smoothing variable in ``[0, 1]``.  If ``None``, plots both
+            bounds ``L(y)`` and ``U(y)`` with a shaded region.
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.  If ``None``, a new figure is created.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The figure object.
+        """
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = ax.figure
+
+        if tau is None:
+            ax.step(self.Y[1:-1], self.L[1:-1], label=r"$\Pi(y, 0)$", where="post")
+            ax.step(self.Y[1:-1], self.U[1:-1], label=r"$\Pi(y, 1)$", where="post")
+            ax.fill_between(self.Y[1:-1], self.L[1:-1], self.U[1:-1], step="post", alpha=0.5, color="green")
+            ax.legend()
+        else:
+            ax.step(self.Y[1:-1], (1 - tau) * self.L[1:-1] + tau * self.U[1:-1], label=r"$\Pi(y, \tau)$", where="post")
+            ax.legend()
+        ax.set_ylabel("cumulative probability")
+        ax.set_xlabel(r"$y$")
+        fig.tight_layout()
+        plt.close(fig)  # Prevent implicit display
+        return fig

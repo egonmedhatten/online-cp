@@ -14,3 +14,4 @@ scripts/sync-to-desktop
 scripts/sync-from-desktop
 uv.lock
 .roadmap/
+.env

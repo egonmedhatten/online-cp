@@ -7,3 +7,7 @@
 ::: online_cp.CPS.NearestNeighboursPredictionMachine
 
 ::: online_cp.CPS.DempsterHillConformalPredictiveSystem
+
+::: online_cp.CPS.MondrianTreePredictionMachine
+
+::: online_cp.CPS.MondrianPredictiveDistributionFunction

@@ -59,86 +59,58 @@ except ImportError:
 
     HAS_NUMBA = False
 
+from online_cp.mondrian._inspection import _MondrianClassifierInspection
+from online_cp.mondrian.tree import (
+    MondrianTree,
+    _assign_counts,
+    _build_tree_summary,
+    _collect_leaves,
+    _find_leaf,
+    _summarize_tree,
+)
+from online_cp.prediction_set import (
+    DiscretePredictionSet,
+    MultiLevelPredictionSet,
+)
+
 __all__ = [
     "ConformalNearestNeighboursClassifier",
     "ConformalSupportVectorMachine",
-    "ConformalPredictionSet",
+    "ConformalPredictionSet",  # deprecated (use DiscretePredictionSet)
     "MultiLevelPredictionSet",
+    "ConformalMondrianTreeClassifier",
+    "ConformalMondrianForestClassifier",
 ]
 
 default_epsilon = 0.1
 
 
-class ConformalPredictionSet:
-    """A prediction set produced by a conformal classifier.
+def _deprecation_msg(old: str, new: str) -> None:
+    warnings.warn(
+        f"`{old}` is deprecated and will be removed in a future release. "
+        f"Use `{new}` from `online_cp.prediction_set` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
-    Parameters
-    ----------
-    Gamma : np.ndarray
-        Array of predicted labels in the set.
-    epsilon : float
-        Significance level at which the set was constructed.
+
+class ConformalPredictionSet(DiscretePredictionSet):
+    """Deprecated. Use :class:`DiscretePredictionSet` instead.
+
+    The old classifier prediction set is now the
+    :class:`online_cp.prediction_set.DiscretePredictionSet` class. This name
+    is kept for backward compatibility and emits a :class:`DeprecationWarning`
+    on construction.
     """
 
     def __init__(self, Gamma: NDArray[Any], epsilon: float) -> None:
-        self.elements = Gamma
-        self.epsilon = epsilon
-
-    def __contains__(self, y: Any) -> bool:
-        return y in self.elements
-
-    def __len__(self) -> int:
-        return self.elements.shape[0]
-
-    def __repr__(self):
-        return repr(self.elements)
-
-    def __str__(self):
-        return str(self.elements)
-
-    def size(self):
-        return self.__len__()
+        _deprecation_msg("ConformalPredictionSet", "DiscretePredictionSet")
+        super().__init__(Gamma, epsilon)
 
 
-class MultiLevelPredictionSet:
-    """Prediction sets at multiple significance levels.
-
-    Returned when ``predict`` is called with an array-like ``epsilon``.
-
-    Parameters
-    ----------
-    predictions : dict
-        Mapping ``{epsilon: ConformalPredictionSet}``.
-    """
-
-    def __init__(self, predictions: dict[float, ConformalPredictionSet]) -> None:
-        self._predictions = dict(sorted(predictions.items()))
-
-    @property
-    def levels(self) -> list[float]:
-        """Sorted list of significance levels."""
-        return list(self._predictions.keys())
-
-    def __getitem__(self, eps: float) -> ConformalPredictionSet:
-        return self._predictions[eps]
-
-    def __iter__(self):
-        return iter(self._predictions.items())
-
-    def __len__(self) -> int:
-        return len(self._predictions)
-
-    def __contains__(self, y: Any) -> bool:
-        """True if y is covered at all levels."""
-        return all(y in gamma for gamma in self._predictions.values())
-
-    def coverage(self, y: Any) -> dict[float, bool]:
-        """Return dict of {epsilon: bool} indicating coverage at each level."""
-        return {eps: (y in gamma) for eps, gamma in self._predictions.items()}
-
-    def __repr__(self):
-        parts = [f"  ε={eps}: {gamma}" for eps, gamma in self._predictions.items()]
-        return "MultiLevelPredictionSet(\n" + "\n".join(parts) + "\n)"
+# ``MultiLevelPredictionSet`` is already the new, canonical name imported from
+# ``online_cp.prediction_set`` and re-exported here. The old classifier and
+# regressor multi-level classes have been unified into this single class.
 
 
 class ConformalClassifier(SerializableMixin):
@@ -189,13 +161,13 @@ class ConformalClassifier(SerializableMixin):
                 for y in self.label_space:
                     if p_values[y] > eps:
                         Gamma.append(y)
-                predictions[eps] = ConformalPredictionSet(np.array(Gamma), eps)
+                predictions[eps] = DiscretePredictionSet(np.array(Gamma), eps)
             return MultiLevelPredictionSet(predictions)
         Gamma = []
         for y in self.label_space:
             if p_values[y] > epsilon:
                 Gamma.append(y)
-        return ConformalPredictionSet(np.array(Gamma), epsilon)
+        return DiscretePredictionSet(np.array(Gamma), epsilon)
 
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
@@ -565,9 +537,9 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             epsilon = self.epsilon
 
         if self.label_space is None:
-            Gamma = ConformalPredictionSet(np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0])
+            Gamma = DiscretePredictionSet(np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0])
             if hasattr(epsilon, "__iter__"):
-                Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                Gamma = MultiLevelPredictionSet({eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon})
             if return_update:
                 return (Gamma, {}, None) if return_p_values else (Gamma, None)
             return (Gamma, {}) if return_p_values else Gamma
@@ -589,7 +561,12 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                         D, label_indices=label_indices
                     )
 
-                    Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    # Intentional division: a zero different-label distance (a
+                    # duplicate test point / label with no distinct neighbours)
+                    # legitimately yields +inf, which nan_to_num maps to inf.
+                    # Suppress the expected divide-by-zero warning.
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
                     return label, self._compute_p_value(Alpha, tau, "nonconformity")
 
                 results = Parallel(n_jobs=self.n_jobs)(delayed(process_label)(label) for label in self.label_space)
@@ -602,7 +579,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                         D, label_indices=label_indices
                     )
 
-                    Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    # Intentional division (see parallel branch above): a zero
+                    # different-label distance legitimately yields +inf.
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
                     p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
             time_compute_p_values = time.time() - tic
 
@@ -888,11 +868,11 @@ class ConformalClassifierWrapper(ConformalClassifier):
 
         if self.label_space is None or self.X is None or self.y.shape[0] == 0:
             if self.label_space is None:
-                Gamma = ConformalPredictionSet(
+                Gamma = DiscretePredictionSet(
                     np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
                 )
                 if hasattr(epsilon, "__iter__"):
-                    Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                    Gamma = MultiLevelPredictionSet({eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon})
                 p_values = {}
             else:
                 Gamma, p_values = self._fallback_prediction(epsilon, tau)
@@ -1219,11 +1199,11 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         if self.label_space is None or self.X is None or self.y.shape[0] == 0:
             # No training data — predict all labels (or empty if no label_space)
             if self.label_space is None:
-                Gamma = ConformalPredictionSet(
+                Gamma = DiscretePredictionSet(
                     np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
                 )
                 if hasattr(epsilon, "__iter__"):
-                    Gamma = MultiLevelPredictionSet({eps: ConformalPredictionSet(np.array([]), eps) for eps in epsilon})
+                    Gamma = MultiLevelPredictionSet({eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon})
                 if return_p_values:
                     return Gamma, {}
                 return Gamma
@@ -1480,3 +1460,1150 @@ def _smo_solve(K, y, C, tol=1e-3, max_iter=5000, warm_start=None):
         b = 0.0
 
     return alpha, b
+
+
+# ---------------------------------------------------------------------------
+# Mondrian tree / forest conformal classifiers
+# ---------------------------------------------------------------------------
+
+
+class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalClassifier):
+    """Conformal predictor using Mondrian trees.
+
+    A full (transductive) conformal predictor. At each prediction step the tree
+    is rebuilt from the augmented bag {train ∪ (x_test, y_cand)}, guaranteeing
+    exact validity under exchangeability (ALRW2 §2.2.9).
+
+    The nonconformity measure is (Leaf-Local Laplace Smoothing):
+
+        α_i = 1 - (C_{leaf(x_i), y_i} + λ) / (N_leaf(x_i) + K * λ)
+
+    where C_{leaf, k} is the count of class k in the leaf, N_leaf is the
+    number of training points in the leaf, K is the number of classes, and
+    λ (`lambda_`) is the Laplace smoothing parameter (default 1.0). This
+    eliminates the discrete ties of raw fractions while confining the
+    transductive delta strictly to leaf_star (O(1) blast radius).
+
+    Parameters
+    ----------
+    lifetime : float or {'sqrt_n', 'density'}
+        Depth budget L for the Mondrian tree. Splits occur at times sampled
+        from Exp(sum of feature ranges). A split is created only if its
+        cumulative time is below L; otherwise the node becomes a leaf.
+
+        Can also be a string for unsupervised automatic tuning (only X is
+        used; labels are never accessed):
+
+        - ``'sqrt_n'``: descend the master tree toward the test point and
+          halt when the leaf count drops to ≤ √n. Coarsens the partition in
+          sparse regions.
+        - ``'density'``: sweep all split events of a master tree and choose
+          the τ that maximises the histogram log-likelihood
+          Σ_leaf n_leaf · log(n_leaf / V_leaf). Adapts to feature density.
+
+        **Effect on prediction quality:**
+        - Too small (e.g. 0.01): almost no splits → one big leaf → NCM is
+          just the global class frequency → very weak discrimination.
+        - Too large (e.g. np.inf): splits until every leaf is a singleton →
+          NCM is 0 for every point → p-values are all equal (τ) → prediction
+          sets are either full or empty, with no discrimination.
+        - Well-chosen (default 1.0): leaves contain a handful of points,
+          NCMs vary meaningfully, prediction sets are informative.
+
+        **Scaling guidance:** `lifetime` is in the same units as the sum of
+        feature ranges. For standardised data (zero mean, unit variance)
+        a value of 1–5 is a reasonable starting range. For raw (unstandardised)
+        features with large ranges (e.g. pixel values 0–255) you may need
+        lifetime in the hundreds. When in doubt, standardise your features
+        first and use the default.
+    lambda_ : float
+        Laplace smoothing parameter λ. Controls the strength of the uniform
+        prior added to each leaf's class counts. Default 1.0 (standard Laplace).
+        Larger values push NCMs towards 1 - 1/K (uniform), reducing the
+        influence of small leaves. Set to 0.0 to recover raw fraction NCMs.
+    label_space : array-like, optional
+        Set of possible labels. If None, inferred from training data.
+    epsilon : float
+        Default significance level for predictions.
+    rnd_state : int, optional
+        Seed for reproducible tree construction.
+    verbose : int
+        Verbosity level (0 = silent).
+    max_depth : int or None
+        Hard depth cap. Nodes at depth >= max_depth become leaves regardless
+        of remaining lifetime. None = no cap.
+    feature_weights : {'variance'} or array-like of shape (d,) or None
+        Unsupervised feature importance for split dimension sampling. Labels
+        are never accessed.
+
+        - ``None`` (default): uniform — standard isotropic Mondrian.
+        - ``'variance'``: split probabilities ∝ population variance per
+          feature. High-variance dimensions are sampled more often.
+        - array of shape (d,): explicit non-negative weights (normalised
+          internally; need not sum to 1).
+
+    Attributes
+    ----------
+    X : ndarray of shape (n, d)
+        Training feature array.
+    y : ndarray of shape (n,)
+        Training labels.
+    label_space : ndarray
+        Sorted unique labels.
+    label_to_idx : dict
+        Mapping from label to integer index 0..K-1.
+    rnd_gen : numpy.random.Generator
+        Random generator instance.
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "lifetime", "lambda_", "label_space", "epsilon", "rnd_state",
+        "verbose", "max_depth", "feature_weights", "online",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space", "_online_tree")
+
+    def __init__(
+        self,
+        lifetime: float | str = 1.0,
+        lambda_: float = 1.0,
+        label_space: NDArray | None = None,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        max_depth: int | None = None,
+        feature_weights: str | NDArray | None = None,
+        online: bool = False,
+    ):
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density'."
+            )
+        if isinstance(feature_weights, str) and feature_weights not in ("variance",):
+            raise ValueError(
+                f"Unknown feature_weights string {feature_weights!r}. "
+                "Recognised value: 'variance'."
+            )
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
+        super().__init__(epsilon=epsilon)
+        self.lifetime = lifetime
+        self.feature_weights = feature_weights
+        self.lambda_ = lambda_
+        self.label_space = label_space
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.max_depth = max_depth
+        self.online = online
+
+        self.X = None
+        self.y = None
+        self.label_to_idx = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+        self._last_tree = None
+        self._online_tree = None
+        self._pending_tree = None  # extension scored by the last predict (online)
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch training phase.
+
+        Args:
+            X: Training features (n, d)
+            y: Training labels (n,) — any hashable values
+        """
+        X = np.asarray(X)
+        y = np.asarray(y)
+
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have same length")
+
+        self.X = X.copy()
+        self.y = y.copy()
+
+        # Infer or validate label space
+        if self.label_space is None:
+            self.label_space = np.unique(y)
+        else:
+            self.label_space = np.asarray(self.label_space)
+
+        # Build label-to-index mapping
+        self.label_to_idx = {label: idx for idx, label in enumerate(self.label_space)}
+
+        if self.online:
+            self._online_tree = MondrianTree.grow(
+                self.X, self.rnd_gen,
+                lifetime=self.lifetime, feature_weights=self.feature_weights,
+            )
+
+        if self.verbose >= 1:
+            print(
+                f"[MondrianTree] Initialized with {X.shape[0]} training points, "
+                f"{X.shape[1]} dimensions, {len(self.label_space)} classes"
+            )
+
+    def learn_one(self, x: NDArray, y: Any, precomputed: dict | None = None) -> None:
+        """Online learning step.
+
+        Args:
+            x: New feature vector (d,) or (1, d)
+            y: New label (any hashable value in label_space)
+            precomputed: Update dict from ``predict(..., return_update=True)`` (or
+                ``compute_p_value(..., return_update=True)``) for this same ``x``.
+                In online mode, if it carries the extension that scored ``x`` the
+                persisted tree becomes that exact extension, so the realised
+                stream is a single consistent Mondrian process (exact online
+                validity). Without it — or if it is stale — a fresh ``extend`` is
+                drawn. The last ``predict`` is also cached, so the plain
+                ``predict(x)`` → ``learn_one(x, y)`` loop reuses it automatically.
+        """
+        x = np.asarray(x).ravel()
+
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+
+        if y not in self.label_to_idx:
+            # New label encountered
+            new_idx = len(self.label_space)
+            self.label_space = np.append(self.label_space, y)
+            self.label_to_idx[y] = new_idx
+
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, y)
+        if self.online:
+            cand = precomputed.get("online_tree") if precomputed else None
+            if not self._is_consistent_extension(cand, x):
+                cand = getattr(self, "_pending_tree", None)
+            self._pending_tree = None
+            self._online_tree = (
+                cand
+                if self._is_consistent_extension(cand, x)
+                else self._online_tree.extend(x, self.rnd_gen)
+            )
+
+    def _is_consistent_extension(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted online tree extended by exactly ``x``.
+
+        Guards reuse of a scored extension: a stale one (the base has advanced
+        since it was scored) fails the row-count/last-row check, so a fresh
+        ``extend`` is drawn instead.
+        """
+        return (
+            cand is not None
+            and self._online_tree is not None
+            and cand.X.shape[0] == self._online_tree.X.shape[0] + 1
+            and np.array_equal(cand.X[-1], np.asarray(x, dtype=float).ravel())
+        )
+
+    def predict(
+        self,
+        x: NDArray,
+        epsilon: float | NDArray | None = None,
+        return_p_values: bool = False,
+        return_update: bool = False,
+    ) -> ConformalPredictionSet | MultiLevelPredictionSet | tuple:
+        """Make conformal prediction.
+
+        Rebuilds the tree from the augmented bag [X, y, x, ?] where ? ranges
+        over label_space. For each candidate label, computes nonconformity
+        scores and p-values.
+
+        Args:
+            x: Test feature vector (d,) or (1, d)
+            epsilon: Significance level(s). If None, uses self.epsilon.
+                     Can be scalar or array-like.
+            return_p_values: If True, also return dict of p-values keyed by label.
+            return_update: If True, also return dict with tree info for efficiency.
+
+        Returns:
+            ConformalPredictionSet: If epsilon is scalar and neither flag is True
+            MultiLevelPredictionSet: If epsilon is array-like
+            Tuple: If return_p_values or return_update flag is set
+        """
+        x = np.asarray(x).ravel()
+
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        # Form augmented feature matrix (same for all candidates)
+        X_aug = np.vstack([self.X, x])
+        n = self.X.shape[0]
+        n_total = n + 1
+        K = len(self.label_space)
+
+        # Build the Mondrian partition from the augmented bag (unsupervised in X).
+        if self.online:
+            ext_tree = self._online_tree.extend(x, self.rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
+        else:
+            self._pending_tree = None
+            tree = MondrianTree.grow(
+                X_aug,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                x_test=x,
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
+
+        # Find leaf containing test point (index n in X_aug)
+        leaf_star = _find_leaf(tree, X_aug[n])
+
+        # Base state: assign training-only counts (test point excluded from counts)
+        _assign_counts(tree, self.y, self.label_to_idx, K, n_train=n)
+
+        n_star = leaf_star.n_points()  # leaf size including test point's structural slot
+        n_star_train = n_star - 1  # training-only count in leaf_star
+        c = leaf_star.counts.copy()  # training-only class counts per class, shape (K,)
+
+        # Leaf-Local Laplace Smoothing
+        LAMBDA = self.lambda_
+        base_ncm = np.empty(n)
+        for leaf in _collect_leaves(tree):
+            n_leaf = leaf.n_points()
+            has_test = int(n) in leaf.indices
+            n_train_leaf = n_leaf - 1 if has_test else n_leaf
+            denom = n_train_leaf + K * LAMBDA
+            for idx in leaf.indices:
+                if idx >= n:
+                    continue  # skip the test point's structural slot
+                yi = self.label_to_idx[self.y[idx]]
+                base_ncm[idx] = 1.0 - (leaf.counts[yi] + LAMBDA) / denom
+
+        # ncm_test[k]: test point's NCM under candidate label k (Laplace)
+        denom_test = n_star_train + 1.0 + K * LAMBDA
+        ncm_test = 1.0 - (c + 1.0 + LAMBDA) / denom_test  # shape (K,)
+
+        # Vectorised (K, n) broadcast: compare all training NCMs against all ncm_test[k]
+        _TOL = 1e-9
+        diff = base_ncm[np.newaxis, :] - ncm_test[:, np.newaxis]  # (K, n)
+        gt = np.sum(diff > _TOL, axis=1).astype(np.int64)  # (K,)
+        eq = np.sum(np.abs(diff) <= _TOL, axis=1).astype(np.int64)  # (K,)
+
+        # Delta correction: O(K²) — only leaf_star training points are affected.
+        # Under candidate k, both numerator (if j==k) and denominator change.
+        # All c[j] points of class j have identical base and actual NCMs.
+        denom_base_star = n_star_train + K * LAMBDA
+        for j in range(K):
+            if c[j] == 0:
+                continue
+            base_j = 1.0 - (c[j] + LAMBDA) / denom_base_star
+            count_j = int(c[j])
+            for k in range(K):
+                actual_j = 1.0 - (c[j] + LAMBDA + (1.0 if j == k else 0.0)) / denom_test
+                ncm_test_k = ncm_test[k]
+                # Classify base_j vs ncm_test_k
+                if base_j > ncm_test_k + _TOL:
+                    before = 0  # GT
+                elif abs(base_j - ncm_test_k) <= _TOL:
+                    before = 1  # EQ
+                else:
+                    before = 2  # LT
+                # Classify actual_j vs ncm_test_k
+                if actual_j > ncm_test_k + _TOL:
+                    after = 0
+                elif abs(actual_j - ncm_test_k) <= _TOL:
+                    after = 1
+                else:
+                    after = 2
+                if before == after:
+                    continue
+                if before == 0 and after == 1:
+                    gt[k] -= count_j
+                    eq[k] += count_j
+                elif before == 0 and after == 2:
+                    gt[k] -= count_j
+                elif before == 1 and after == 2:
+                    eq[k] -= count_j
+                elif before == 1 and after == 0:
+                    eq[k] -= count_j
+                    gt[k] += count_j
+                elif before == 2 and after == 1:
+                    eq[k] += count_j
+                elif before == 2 and after == 0:
+                    gt[k] += count_j
+
+        eq += 1  # test point always EQ to itself
+        tau = self.rnd_gen.uniform(0, 1)
+        p_values_arr = (gt + tau * eq) / n_total
+        p_values = {label: float(p_values_arr[ki]) for ki, label in enumerate(self.label_space)}
+
+        # Construct prediction set(s)
+        result = self._compute_Gamma(p_values, epsilon)
+
+        # Cache the tree for inspection utilities
+        self._last_tree = tree
+
+        # Handle return flags
+        if return_update and return_p_values:
+            return result, p_values, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
+        elif return_p_values:
+            return result, p_values
+        elif return_update:
+            return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
+        else:
+            return result
+
+    def compute_p_value(self, x: NDArray, y: Any, return_update: bool = False) -> float | tuple[float, dict]:
+        """Compute p-value for a single candidate label.
+
+        Args:
+            x: Test feature vector (d,)
+            y: Candidate label
+            return_update: If True, also return dict with tree info
+
+        Returns:
+            P-value (float) or (p-value, dict) if return_update=True
+        """
+        x = np.asarray(x).ravel()
+
+        if y not in self.label_to_idx:
+            raise ValueError(f"Label {y} not in label_space")
+
+        # Build augmented dataset
+        X_aug = np.vstack([self.X, x])
+        n = self.X.shape[0]
+        n_total = n + 1
+        K = len(self.label_space)
+        label_idx = self.label_to_idx[y]
+
+        # Build the Mondrian partition from the augmented bag (unsupervised in X).
+        if self.online:
+            ext_tree = self._online_tree.extend(x, self.rnd_gen)
+            self._pending_tree = ext_tree
+            tree = ext_tree.root
+        else:
+            self._pending_tree = None
+            tree = MondrianTree.grow(
+                X_aug,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                x_test=X_aug[n],
+                max_depth=self.max_depth,
+                feature_weights=self.feature_weights,
+                verbose=self.verbose,
+            ).root
+
+        # Find leaf and assign training-only counts
+        leaf_star = _find_leaf(tree, X_aug[n])
+        _assign_counts(tree, self.y, self.label_to_idx, K, n_train=n)
+
+        n_star = leaf_star.n_points()
+        n_star_train = n_star - 1
+        c = leaf_star.counts.copy()
+
+        # Leaf-Local Laplace Smoothing
+        LAMBDA = self.lambda_
+        denom_test = n_star_train + 1.0 + K * LAMBDA
+        ncm_test_k = 1.0 - (float(c[label_idx]) + 1.0 + LAMBDA) / denom_test
+
+        # Build base_ncm for all training points (Laplace)
+        base_ncm = np.empty(n)
+        for leaf in _collect_leaves(tree):
+            n_leaf = leaf.n_points()
+            has_test = int(n) in leaf.indices
+            n_train_leaf = n_leaf - 1 if has_test else n_leaf
+            denom = n_train_leaf + K * LAMBDA
+            for idx in leaf.indices:
+                if idx >= n:
+                    continue
+                yi = self.label_to_idx[self.y[idx]]
+                base_ncm[idx] = 1.0 - (leaf.counts[yi] + LAMBDA) / denom
+
+        _TOL = 1e-9
+        diff = base_ncm - ncm_test_k
+        gt = int(np.sum(diff > _TOL))
+        eq = int(np.sum(np.abs(diff) <= _TOL))
+
+        # Delta correction: O(K) — for each class j in leaf_star
+        denom_base_star = n_star_train + K * LAMBDA
+        for j in range(K):
+            if c[j] == 0:
+                continue
+            base_j = 1.0 - (c[j] + LAMBDA) / denom_base_star
+            actual_j = 1.0 - (c[j] + LAMBDA + (1.0 if j == label_idx else 0.0)) / denom_test
+            if base_j > ncm_test_k + _TOL:
+                before = 0
+            elif abs(base_j - ncm_test_k) <= _TOL:
+                before = 1
+            else:
+                before = 2
+            if actual_j > ncm_test_k + _TOL:
+                after = 0
+            elif abs(actual_j - ncm_test_k) <= _TOL:
+                after = 1
+            else:
+                after = 2
+            if before == after:
+                continue
+            count_j = int(c[j])
+            if before == 0 and after == 1:
+                gt -= count_j
+                eq += count_j
+            elif before == 0 and after == 2:
+                gt -= count_j
+            elif before == 1 and after == 2:
+                eq -= count_j
+            elif before == 1 and after == 0:
+                eq -= count_j
+                gt += count_j
+            elif before == 2 and after == 1:
+                eq += count_j
+            elif before == 2 and after == 0:
+                gt += count_j
+
+        eq += 1  # test point always EQ to itself
+        tau = self.rnd_gen.uniform(0, 1)
+        p_val = float((gt + tau * eq) / n_total)
+
+        # Cache the tree for inspection utilities
+        self._last_tree = tree
+
+        if return_update:
+            return p_val, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
+        else:
+            return p_val
+
+
+class ConformalMondrianForestClassifier(_MondrianClassifierInspection, ConformalClassifier):
+    """Conformal predictor using Mondrian forests (ensembles of Mondrian trees).
+
+    A full (transductive) conformal predictor that builds T Mondrian trees per
+    prediction step from the same augmented bag but with different random seeds.
+    The ensemble averages per-tree leaf posteriors, reducing variance while
+    maintaining exact validity (average of invariant predictors is invariant).
+
+    The nonconformity measure is (Leaf-Local Laplace, averaged):
+
+        α_i = 1 - (1/T) Σ_t (C_{leaf_t(x_i), y_i} + λ) / (N_leaf_t(x_i) + K * λ)
+
+    where the sum averages the Laplace-smoothed class posterior for label y_i
+    across all T trees. This smooths predictions, reduces discrete ties, and
+    produces smaller (more efficient) prediction sets than a single tree.
+
+    Parameters
+    ----------
+    n_trees : int
+        Number of Mondrian trees in the forest. Default: 10. Larger values
+        reduce variance but increase computation per predict.
+    lifetime : float
+        Depth budget L for each tree (see `ConformalMondrianTreeClassifier`).
+        Default: 1.0.
+    lambda_ : float
+        Laplace smoothing parameter λ (see `ConformalMondrianTreeClassifier`).
+        Default: 1.0.
+    label_space : array-like, optional
+        Set of possible labels. If None, inferred from training data.
+    epsilon : float
+        Default significance level for predictions.
+    rnd_state : int, optional
+        Seed for reproducible forest construction.
+    verbose : int
+        Verbosity level (0 = silent).
+
+    Attributes
+    ----------
+    X : ndarray of shape (n, d)
+        Training feature array.
+    y : ndarray of shape (n,)
+        Training labels.
+    label_space : ndarray
+        Sorted unique labels.
+    label_to_idx : dict
+        Mapping from label to integer index 0..K-1.
+    rnd_gen : numpy.random.Generator
+        Root random generator instance.
+    """
+
+    _SAVE_PARAMS: tuple = (
+        "n_trees", "lifetime", "lambda_", "label_space", "epsilon",
+        "rnd_state", "verbose", "n_jobs", "max_depth", "online",
+    )
+    _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space", "_forest")
+
+    def __init__(
+        self,
+        n_trees: int = 10,
+        lifetime: float = 1.0,
+        lambda_: float = 1.0,
+        label_space: NDArray | None = None,
+        epsilon: float = 0.1,
+        rnd_state: int | None = None,
+        verbose: int = 0,
+        n_jobs: int = 1,
+        max_depth: int | None = None,
+        online: bool = False,
+    ):
+        if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
+            raise ValueError("max_depth must be a non-negative integer or None")
+        if online:
+            if not isinstance(lifetime, (int, float)):
+                raise ValueError(
+                    "online=True requires a fixed float lifetime; string/auto-tuned "
+                    "lifetimes recompute a master tree per step and are batch-only."
+                )
+            if max_depth is not None:
+                raise ValueError(
+                    "online=True requires max_depth=None (the projective Mondrian regime)."
+                )
+        super().__init__(epsilon=epsilon)
+        self.n_trees = n_trees
+        self.lifetime = lifetime
+        self.lambda_ = lambda_
+        self.label_space = label_space
+        self.rnd_state = rnd_state
+        self.verbose = verbose
+        self.n_jobs = n_jobs
+        self.max_depth = max_depth
+        self.online = online
+
+        self.X = None
+        self.y = None
+        self.label_to_idx = None
+        self.rnd_gen = np.random.default_rng(rnd_state)
+        self._last_tree = None
+        self._last_seeds = None
+        self._last_x = None
+        self._forest = None
+        self._pending_forest = None
+
+    def learn_initial_training_set(self, X: NDArray, y: NDArray) -> None:
+        """Batch training phase.
+
+        Args:
+            X: Training features (n, d)
+            y: Training labels (n,) — any hashable values
+        """
+        X = np.asarray(X)
+        y = np.asarray(y)
+
+        if X.shape[0] == 0:
+            raise ValueError("Training set cannot be empty")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError("X and y must have same length")
+
+        self.X = X.copy()
+        self.y = y.copy()
+
+        # Infer or validate label space
+        if self.label_space is None:
+            self.label_space = np.unique(y)
+        else:
+            self.label_space = np.asarray(self.label_space)
+
+        # Build label-to-index mapping
+        self.label_to_idx = {label: idx for idx, label in enumerate(self.label_space)}
+
+        if self.online:
+            seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
+            self._forest = [
+                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime)
+                for s in seeds
+            ]
+
+        if self.verbose >= 1:
+            print(
+                f"[MondrianForest] Initialized with {X.shape[0]} training points, "
+                f"{X.shape[1]} dimensions, {len(self.label_space)} classes, {self.n_trees} trees"
+            )
+
+    def learn_one(self, x: NDArray, y: Any, precomputed: dict | None = None) -> None:
+        """Online learning step.
+
+        Args:
+            x: New feature vector (d,) or (1, d)
+            y: New label (any hashable value in label_space)
+            precomputed: Update dict from ``predict(..., return_update=True)`` for
+                this same ``x``. In online mode, if it carries the forest
+                extensions that scored ``x`` they become the persisted forest, so
+                each tree's stream is a single consistent Mondrian process (exact
+                online validity). The last ``predict`` is also cached, so the plain
+                ``predict(x)`` → ``learn_one(x, y)`` loop reuses it automatically.
+        """
+        x = np.asarray(x).ravel()
+
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+
+        if y not in self.label_to_idx:
+            # New label encountered
+            new_idx = len(self.label_space)
+            self.label_space = np.append(self.label_space, y)
+            self.label_to_idx[y] = new_idx
+
+        self.X = np.vstack([self.X, x])
+        self.y = np.append(self.y, y)
+        if self.online:
+            cand = precomputed.get("online_forest") if precomputed else None
+            if not self._is_consistent_forest(cand, x):
+                cand = getattr(self, "_pending_forest", None)
+            self._pending_forest = None
+            if self._is_consistent_forest(cand, x):
+                self._forest = cand
+            else:
+                self._forest = [t.extend(x, self.rnd_gen) for t in self._forest]
+
+    def _is_consistent_forest(self, cand, x) -> bool:
+        """True iff ``cand`` is the persisted forest with every tree extended by exactly ``x``."""
+        if cand is None or self._forest is None or len(cand) != len(self._forest):
+            return False
+        xr = np.asarray(x, dtype=float).ravel()
+        base_n = self._forest[0].X.shape[0]
+        return all(
+            t.X.shape[0] == base_n + 1 and np.array_equal(t.X[-1], xr) for t in cand
+        )
+
+    def _forest_summaries(self, X_aug, x, n, K):
+        """Per-tree ``(n_leaves, counts, ls_train_idx)`` summaries + viz/reuse caches.
+
+        Batch: T fresh trees from seeds (joblib). Online: extend each persistent
+        tree and summarise, caching the extensions for ``learn_one`` reuse.
+        """
+        if self.online:
+            pending = [t.extend(x, self.rnd_gen) for t in self._forest]
+            self._pending_forest = pending
+            self._last_seeds = None
+            self._last_x = x.copy()
+            summaries = [
+                _summarize_tree(t.root, self.y, self.label_to_idx, K, n) for t in pending
+            ]
+            self._last_tree = pending[0].root
+            return summaries
+        seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
+        self._last_seeds = seeds.copy()
+        self._last_x = x.copy()
+        self._pending_forest = None
+        _rng0 = np.random.default_rng(int(seeds[0]))
+        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
+        _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
+        self._last_tree = _tree0
+        return Parallel(n_jobs=self.n_jobs)(
+            delayed(_build_tree_summary)(
+                int(seed), X_aug, self.y, self.label_to_idx, K, n, self.lifetime, self.max_depth
+            )
+            for seed in seeds
+        )
+
+    # ------------------------------------------------------------------
+    # Forest indexing
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        """Number of trees in the forest."""
+        return self.n_trees
+
+    def __iter__(self):
+        """Iterate over individual tree views (calls predict first if needed)."""
+        for i in range(self.n_trees):
+            yield self[i]
+
+    def __getitem__(self, i: int) -> ConformalMondrianTreeClassifier:
+        """Return a single-tree view for tree ``i`` from the last predict/compute_p_value call.
+
+        The returned object is a :class:`ConformalMondrianTreeClassifier` whose
+        ``_last_tree`` is the exact i-th tree from the last call, enabling all
+        T1/T2 inspection and visualisation methods (".summary", ".to_dataframe()",
+        ".draw()", etc.). Its own ``predict()`` would rebuild a fresh tree (not
+        tree i) — this object is intended for *inspection only*.
+
+        Parameters
+        ----------
+        i : int
+            Tree index, ``0 <= i < n_trees``.
+
+        Returns
+        -------
+        ConformalMondrianTreeClassifier
+            Single-tree view with ``_last_tree`` set to tree i.
+
+        Raises
+        ------
+        RuntimeError
+            If ``predict()`` or ``compute_p_value()`` has not been called yet.
+        IndexError
+            If ``i`` is out of range.
+        """
+        if self.online:
+            pending = getattr(self, "_pending_forest", None)
+            if pending is None:
+                raise RuntimeError(
+                    "No trees cached. Call predict() or compute_p_value() first."
+                )
+            if not (0 <= i < self.n_trees):
+                raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
+            n = self.X.shape[0]
+            K = len(self.label_space)
+            tree_i = pending[i].root
+            _assign_counts(tree_i, self.y, self.label_to_idx, K, n_train=n)
+            view = ConformalMondrianTreeClassifier(
+                lifetime=self.lifetime,
+                lambda_=self.lambda_,
+                label_space=self.label_space.copy(),
+                epsilon=self.epsilon,
+                max_depth=self.max_depth,
+            )
+            view.X = self.X
+            view.y = self.y
+            view.label_to_idx = self.label_to_idx
+            view._last_tree = tree_i
+            return view
+
+        if self._last_seeds is None:
+            raise RuntimeError(
+                "No trees cached. Call predict() or compute_p_value() first."
+            )
+        if not (0 <= i < self.n_trees):
+            raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
+
+        n = self.X.shape[0]
+        X_aug = np.vstack([self.X, self._last_x])
+        K = len(self.label_space)
+        rng_i = np.random.default_rng(int(self._last_seeds[i]))
+        tree_i = MondrianTree.grow(X_aug, rng_i, lifetime=self.lifetime, max_depth=self.max_depth).root
+        _assign_counts(tree_i, self.y, self.label_to_idx, K, n_train=n)
+
+        view = ConformalMondrianTreeClassifier(
+            lifetime=self.lifetime,
+            lambda_=self.lambda_,
+            label_space=self.label_space.copy(),
+            epsilon=self.epsilon,
+            max_depth=self.max_depth,
+        )
+        view.X = self.X
+        view.y = self.y
+        view.label_to_idx = self.label_to_idx
+        view._last_tree = tree_i
+        return view
+
+    def predict(
+        self,
+        x: NDArray,
+        epsilon: float | NDArray | None = None,
+        return_p_values: bool = False,
+        return_update: bool = False,
+    ) -> ConformalPredictionSet | MultiLevelPredictionSet | tuple:
+        """Make conformal prediction using ensemble of Mondrian trees.
+
+        For each candidate label, builds T trees from the augmented bag and
+        computes the average leaf posterior across all trees. The NCM is then
+        1 - avg_posterior, which is used to rank all n+1 points and compute
+        the p-value.
+
+        Args:
+            x: Test feature vector (d,) or (1, d)
+            epsilon: Significance level(s). If None, uses self.epsilon.
+                     Can be scalar or array-like.
+            return_p_values: If True, also return dict of p-values keyed by label.
+            return_update: If True, also return dict with forest info.
+
+        Returns:
+            ConformalPredictionSet: If epsilon is scalar and neither flag is True
+            MultiLevelPredictionSet: If epsilon is array-like
+            Tuple: If return_p_values or return_update flag is set
+        """
+        x = np.asarray(x).ravel()
+
+        if self.X is None:
+            raise ValueError("Must call learn_initial_training_set first")
+
+        if x.shape[0] != self.X.shape[1]:
+            raise ValueError(f"Feature dimension mismatch: got {x.shape[0]}, expected {self.X.shape[1]}")
+
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        # Form augmented feature matrix (same for all candidates and all trees)
+        X_aug = np.vstack([self.X, x])
+        n = self.X.shape[0]
+        n_total = n + 1
+        K = len(self.label_space)
+
+        # Build T tree summaries (batch: fresh trees from seeds; online: extend
+        # the persistent forest). Caches viz/reuse state as a side effect.
+        tree_summaries = self._forest_summaries(X_aug, x, n, K)
+        n_leaves_all = [ts[0] for ts in tree_summaries]  # T x (n_total,)
+        counts_all = [ts[1] for ts in tree_summaries]  # T x (n_total, K)
+        ls_train_idx = [ts[2] for ts in tree_summaries]  # T x variable
+
+        # Integer label indices for all training points
+        LAMBDA = self.lambda_
+        y_idx = np.array([self.label_to_idx[self.y[i]] for i in range(n)], dtype=np.int64)
+        arange_n = np.arange(n)
+
+        # base_ncm[i] = 1 - (1/T) * sum_t (counts_t[i, y_idx[i]] + λ) / (n_train_leaf_t[i] + K*λ)
+        base_ncm_sum = np.zeros(n)
+        for t in range(self.n_trees):
+            nl = n_leaves_all[t][:n].astype(np.float64)  # (n,) structural sizes
+            ct = counts_all[t][:n]  # (n, K)
+            # leaf_star points have structural size including test slot
+            n_train_leaf = nl.copy()
+            for idx in ls_train_idx[t]:
+                n_train_leaf[int(idx)] -= 1.0
+            denom = n_train_leaf + K * LAMBDA
+            base_ncm_sum += (ct[arange_n, y_idx].astype(np.float64) + LAMBDA) / denom
+        base_ncm = 1.0 - base_ncm_sum / self.n_trees
+
+        # ncm_test[k] = 1 - (1/T) * sum_t (counts_t[n, k] + 1 + λ) / (n_star_train_t + 1 + K*λ)
+        ncm_test = np.zeros(K)
+        for t in range(self.n_trees):
+            n_star_train_t = float(n_leaves_all[t][n]) - 1.0
+            denom_test_t = n_star_train_t + 1.0 + K * LAMBDA
+            ncm_test += (counts_all[t][n].astype(np.float64) + 1.0 + LAMBDA) / denom_test_t
+        ncm_test = 1.0 - ncm_test / self.n_trees  # shape (K,)
+
+        # Vectorised (K, n) broadcast
+        _TOL = 1e-9
+        diff = base_ncm[np.newaxis, :] - ncm_test[:, np.newaxis]  # (K, n)
+        gt = np.sum(diff > _TOL, axis=1).astype(np.int64)
+        eq = np.sum(np.abs(diff) <= _TOL, axis=1).astype(np.int64)
+
+        # Delta correction (Laplace): for each tree t, compute per-class delta
+        # in leaf_star_t, then accumulate per-point adjustments.
+        # Build per-tree delta matrices: delta_jk[j, k] = actual_prob - base_prob
+        tree_deltas = []
+        for t in range(self.n_trees):
+            n_star_t = float(n_leaves_all[t][n])
+            c_t = counts_all[t][n].astype(np.float64)
+            denom_base_t = (n_star_t - 1.0) + K * LAMBDA
+            denom_actual_t = n_star_t + K * LAMBDA
+            delta_jk = np.empty((K, K))
+            for j in range(K):
+                base_p = (c_t[j] + LAMBDA) / denom_base_t
+                for k in range(K):
+                    actual_p = (c_t[j] + LAMBDA + (1.0 if j == k else 0.0)) / denom_actual_t
+                    delta_jk[j, k] = actual_p - base_p
+            tree_deltas.append(delta_jk)
+
+        # Build point -> trees membership
+        point_trees: dict[int, list] = {}
+        for t in range(self.n_trees):
+            for idx in ls_train_idx[t]:
+                i_int = int(idx)
+                if i_int not in point_trees:
+                    point_trees[i_int] = []
+                point_trees[i_int].append(t)
+
+        # Reclassify affected points
+        for i_int, trees_list in point_trees.items():
+            j = int(y_idx[i_int])
+            delta_sum_k = np.zeros(K)
+            for t in trees_list:
+                delta_sum_k += tree_deltas[t][j, :]
+            delta_avg_k = delta_sum_k / self.n_trees
+
+            base_val = base_ncm[i_int]
+            for k in range(K):
+                actual_val = base_val - delta_avg_k[k]
+                ncm_test_k = ncm_test[k]
+                # Before bucket
+                if base_val > ncm_test_k + _TOL:
+                    before = 0
+                elif abs(base_val - ncm_test_k) <= _TOL:
+                    before = 1
+                else:
+                    before = 2
+                # After bucket
+                if actual_val > ncm_test_k + _TOL:
+                    after = 0
+                elif abs(actual_val - ncm_test_k) <= _TOL:
+                    after = 1
+                else:
+                    after = 2
+                if before == after:
+                    continue
+                if before == 0 and after == 1:
+                    gt[k] -= 1
+                    eq[k] += 1
+                elif before == 0 and after == 2:
+                    gt[k] -= 1
+                elif before == 1 and after == 2:
+                    eq[k] -= 1
+                elif before == 1 and after == 0:
+                    eq[k] -= 1
+                    gt[k] += 1
+                elif before == 2 and after == 1:
+                    eq[k] += 1
+                elif before == 2 and after == 0:
+                    gt[k] += 1
+
+        eq += 1  # test point always EQ to itself
+        tau = self.rnd_gen.uniform(0, 1)
+        p_values_arr = (gt + tau * eq) / n_total
+        p_values = {label: float(p_values_arr[ki]) for ki, label in enumerate(self.label_space)}
+
+        result = self._compute_Gamma(p_values, epsilon)
+
+        # Handle return flags
+        _update = {"n_leaves_all": n_leaves_all, "counts_all": counts_all, "leaf_star_train_indices_all": ls_train_idx, "online_forest": self._pending_forest}
+        if return_update and return_p_values:
+            return result, p_values, _update
+        elif return_p_values:
+            return result, p_values
+        elif return_update:
+            return result, _update
+        else:
+            return result
+
+    def compute_p_value(self, x: NDArray, y: Any, return_update: bool = False) -> float | tuple[float, dict]:
+        """Compute p-value for a single candidate label.
+
+        Args:
+            x: Test feature vector (d,)
+            y: Candidate label
+            return_update: If True, also return dict with forest info
+
+        Returns:
+            P-value (float) or (p-value, dict) if return_update=True
+        """
+        x = np.asarray(x).ravel()
+
+        if y not in self.label_to_idx:
+            raise ValueError(f"Label {y} not in label_space")
+
+        # Build augmented dataset
+        X_aug = np.vstack([self.X, x])
+        n = self.X.shape[0]
+        n_total = n + 1
+        K = len(self.label_space)
+        label_idx = self.label_to_idx[y]
+
+        # Build T tree summaries (possibly in parallel)
+        tree_summaries = self._forest_summaries(X_aug, x, n, K)
+        n_leaves_all = [ts[0] for ts in tree_summaries]
+        counts_all = [ts[1] for ts in tree_summaries]
+        ls_train_idx = [ts[2] for ts in tree_summaries]
+
+        LAMBDA = self.lambda_
+        y_idx = np.array([self.label_to_idx[self.y[i]] for i in range(n)], dtype=np.int64)
+        arange_n = np.arange(n)
+
+        # base_ncm for training points (Laplace)
+        base_ncm_sum = np.zeros(n)
+        for t in range(self.n_trees):
+            nl = n_leaves_all[t][:n].astype(np.float64)
+            ct = counts_all[t][:n]
+            n_train_leaf = nl.copy()
+            for idx in ls_train_idx[t]:
+                n_train_leaf[int(idx)] -= 1.0
+            denom = n_train_leaf + K * LAMBDA
+            base_ncm_sum += (ct[arange_n, y_idx].astype(np.float64) + LAMBDA) / denom
+        base_ncm = 1.0 - base_ncm_sum / self.n_trees
+
+        # ncm_test for this single candidate (Laplace)
+        ncm_test_k = 0.0
+        for t in range(self.n_trees):
+            n_star_train_t = float(n_leaves_all[t][n]) - 1.0
+            denom_test_t = n_star_train_t + 1.0 + K * LAMBDA
+            ncm_test_k += (float(counts_all[t][n, label_idx]) + 1.0 + LAMBDA) / denom_test_t
+        ncm_test_k = 1.0 - ncm_test_k / self.n_trees
+
+        _TOL = 1e-9
+        diff = base_ncm - ncm_test_k
+        gt = int(np.sum(diff > _TOL))
+        eq = int(np.sum(np.abs(diff) <= _TOL))
+
+        # Delta correction (Laplace): per-tree delta for leaf_star points
+        tree_deltas = []
+        for t in range(self.n_trees):
+            n_star_t = float(n_leaves_all[t][n])
+            c_t = counts_all[t][n].astype(np.float64)
+            denom_base_t = (n_star_t - 1.0) + K * LAMBDA
+            denom_actual_t = n_star_t + K * LAMBDA
+            # delta[j] = actual_prob_j - base_prob_j for candidate label_idx
+            delta_j = np.empty(K)
+            for j in range(K):
+                base_p = (c_t[j] + LAMBDA) / denom_base_t
+                actual_p = (c_t[j] + LAMBDA + (1.0 if j == label_idx else 0.0)) / denom_actual_t
+                delta_j[j] = actual_p - base_p
+            tree_deltas.append(delta_j)
+
+        # Build point -> trees membership
+        point_trees: dict[int, list] = {}
+        for t in range(self.n_trees):
+            for idx in ls_train_idx[t]:
+                i_int = int(idx)
+                if i_int not in point_trees:
+                    point_trees[i_int] = []
+                point_trees[i_int].append(t)
+
+        # Reclassify affected points
+        for i_int, trees_list in point_trees.items():
+            j = int(y_idx[i_int])
+            delta_sum = 0.0
+            for t in trees_list:
+                delta_sum += tree_deltas[t][j]
+            delta_avg = delta_sum / self.n_trees
+
+            base_val = base_ncm[i_int]
+            actual_val = base_val - delta_avg
+            # Before bucket
+            if base_val > ncm_test_k + _TOL:
+                before = 0
+            elif abs(base_val - ncm_test_k) <= _TOL:
+                before = 1
+            else:
+                before = 2
+            # After bucket
+            if actual_val > ncm_test_k + _TOL:
+                after = 0
+            elif abs(actual_val - ncm_test_k) <= _TOL:
+                after = 1
+            else:
+                after = 2
+            if before == after:
+                continue
+            if before == 0 and after == 1:
+                gt -= 1
+                eq += 1
+            elif before == 0 and after == 2:
+                gt -= 1
+            elif before == 1 and after == 2:
+                eq -= 1
+            elif before == 1 and after == 0:
+                eq -= 1
+                gt += 1
+            elif before == 2 and after == 1:
+                eq += 1
+            elif before == 2 and after == 0:
+                gt += 1
+
+        eq += 1  # test point always EQ to itself
+        tau = self.rnd_gen.uniform(0, 1)
+        p_val = float((gt + tau * eq) / n_total)
+
+        if return_update:
+            return p_val, {
+                "n_leaves_all": n_leaves_all,
+                "counts_all": counts_all,
+                "leaf_star_train_indices_all": ls_train_idx,
+                "online_forest": self._pending_forest,
+            }
+        else:
+            return p_val
+
+

@@ -2,7 +2,7 @@
 
 You are the Lead Software Engineer for the `online-cp` library. Your goal is to implement new features and fix bugs while maintaining the absolute mathematical and structural integrity of the package.
 
-The core philosophy of this library is **mathematical correctness over convenience**. A model is not "done" when it works on a sample dataset, but when its theoretical invariants are verified. Almost all theoretical aspects of conformal and Venn prediction can be found in the book `papers/ALRW2/ALRW2.md`. Check it if in doubt.
+The core philosophy of this library is **mathematical correctness over convenience**. A model is not "done" when it works on a sample dataset, but when its theoretical invariants are verified. Almost all theoretical aspects of conformal and Venn prediction can be found in the book `papers/ALRW2/ALRW2.md`. You must use your file-reading tool to inspect this file if you are in doubt about a mathematical invariant. Do not assume it is missing just because it is ignored by git.
 
 ---
 
@@ -14,6 +14,8 @@ The core philosophy of this library is **mathematical correctness over convenien
 2. Read `.roadmap/REQUIREMENTS.md` for the relevant interface contract.
 3. Run `pytest tests/ -x` to establish a green baseline. Do not touch any source code until this passes.
 4. Read the source module relevant to the task.
+
+When instructed to run tests, you must actually execute the command in the terminal and read the output. Do not simulate or assume the test results.
 
 **Escalation rule**: If the task description is ambiguous, ask exactly one focused clarifying question before writing any code.
 

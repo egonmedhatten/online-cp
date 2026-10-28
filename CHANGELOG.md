@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Improved
+  - **Conformal Lasso: `predict` cost is now O(n + m) instead of O(n * m)**
+    (speed target T2). The previous `_find_intervals_in_piece` materialised an
+    `(n, m)` residual matrix per homotopy piece (m = number of crossings in the
+    piece, up to n), so `predict` cost blew up super-linearly in n and was
+    non-monotone (the 170 ms @ n=1e5 vs 4 ms @ n=1e6 sawtooth recorded in
+    `archive/speed-baseline.md`). The ascending conformal rank is now computed by
+    an O(n + m) incremental sweep: one O(n) rank at d = 0, then +/-1 at each
+    crossing whose flip direction is set by the derivative of
+    `(|r_i| - |r_{n+1}|)` at the crossing. Measured speedup on the worst-case
+    (many-crossing) stream: n=8000 went from ~888 ms to ~6 ms, n=12000 from
+    ~1608 ms to ~9 ms, and the non-monotonicity in n is gone. Verified
+    correct: `TestFindIntervalsInPiece::test_matches_loop_reference` (300
+    random pieces) and `TestHomotopyCorrectness::test_predict_covers_brute_force_set`
+    both pass; new regression guards `test_with_index_agrees_with_plain_crossings`
+    and `test_predict_cost_bounded_in_n` pin the identity arrays and the bounded
+    cost. A new numba helper `_compute_crossings_with_index` (alongside the
+    existing `_compute_crossings`) returns the crossing identity (point index +
+    sign-case) needed for the sweep; the existing signature is unchanged so the
+    Mondrian forest solver and existing tests are unaffected.
+
+### Changed
+  - The Lasso `predict`/`compute_p_value` p-value rank loops identified as
+    "T4a" in the v0.4.0 speed baseline are already numpy-vectorised in the
+    current codebase; the only non-vectorised rank computation was the O(n * m)
+    matrix above, now swept. No separate T4a JIT work is required.
+
+---
+
 ## [0.4.0] — 2026-10-22
 
 ### Added

@@ -185,8 +185,7 @@ class TestConformalLassoRegressor:
         )
         idx = int(np.argmin(np.abs(lam_grid - selected)))
         assert mses[idx] <= best_mse * 1.001 + 1e-12, (
-            f"selected lam {selected} (mse {mses[idx]:.6e}) is not near-optimal "
-            f"(best {best_mse:.6e})"
+            f"selected lam {selected} (mse {mses[idx]:.6e}) is not near-optimal (best {best_mse:.6e})"
         )
 
     def test_small_training_set(self):
@@ -501,9 +500,7 @@ class TestFindIntervalsInPiece:
             dt = float(rng.uniform(0, 3))
             sign = int(rng.choice([-1, 1]))
             thr = int(rng.integers(1, n + 2))
-            out = cp._find_intervals_in_piece(
-                r_train, rng.normal(), slopes, rng.normal(), dt, 0.0, sign, thr, n
-            )
+            out = cp._find_intervals_in_piece(r_train, rng.normal(), slopes, rng.normal(), dt, 0.0, sign, thr, n)
             for ts, te in out:
                 assert ts <= te, f"interval ({ts}, {te}) has start > end"
 
@@ -530,6 +527,75 @@ class TestFindIntervalsInPiece:
         hi = max(b for _, b in out)
         assert np.isclose(lo, 5.0, atol=1e-9)
         assert np.isclose(hi, 7.0, atol=1e-9)
+
+    def test_with_index_agrees_with_plain_crossings(self):
+        """_compute_crossings_with_index must return the same d-values as
+        _compute_crossings (the identity arrays are the new extra output)."""
+        from online_cp.regressors import _compute_crossings, _compute_crossings_with_index
+
+        rng = np.random.default_rng(3)
+        for _ in range(30):
+            n = int(rng.integers(2, 40))
+            r_train = rng.normal(size=n)
+            slopes = rng.normal(size=n)
+            r_test = rng.normal()
+            slope_test = rng.normal()
+            dt = float(rng.uniform(0, 5))
+            d_plain = _compute_crossings(r_train, slopes, r_test, slope_test, n, dt)
+            d_idx, i_idx, s_idx = _compute_crossings_with_index(r_train, slopes, r_test, slope_test, n, dt)
+            np.testing.assert_allclose(np.sort(d_idx), np.sort(d_plain), atol=1e-12)
+            # Identity sanity: indices in range, signs in {+1, -1}.
+            if d_idx.size:
+                assert (i_idx >= 0).all() and (i_idx < n).all()
+                assert set(np.unique(s_idx)).issubset({1.0, -1.0})
+                # Each crossing d must actually be a root for its point i:
+                # |r_i(d)| == |r_{n+1}(d)| (up to the 1e-12 clamping tolerance).
+                for k in range(d_idx.size):
+                    dd = d_idx[k]
+                    ri = r_train[i_idx[k]] + slopes[i_idx[k]] * dd
+                    rn = r_test + slope_test * dd
+                    assert abs(abs(ri) - abs(rn)) < 1e-9, f"crossing not a root: |{ri}| vs |{rn}|"
+
+    def test_predict_cost_bounded_in_n(self):
+        """Regression guard for the T2 speed target.
+
+        The previous implementation built an O(n * m) residual matrix inside
+        ``_find_intervals_in_piece`` (m = crossings in the piece, up to n), so
+        predict cost blew up super-linearly in n and was non-monotone (the
+        170 ms @ 1e5 vs 4 ms @ 1e6 sawtooth in archive/speed-baseline.md). The
+        O(n + m) incremental rank-sweep must keep predict cost bounded in n.
+
+        We assert that doubling n does NOT increase the median predict cost by
+        more than a small factor, on a stream where the test point produces many
+        crossings (the worst case for the old matrix path).
+        """
+        import time
+
+        def predict_median_ms(n, d, seed):
+            rng = np.random.default_rng(seed)
+            X = rng.uniform(-1, 1, size=(n, d))
+            y = X.sum(axis=1) + rng.normal(0, 0.1, n)
+            cp = ConformalLassoRegressor(lam=0.3, autotune=False, rnd_state=seed)
+            cp.learn_initial_training_set(X[: n // 2], y[: n // 2])
+            x_test = X[n // 2]
+            # Time three predicts and take the median (warm up + measure).
+            times = []
+            for _ in range(3):
+                t0 = time.perf_counter()
+                cp.predict(x_test, epsilon=0.1)
+                times.append((time.perf_counter() - t0) * 1e3)
+            return float(np.median(times))
+
+        # n = 2000 vs 4000, same d, same seed (same data geometry, 2x points).
+        t_small = predict_median_ms(2000, 10, 11)
+        t_large = predict_median_ms(4000, 10, 11)
+        # Old code: O(n*m) with m ~ n -> roughly 4x+ cost at 2x n. New code:
+        # O(n + m) -> roughly 2x. Allow up to 2.5x to be robust to noise.
+        assert t_large < 2.5 * t_small, (
+            f"Lasso predict cost grew super-linearly in n: "
+            f"n=2000 -> {t_small:.2f} ms, n=4000 -> {t_large:.2f} ms "
+            f"({t_large / max(t_small, 1e-9):.2f}x)"
+        )
 
 
 class TestHomotopyCorrectness:
@@ -582,9 +648,7 @@ class TestHomotopyCorrectness:
             rho = float(rng.choice([0.0, 1.0]))
             X = rng.normal(size=(n, p))
             y = X.sum(1) * 0.5 + rng.normal(0, 0.5, n)
-            cp = ConformalLassoRegressor(
-                lam=lam, rho=rho, autotune=False, verbose=0, rnd_state=trial
-            )
+            cp = ConformalLassoRegressor(lam=lam, rho=rho, autotune=False, verbose=0, rnd_state=trial)
             cp.learn_initial_training_set(X[: n // 2], y[: n // 2])
             x_test = X[n // 2]
             eps = cp.epsilon
@@ -604,10 +668,8 @@ class TestHomotopyCorrectness:
             if res < 1e-6:
                 res = 1e-3
             assert interval.lower <= ref[0] + res, (
-                f"trial {trial}: under-coverage on the left: "
-                f"homotopy lower {interval.lower:.4f} < brute {ref[0]:.4f}"
+                f"trial {trial}: under-coverage on the left: homotopy lower {interval.lower:.4f} < brute {ref[0]:.4f}"
             )
             assert interval.upper >= ref[1] - res, (
-                f"trial {trial}: under-coverage on the right: "
-                f"homotopy upper {interval.upper:.4f} < brute {ref[1]:.4f}"
+                f"trial {trial}: under-coverage on the right: homotopy upper {interval.upper:.4f} < brute {ref[1]:.4f}"
             )

@@ -1,0 +1,457 @@
+"""Tests for reservoir-sampling stream pruning (``online_cp._pruning``).
+
+Reservoir sampling is the *only* pruning strategy that preserves exchangeability,
+and therefore the exact finite-sample coverage guarantee. These tests verify:
+
+* **Bit-identity**: with ``budget >= n`` seen, pruning is a no-op and predictions
+  match the unpruned model exactly.
+* **Bag cap**: the retained bag never exceeds ``budget``.
+* **Index consistency** (classifier): ``_label_indices`` stay in sync with the
+  pruned ``y``.
+* **Coverage preservation**: pruned models still cover at the target rate.
+* **Save/load**: the pruned state (bag, ``n_seen``, ``budget``, RNG position)
+  round-trips and reproduces identical predictions.
+"""
+
+import numpy as np
+import pytest
+
+from online_cp import (
+    ConformalNearestNeighboursClassifier,
+    ConformalNearestNeighboursRegressor,
+    ConformalSupportVectorMachine,
+    KernelConformalRidgeRegressor,
+)
+from online_cp._pruning import _ReservoirBuffer, _evict_distance_matrix, _evict_masked_distance
+
+
+# ---------------------------------------------------------------------------
+# _ReservoirBuffer unit behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_buffer_decide_always_keeps_when_under_budget():
+    buf = _ReservoirBuffer(budget=10, rnd_gen=np.random.default_rng(0))
+    for n in range(1, 11):
+        assert buf.decide(n) == -1  # keep, no eviction
+
+
+def test_buffer_decide_keeps_with_prob_budget_over_n():
+    """When n > budget, the kept fraction over many draws should be ~budget/n."""
+    rng = np.random.default_rng(0)
+    budget, n = 10, 100
+    buf = _ReservoirBuffer(budget=budget, rnd_gen=rng)
+    kept = 0
+    for _ in range(20000):
+        decision = buf.decide(n)  # n fixed -> stationary decision
+        kept += decision is not None
+    # expected kept fraction = budget / n = 0.1
+    assert abs(kept / 20000 - budget / n) < 0.01
+
+
+def test_buffer_decide_evicted_position_in_range():
+    rng = np.random.default_rng(1)
+    budget, n = 5, 50
+    buf = _ReservoirBuffer(budget=budget, rnd_gen=rng)
+    for _ in range(5000):
+        d = buf.decide(n)
+        if d is not None:
+            assert 0 <= d < budget
+
+
+def test_buffer_requires_positive_budget():
+    with pytest.raises(ValueError):
+        _ReservoirBuffer(budget=0, rnd_gen=np.random.default_rng(0))
+    with pytest.raises(ValueError):
+        _ReservoirBuffer(budget=None, rnd_gen=np.random.default_rng(0))
+
+
+# ---------------------------------------------------------------------------
+# eviction helpers
+# ---------------------------------------------------------------------------
+
+
+def test_evict_distance_matrix():
+    D = np.arange(16.0).reshape(4, 4)
+    out = _evict_distance_matrix(D, 1)
+    assert out.shape == (3, 3)
+    # row 1 and col 1 removed; remaining in order
+    assert np.allclose(out, D[np.ix_([0, 2, 3], [0, 2, 3])])
+
+
+def test_evict_masked_distance():
+    D = np.arange(16.0).reshape(4, 4)
+    keep = np.array([2, 0, 3])  # unsorted on purpose
+    out = _evict_masked_distance(D, keep)
+    # positions kept in ascending order
+    assert np.allclose(out, D[np.ix_([0, 2, 3], [0, 2, 3])])
+    mask = np.ones(4, dtype=bool)
+    mask[1] = False
+    assert np.allclose(_evict_masked_distance(D, mask), D[np.ix_([0, 2, 3], [0, 2, 3])])
+
+
+# ---------------------------------------------------------------------------
+# k-NN regressor: bit-identity, bag cap, coverage
+# ---------------------------------------------------------------------------
+
+
+def test_knn_reg_bit_identical_when_budget_ge_n():
+    """budget >= n -> no eviction ever -> exact match with the unpruned model."""
+    rng = np.random.default_rng(0)
+    n, d = 200, 3
+    X = rng.uniform(0, 1, (n, d))
+    y = np.sin(X[:, 0]) + 0.1 * rng.standard_normal(n)
+
+    full = ConformalNearestNeighboursRegressor(k=3, rnd_state=1)
+    pruned = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning="reservoir", budget=n)
+    for i in range(n):
+        gf = full.predict(X[i], epsilon=0.1, return_update=True)
+        gp = pruned.predict(X[i], epsilon=0.1, return_update=True)
+        assert np.isclose(gf[0].lower, gp[0].lower) and np.isclose(gf[0].upper, gp[0].upper), i
+        full.learn_one(X[i], y[i], precomputed=gf[1])
+        pruned.learn_one(X[i], y[i], precomputed=gp[1])
+    assert full.X.shape[0] == pruned.X.shape[0] == n
+
+
+def test_knn_reg_bag_stays_at_budget():
+    rng = np.random.default_rng(1)
+    n, d, budget = 500, 3, 50
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    model = ConformalNearestNeighboursRegressor(k=3, rnd_state=2, pruning="reservoir", budget=budget)
+    for i in range(n):
+        model.learn_one(X[i], y[i])
+        assert model.X.shape[0] <= budget, i
+        assert model._reservoir_n_seen == i + 1
+    assert model.X.shape[0] == budget
+
+
+def test_knn_reg_pruned_deterministic():
+    """Two identically-seeded pruned models must produce identical predictions."""
+    rng = np.random.default_rng(2)
+    n, d, budget = 300, 3, 40
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    m1 = ConformalNearestNeighboursRegressor(k=3, rnd_state=3, pruning="reservoir", budget=budget)
+    m2 = ConformalNearestNeighboursRegressor(k=3, rnd_state=3, pruning="reservoir", budget=budget)
+    for i in range(n):
+        g1 = m1.predict(X[i], epsilon=0.1)
+        g2 = m2.predict(X[i], epsilon=0.1)
+        assert np.isclose(g1.lower, g2.lower) and np.isclose(g1.upper, g2.upper), i
+        m1.learn_one(X[i], y[i])
+        m2.learn_one(X[i], y[i])
+
+
+def test_knn_reg_coverage_preserved():
+    rng = np.random.default_rng(3)
+    n, d = 2000, 3
+    X = rng.uniform(0, 1, (n, d))
+    y = X[:, 0] * 2 + 0.2 * rng.standard_normal(n)
+    eps = 0.1
+    model = ConformalNearestNeighboursRegressor(k=5, rnd_state=4, pruning="reservoir", budget=200)
+    model.learn_initial_training_set(X[:100], y[:100])
+    covered = total = 0
+    for i in range(100, n):
+        interval = model.predict(X[i], epsilon=eps)
+        covered += interval.lower <= y[i] <= interval.upper
+        total += 1
+        model.learn_one(X[i], y[i])
+    rate = covered / total
+    assert rate >= 1 - eps - 0.02, f"coverage {rate:.3f} < {1 - eps}"
+
+
+# ---------------------------------------------------------------------------
+# k-NN classifier: bit-identity, bag cap, index consistency, coverage
+# ---------------------------------------------------------------------------
+
+
+def test_clf_bit_identical_when_budget_ge_n():
+    rng = np.random.default_rng(1)
+    n, d = 200, 3
+    X = rng.uniform(0, 1, (n, d))
+    y = (X[:, 0] > 0.5).astype(int)
+    full = ConformalNearestNeighboursClassifier(k=1, label_space=np.array([0, 1]), rnd_state=1)
+    pruned = ConformalNearestNeighboursClassifier(
+        k=1, label_space=np.array([0, 1]), rnd_state=1, pruning="reservoir", budget=n
+    )
+    for i in range(n):
+        gf, _ = full.predict(X[i], return_update=True)
+        gp, _ = pruned.predict(X[i], return_update=True)
+        assert np.array_equal(np.asarray(gf.elements), np.asarray(gp.elements)), i
+        full.learn_one(X[i], y[i])
+        pruned.learn_one(X[i], y[i])
+    assert full.X.shape[0] == pruned.X.shape[0] == n
+
+
+def test_clf_bag_at_budget_and_consistent_indices():
+    rng = np.random.default_rng(2)
+    n, d, budget = 400, 3, 40
+    X = rng.uniform(0, 1, (n, d))
+    y = (X[:, 0] > 0.5).astype(int)
+    model = ConformalNearestNeighboursClassifier(
+        k=1, label_space=np.array([0, 1]), rnd_state=3, pruning="reservoir", budget=budget
+    )
+    for i in range(n):
+        model.learn_one(X[i], y[i])
+        assert model.X.shape[0] <= budget, i
+        assert model.D.shape[0] == model.X.shape[0] == model.y.shape[0]
+        # label indices must partition [0, n_bags) exactly once
+        all_pos = np.concatenate([model._label_indices[l] for l in model._label_indices])
+        assert set(np.sort(all_pos.tolist())) == set(range(model.y.shape[0])), i
+        for lab, idx in model._label_indices.items():
+            for pos in idx:
+                assert model.y[pos] == lab, (i, pos, model.y[pos], lab)
+    assert model.X.shape[0] == budget
+
+
+def test_clf_coverage_preserved():
+    """On well-separated data, pruning must keep coverage near the target."""
+    rng = np.random.default_rng(4)
+    n, d = 400, 2
+    A = rng.normal(0, 1, (n, d))
+    B = rng.normal(3, 1, (n, d))
+    X = np.vstack([A, B])
+    y = np.concatenate([np.zeros(n, int), np.ones(n, int)])
+    perm = rng.permutation(2 * n)
+    X, y = X[perm], y[perm]
+    eps = 0.1
+    model = ConformalNearestNeighboursClassifier(
+        k=1, label_space=np.array([0, 1]), rnd_state=5, pruning="reservoir", budget=150
+    )
+    model.learn_initial_training_set(X[:100], y[:100])
+    covered = total = 0
+    for i in range(100, 2 * n):
+        Gamma = model.predict(X[i], epsilon=eps)
+        covered += y[i] in Gamma  # built-in __contains__
+        total += 1
+        model.learn_one(X[i], y[i])
+    rate = covered / total
+    assert rate >= 1 - eps - 0.03, f"coverage {rate:.3f} < {1 - eps}"
+
+
+# ---------------------------------------------------------------------------
+# save / load round-trip with pruning
+# ---------------------------------------------------------------------------
+
+
+def test_knn_reg_saveload_preserves_pruned_state(tmp_path):
+    rng = np.random.default_rng(0)
+    n, d, budget = 120, 3, 30
+    X = rng.uniform(0, 1, (n, d))
+    y = np.sin(X[:, 0]) + 0.1 * rng.standard_normal(n)
+    m = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning="reservoir", budget=budget)
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+    bag, nseen = m.X.shape[0], m._reservoir_n_seen
+    pred_before = m.predict(X[0], epsilon=0.1)
+    fp = tmp_path / "reg.joblib"
+    m.save(fp)
+    m2 = ConformalNearestNeighboursRegressor.load(fp)
+    assert m2.X.shape[0] == bag
+    assert m2._reservoir_n_seen == nseen
+    assert m2.budget == budget and m2.pruning == "reservoir"
+    pred_after = m2.predict(X[0], epsilon=0.1)
+    assert np.isclose(pred_before.lower, pred_after.lower) and np.isclose(pred_before.upper, pred_after.upper)
+
+
+def test_clf_saveload_preserves_pruned_state(tmp_path):
+    rng = np.random.default_rng(1)
+    n, d, budget = 120, 2, 30
+    X = rng.uniform(0, 1, (n, d))
+    y = (X[:, 0] > 0.5).astype(int)
+    m = ConformalNearestNeighboursClassifier(
+        k=1, label_space=np.array([0, 1]), rnd_state=2, pruning="reservoir", budget=budget
+    )
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+    bag, nseen = m.X.shape[0], m._reservoir_n_seen
+    pred_before = m.predict(X[0], epsilon=0.1)
+    fp = tmp_path / "clf.joblib"
+    m.save(fp)
+    m2 = ConformalNearestNeighboursClassifier.load(fp)
+    assert m2.X.shape[0] == bag
+    assert m2._reservoir_n_seen == nseen
+    pred_after = m2.predict(X[0], epsilon=0.1)
+    assert np.array_equal(np.asarray(pred_before.elements), np.asarray(pred_after.elements))
+    all_pos = np.concatenate([m2._label_indices[l] for l in m2._label_indices])
+    assert set(np.sort(all_pos.tolist())) == set(range(m2.y.shape[0]))
+
+
+def test_pruning_requires_budget(tmp_path):
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursRegressor(k=1, pruning="reservoir")
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursClassifier(k=1, pruning="reservoir")
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursRegressor(k=1, pruning="window", budget=10)
+
+
+# ---------------------------------------------------------------------------
+# Kernel-Ridge: bit-identity, bag cap, Kinv consistency
+# ---------------------------------------------------------------------------
+
+
+def test_krr_bit_identical_when_budget_ge_n():
+    from online_cp.kernels import GaussianKernel
+
+    rng = np.random.default_rng(0)
+    n, d, budget = 150, 2, 150
+    X = rng.uniform(0, 1, (n, d))
+    y = np.sin(4 * X[:, 0]) + X[:, 1] + 0.1 * rng.standard_normal(n)
+    full = KernelConformalRidgeRegressor(kernel=GaussianKernel(sigma=0.5), a=0.1, rnd_state=1)
+    pruned = KernelConformalRidgeRegressor(
+        kernel=GaussianKernel(sigma=0.5), a=0.1, rnd_state=1, pruning="reservoir", budget=budget
+    )
+    full.learn_initial_training_set(X[:10], y[:10])
+    pruned.learn_initial_training_set(X[:10], y[:10])
+    for i in range(10, n):
+        gf = full.predict(X[i], epsilon=0.1)
+        gp = pruned.predict(X[i], epsilon=0.1)
+        assert np.isclose(gf.lower, gp.lower) and np.isclose(gf.upper, gp.upper), i
+        full.learn_one(X[i], y[i])
+        pruned.learn_one(X[i], y[i])
+    assert full.X.shape[0] == pruned.X.shape[0] == n
+
+
+def test_krr_bag_cap_and_kinv_consistency():
+    from online_cp.kernels import GaussianKernel
+
+    rng = np.random.default_rng(1)
+    n, d, budget = 400, 2, 40
+    X = rng.uniform(0, 1, (n, d))
+    y = np.sin(4 * X[:, 0]) + X[:, 1] + 0.1 * rng.standard_normal(n)
+    m = KernelConformalRidgeRegressor(
+        kernel=GaussianKernel(sigma=0.5), a=0.1, rnd_state=2, pruning="reservoir", budget=budget
+    )
+    m.learn_initial_training_set(X[:5], y[:5])
+    for i in range(5, n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+        assert m.K.shape == (m.X.shape[0], m.X.shape[0]), i
+        # Kinv must be the true inverse of K + aI (the eviction recomputes it).
+        n_k = m.K.shape[0]
+        assert np.allclose(m.Kinv @ (m.K + m.a * np.identity(n_k)), np.identity(n_k), atol=1e-3), i
+    assert m.X.shape[0] == budget
+
+
+def test_krr_coverage_preserved():
+    from online_cp.kernels import GaussianKernel
+
+    rng = np.random.default_rng(3)
+    n, d, budget = 300, 2, 60
+    X = rng.uniform(0, 1, (n, d))
+    y = np.sin(4 * X[:, 0]) + X[:, 1] + 0.1 * rng.standard_normal(n)
+    m = KernelConformalRidgeRegressor(
+        kernel=GaussianKernel(sigma=0.5), a=0.1, rnd_state=4, pruning="reservoir", budget=budget
+    )
+    m.learn_initial_training_set(X[:20], y[:20])
+    eps = 0.1
+    covered = total = 0
+    for i in range(20, n):
+        iv = m.predict(X[i], epsilon=eps)
+        covered += iv.lower <= y[i] <= iv.upper
+        total += 1
+        m.learn_one(X[i], y[i])
+    rate = covered / total
+    assert rate >= 1 - eps - 0.03, f"coverage {rate:.3f} < {1 - eps}"
+
+
+# ---------------------------------------------------------------------------
+# SVM: bit-identity, bag cap, coverage
+# ---------------------------------------------------------------------------
+
+
+def test_svm_bit_identical_when_budget_ge_n():
+    rng = np.random.default_rng(0)
+    n, d, budget = 120, 2, 120
+    A = rng.normal(-1, 1, (n, d))
+    B = rng.normal(1, 1, (n, d))
+    X = np.vstack([A, B])
+    y = np.concatenate([np.full(n, -1.0), np.full(n, 1.0)])
+    perm = rng.permutation(2 * n)
+    X, y = X[perm], y[perm]
+    full = ConformalSupportVectorMachine(
+        kernel="rbf", sigma=1.0, C=10.0, label_space=np.array([-1.0, 1.0]), rnd_state=1
+    )
+    pruned = ConformalSupportVectorMachine(
+        kernel="rbf",
+        sigma=1.0,
+        C=10.0,
+        label_space=np.array([-1.0, 1.0]),
+        rnd_state=1,
+        pruning="reservoir",
+        budget=budget,
+    )
+    full.learn_initial_training_set(X[:10], y[:10])
+    pruned.learn_initial_training_set(X[:10], y[:10])
+    for i in range(10, n):
+        _, pf = full.predict(X[i], epsilon=0.1, return_p_values=True)
+        _, pp = pruned.predict(X[i], epsilon=0.1, return_p_values=True)
+        for lab in (-1.0, 1.0):
+            assert np.isclose(pf[lab], pp[lab]), (i, lab)
+        full.learn_one(X[i], y[i])
+        pruned.learn_one(X[i], y[i])
+    assert full.X.shape[0] == pruned.X.shape[0] == n
+
+
+def test_svm_bag_cap_and_gram_consistency():
+    rng = np.random.default_rng(1)
+    n, d, budget = 400, 2, 50
+    A = rng.normal(-1, 1, (n, d))
+    B = rng.normal(1, 1, (n, d))
+    X = np.vstack([A, B])
+    y = np.concatenate([np.full(n, -1.0), np.full(n, 1.0)])
+    perm = rng.permutation(2 * n)
+    X, y = X[perm], y[perm]
+    m = ConformalSupportVectorMachine(
+        kernel="rbf",
+        sigma=1.0,
+        C=10.0,
+        label_space=np.array([-1.0, 1.0]),
+        rnd_state=2,
+        pruning="reservoir",
+        budget=budget,
+    )
+    m.learn_initial_training_set(X[:10], y[:10])
+    for i in range(10, n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+        assert m.K.shape == (m.X.shape[0], m.X.shape[0]), i
+        assert m.y.shape[0] == m.X.shape[0], i
+    assert m.X.shape[0] == budget
+
+
+def test_svm_coverage_preserved():
+    rng = np.random.default_rng(3)
+    n, d, budget = 200, 2, 80
+    A = rng.normal(-1, 1, (n, d))
+    B = rng.normal(1, 1, (n, d))
+    X = np.vstack([A, B])
+    y = np.concatenate([np.full(n, -1.0), np.full(n, 1.0)])
+    perm = rng.permutation(2 * n)
+    X, y = X[perm], y[perm]
+    m = ConformalSupportVectorMachine(
+        kernel="rbf",
+        sigma=1.0,
+        C=10.0,
+        label_space=np.array([-1.0, 1.0]),
+        rnd_state=4,
+        pruning="reservoir",
+        budget=budget,
+    )
+    m.learn_initial_training_set(X[:20], y[:20])
+    eps = 0.1
+    covered = total = 0
+    for i in range(20, n):
+        Gamma = m.predict(X[i], epsilon=eps)
+        covered += y[i] in Gamma
+        total += 1
+        m.learn_one(X[i], y[i])
+    rate = covered / total
+    assert rate >= 1 - eps - 0.03, f"coverage {rate:.3f} < {1 - eps}"
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(pytest.main([__file__, "-q"]))

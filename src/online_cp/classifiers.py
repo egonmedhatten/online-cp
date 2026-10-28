@@ -44,6 +44,11 @@ try:
 except ImportError:
     from _serialization import SerializableMixin
 
+try:
+    from ._pruning import _ReservoirBuffer, _evict_distance_matrix, _evict_masked_distance
+except ImportError:
+    from _pruning import _ReservoirBuffer, _evict_distance_matrix, _evict_masked_distance
+
 # Numba is optional — provides ~10x speedup for the SMO solver
 try:
     from numba import njit
@@ -169,6 +174,37 @@ class ConformalClassifier(SerializableMixin):
                 Gamma.append(y)
         return DiscretePredictionSet(np.array(Gamma), epsilon)
 
+    def predict_batch(
+        self,
+        X: NDArray,
+        epsilon: float | NDArray[np.floating[Any]] = default_epsilon,
+        **kwargs: Any,
+    ) -> list:
+        r"""Predict a batch of test objects.
+
+        Default implementation: call :meth:`predict` once per row of ``X``. The
+        result ``i`` is **bit-identical** to ``predict(X[i], epsilon=epsilon,
+        **kwargs)`` by construction. Subclasses that can vectorise the
+        nonconformity computation override this to be faster while still
+        returning the same values.
+
+        Parameters
+        ----------
+        X : ndarray, shape (m, d)
+            ``m`` test objects, one per row.
+        epsilon : float or array-like
+            Significance level (or levels). Passed through to :meth:`predict`.
+        **kwargs
+            Forwarded to :meth:`predict`.
+
+        Returns
+        -------
+        list
+            A list of ``m`` prediction sets, ``results[i] == predict(X[i], ...)``.
+        """
+        X = np.atleast_2d(np.asarray(X))
+        return [self.predict(x, epsilon=epsilon, **kwargs) for x in X]
+
 
 class ConformalNearestNeighboursClassifier(ConformalClassifier):
     r"""Conformal $k$-nearest-neighbours classifier ([ALRW2 §2.3]).
@@ -212,6 +248,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         "rnd_state",
         "n_jobs",
         "epsilon",
+        "pruning",
+        "budget",
     )
     _SAVE_STATE: tuple = (
         "X",
@@ -220,6 +258,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         "_label_indices",
         "_label_space_fixed",
         "label_space",
+        "_reservoir_n_seen",
     )
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
@@ -235,6 +274,8 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         rnd_state=None,
         n_jobs=None,
         epsilon=default_epsilon,
+        pruning: str | None = None,
+        budget: int | None = None,
     ):
         """Create a conformal nearest-neighbours classifier.
 
@@ -261,6 +302,17 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             :meth:`predict`.
         epsilon : float, default 0.1
             Default significance level.
+        pruning : {'reservoir'} or None, default None
+            Stream-pruning strategy that bounds the retained training bag.
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
+            from the stream (reservoir sampling), which **preserves
+            exchangeability** and therefore the exact finite-sample coverage
+            guarantee. ``None`` (default) keeps every example. See
+            :mod:`online_cp._pruning`.
+        budget : int or None, default None
+            Retained-bag size for reservoir pruning. Must be set together with
+            ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
+            identical to no pruning (exact, not just close).
         """
         super().__init__(epsilon=epsilon)
         self._label_space_fixed = label_space is not None
@@ -295,6 +347,23 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.rnd_gen = np.random.default_rng(rnd_state)
 
         self.n_jobs = n_jobs
+
+        # --- Reservoir pruning (budget-bounded stream) ---
+        self.pruning = pruning
+        self.budget = budget
+        if pruning is not None and pruning != "reservoir":
+            raise ValueError(
+                f"pruning must be 'reservoir' or None, got {pruning!r}. "
+                "Other strategies (window, sv, ...) break exchangeability and "
+                "are not yet implemented."
+            )
+        if pruning == "reservoir":
+            if budget is None:
+                raise ValueError("pruning='reservoir' requires a positive integer budget")
+        self._reservoir = (
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+        )
+        self._reservoir_n_seen = 0
 
     def _standard_distance_func(self, X, y=None):
         """
@@ -337,6 +406,17 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 self.label_space = np.unique(y)
             else:
                 self.label_space = np.sort(np.unique(np.concatenate([self.label_space, np.unique(y)])))
+            # Reservoir pruning: seed the reservoir from a uniform random subset
+            # of the initial bag (valid when the bag is a sample of the stream).
+            if self._reservoir is not None:
+                n = self.X.shape[0]
+                self._reservoir_n_seen = n
+                if n > self.budget:
+                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                    self.X = self.X[keep]
+                    self.y = self.y[keep]
+                    self.D = _evict_masked_distance(self.D, keep)
+                    self._label_indices = self._build_label_indices(self.y)
 
     @staticmethod
     def update_distance_matrix(D, d):
@@ -426,6 +506,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         """
         new_index = 0 if self.X is None else self.X.shape[0]
 
+        # Reservoir pruning: decide accept/evict *before* touching state.
+        # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
+        if self._reservoir is not None:
+            self._reservoir_n_seen += 1
+            eviction = self._reservoir.decide(self._reservoir_n_seen)
+        else:
+            eviction = -1
+
         # Enforce label-space policy
         if self._label_space_fixed:
             if y not in self.label_space:
@@ -434,6 +522,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             self.label_space = np.array([y])
         elif y not in self.label_space:
             self.label_space = np.sort(np.append(self.label_space, y))
+
+        # Discard: reservoir at capacity and this example lost the draw -- state
+        # unchanged. (The label-space policy above is harmless: a discarded
+        # example's label was already in the space, or the space grows only on
+        # *kept* examples; we keep it conservative and leave the space as-is when
+        # discarding by not mutating y/_label_indices/X/D.)
+        if eviction is None:
+            return
 
         # Learn label y
         self.y = np.append(self.y, y)
@@ -452,6 +548,16 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 precomputed = self.update_distance_matrix(self.D, d)
             self.D = precomputed
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
+
+        # If an existing position was evicted, drop it (row/col i of D, row i of
+        # X, element i of y) and rebuild the label index from the pruned y. The
+        # appended example (last position) is kept; the bag is back at `budget`.
+        if eviction >= 0:
+            i = eviction
+            self.D = _evict_distance_matrix(self.D, i)
+            self.X = np.delete(self.X, i, axis=0)
+            self.y = np.delete(self.y, i, axis=0)
+            self._label_indices = self._build_label_indices(self.y)
 
     def compute_p_value(
         self, x: NDArray[np.floating[Any]], y: Any, return_update: bool = False
@@ -614,6 +720,88 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 return Gamma, p_values
             else:
                 return Gamma
+
+    def predict_batch(
+        self,
+        X: NDArray,
+        epsilon: float | NDArray[np.floating[Any]] | None = None,
+        return_p_values: bool = False,
+    ) -> list:
+        r"""Predict a batch of test objects (vectorised distance computation).
+
+        Computes the full ``cdist(X_batch, X_train)`` distance matrix once and
+        reuses row ``i`` for the ``i``-th test object, avoiding the per-point
+        distance computation and ``update_distance_matrix`` that the sequential
+        :meth:`predict` performs. The smoothing variable ``tau`` is still drawn
+        **per test point in the same RNG order** as the sequential loop, and the
+        conformal post-processing is the same per-label computation, so each
+        result ``i`` is **bit-identical** to
+        ``predict(X[i], epsilon=epsilon, return_p_values=return_p_values)``.
+
+        Parameters
+        ----------
+        X : ndarray, shape (m, d)
+            ``m`` test objects, one per row.
+        epsilon : float, array-like, or None
+            Significance level(s). If None, uses ``self.epsilon``.
+        return_p_values : bool, default False
+            If True, each element is the ``(Gamma, p_values)`` tuple.
+
+        Returns
+        -------
+        list
+            A list of ``m`` prediction sets (or ``(Gamma, p_values)`` tuples).
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        if epsilon is None:
+            epsilon = self.epsilon
+        m = X.shape[0]
+
+        # Precompute the full batch distance matrix against the training bag.
+        # d_batch[i, j] == cdist(X[i], X_train[j]) == the distance predict(X[i])
+        # would compute via self.distance_func(self.X, X[i]).
+        d_batch = self.distance_func(X, self.X) if self.X is not None else None
+
+        results = []
+        for i in range(m):
+            # Draw tau per test point, in the same RNG order as the sequential
+            # loop, so the smoothing variable matches predict(X[i]) exactly.
+            p_values = {}
+            tau = self.rnd_gen.uniform(0, 1)
+
+            if self.label_space is None:
+                Gamma = DiscretePredictionSet(
+                    np.array([]), epsilon if not hasattr(epsilon, "__iter__") else epsilon[0]
+                )
+                if hasattr(epsilon, "__iter__"):
+                    Gamma = MultiLevelPredictionSet(
+                        {eps: DiscretePredictionSet(np.array([]), eps) for eps in epsilon}
+                    )
+                results.append((Gamma, p_values) if return_p_values else Gamma)
+                continue
+
+            if self.y.shape[0] >= 1:
+                # Build the augmented D for this test point from row i of d_batch.
+                d = d_batch[i]
+                D = self.update_distance_matrix(self.D, d)
+                test_index = D.shape[0] - 1
+                for label in self.label_space:
+                    label_indices = self._extend_label_indices(self._label_indices, label, test_index)
+                    same_label_distances, different_label_distances = self._find_nearest_distances(
+                        D, label_indices=label_indices
+                    )
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
+                Gamma = self._compute_Gamma(p_values, epsilon)
+            else:
+                for label in self.label_space:
+                    Alpha = np.array([np.inf])
+                    p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
+                Gamma = self._compute_Gamma(p_values, epsilon)
+
+            results.append((Gamma, p_values) if return_p_values else Gamma)
+        return results
 
 
 class ConformalClassifierWrapper(ConformalClassifier):
@@ -1011,6 +1199,17 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         Significance level. Default 0.1.
     rnd_state : int, np.random.Generator, or None
         Random seed or Generator.
+    pruning : {'reservoir'} or None, default None
+        Stream-pruning strategy that bounds the retained training bag.
+        ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
+        from the stream (reservoir sampling), which **preserves
+        exchangeability** and therefore the exact finite-sample coverage
+        guarantee. The SVM dual is re-solved on the retained Gram matrix in
+        ``predict``. ``None`` (default) keeps every example.
+    budget : int or None, default None
+        Retained-bag size for reservoir pruning. Must be set together with
+        ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
+        identical to no pruning (exact, not just close).
 
     Examples
     --------
@@ -1037,8 +1236,10 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         "smo_max_iter",
         "epsilon",
         "rnd_state",
+        "pruning",
+        "budget",
     )
-    _SAVE_STATE: tuple = ("X", "y", "K", "label_space", "_label_space_fixed")
+    _SAVE_STATE: tuple = ("X", "y", "K", "label_space", "_label_space_fixed", "_reservoir_n_seen")
     _SAVE_CALLABLES: tuple = ("kernel",)
 
     def __init__(
@@ -1054,6 +1255,8 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         smo_max_iter=5000,
         epsilon=default_epsilon,
         rnd_state=None,
+        pruning: str | None = None,
+        budget: int | None = None,
     ):
         if nonconformity not in ("margin", "alpha"):
             raise ValueError(f"nonconformity must be 'margin' or 'alpha', got '{nonconformity}'")
@@ -1080,6 +1283,23 @@ class ConformalSupportVectorMachine(ConformalClassifier):
 
         # Resolve kernel
         self._kernel = self._resolve_kernel(kernel)
+
+        # --- Reservoir pruning (budget-bounded stream) ---
+        self.pruning = pruning
+        self.budget = budget
+        if pruning is not None and pruning != "reservoir":
+            raise ValueError(
+                f"pruning must be 'reservoir' or None, got {pruning!r}. "
+                "Other strategies (window, sv, ...) break exchangeability and "
+                "are not yet implemented."
+            )
+        if pruning == "reservoir":
+            if budget is None:
+                raise ValueError("pruning='reservoir' requires a positive integer budget")
+        self._reservoir = (
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+        )
+        self._reservoir_n_seen = 0
 
     def _resolve_kernel(self, kernel):
         """Resolve kernel specification into a callable with our interface."""
@@ -1126,10 +1346,29 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         self.X = X.copy()
         self.y = y.copy().astype(float)
         self.K = self._compute_gram(X)
+        # Reservoir pruning: seed the reservoir from a uniform random subset of
+        # the initial bag. With n > budget, keep a size-`budget` sample and rebuild
+        # the Gram matrix on the retained positions.
+        if self._reservoir is not None:
+            n = self.X.shape[0]
+            self._reservoir_n_seen = n
+            if n > self.budget:
+                keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                self.X = self.X[keep]
+                self.y = self.y[keep]
+                self.K = _evict_masked_distance(self.K, keep)
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: Any) -> None:
         """Learn a new example, updating stored data and Gram matrix."""
         x = np.atleast_1d(x).ravel()
+
+        # Reservoir pruning: decide accept/evict *before* touching state.
+        # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
+        if self._reservoir is not None:
+            self._reservoir_n_seen += 1
+            eviction = self._reservoir.decide(self._reservoir_n_seen)
+        else:
+            eviction = -1
 
         # Enforce label-space policy
         if self._label_space_fixed:
@@ -1139,6 +1378,11 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             self.label_space = np.array([y])
         elif y not in self.label_space:
             self.label_space = np.sort(np.append(self.label_space, y))
+
+        # Discard: reservoir at capacity and this example lost the draw -- state
+        # unchanged (no append, no Gram update).
+        if eviction is None:
+            return
 
         if self.X is None:
             self.X = x.reshape(1, -1)
@@ -1160,6 +1404,16 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             self.K = K_new
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, float(y))
+
+        # If an existing position was evicted, drop row/col i of K, row i of X
+        # and element i of y. The appended example (last position) is kept; the
+        # bag is back at `budget`. The SVM dual is re-solved in predict(), so no
+        # other state needs updating.
+        if eviction >= 0:
+            i = eviction
+            self.K = _evict_distance_matrix(self.K, i)
+            self.X = np.delete(self.X, i, axis=0)
+            self.y = np.delete(self.y, i, axis=0)
 
     def predict(
         self,

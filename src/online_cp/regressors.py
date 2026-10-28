@@ -40,6 +40,11 @@ try:
 except ImportError:
     from _serialization import SerializableMixin
 
+try:
+    from ._pruning import _ReservoirBuffer, _evict_distance_matrix, _evict_masked_distance
+except ImportError:
+    from _pruning import _ReservoirBuffer, _evict_distance_matrix, _evict_masked_distance
+
 import numpy as np
 from joblib import Parallel, delayed
 from numpy.typing import NDArray
@@ -366,6 +371,37 @@ class ConformalRegressor(SerializableMixin):
                 return int(np.ceil(2 / epsilon.min()))
             else:
                 return int(np.ceil(1 / epsilon.min()))
+
+    def predict_batch(
+        self,
+        X: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] = default_epsilon,
+        **kwargs: Any,
+    ) -> list:
+        r"""Predict a batch of test objects.
+
+        Default implementation: call :meth:`predict` once per row of ``X``. The
+        result ``i`` is **bit-identical** to ``predict(X[i], epsilon=epsilon,
+        **kwargs)`` by construction. Subclasses that can vectorise the
+        nonconformity computation override this to be faster while still
+        returning the same values.
+
+        Parameters
+        ----------
+        X : ndarray, shape (m, d)
+            ``m`` test objects, one per row.
+        epsilon : float or array-like
+            Significance level (or levels). Passed through to :meth:`predict`.
+        **kwargs
+            Forwarded to :meth:`predict` (e.g. ``bounds``).
+
+        Returns
+        -------
+        list
+            A list of ``m`` prediction sets, ``results[i] == predict(X[i], ...)``.
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        return [self.predict(x, epsilon=epsilon, **kwargs) for x in X]
 
 
 class ConformalRidgeRegressor(ConformalRegressor):
@@ -1029,8 +1065,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         "verbose",
         "rnd_state",
         "epsilon",
+        "pruning",
+        "budget",
     )
-    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const", "_kth_distances")
+    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const", "_kth_distances", "_reservoir_n_seen")
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
 
@@ -1043,6 +1081,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         verbose=0,
         rnd_state=None,
         epsilon=default_epsilon,
+        pruning: str | None = None,
+        budget: int | None = None,
     ):
         """
         Parameters
@@ -1063,6 +1103,17 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             Seed or Generator for the random number generator.
         epsilon : float
             Default significance level.
+        pruning : {'reservoir'} or None, default None
+            Stream-pruning strategy that bounds the retained training bag.
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
+            from the stream (reservoir sampling), which **preserves
+            exchangeability** and therefore the exact finite-sample coverage
+            guarantee. ``None`` (default) keeps every example. See
+            :mod:`online_cp._pruning`.
+        budget : int or None, default None
+            Retained-bag size for reservoir pruning. Must be set together with
+            ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
+            identical to no pruning (exact, not just close).
         """
         super().__init__(epsilon=epsilon)
         self.k = k
@@ -1085,6 +1136,23 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.rnd_gen = rnd_state
         else:
             self.rnd_gen = np.random.default_rng(rnd_state)
+
+        # --- Reservoir pruning (budget-bounded stream) ---
+        self.pruning = pruning
+        self.budget = budget
+        if pruning is not None and pruning != "reservoir":
+            raise ValueError(
+                f"pruning must be 'reservoir' or None, got {pruning!r}. "
+                "Other strategies (window, sv, ...) break exchangeability and "
+                "are not yet implemented."
+            )
+        if pruning == "reservoir":
+            if budget is None:
+                raise ValueError("pruning='reservoir' requires a positive integer budget")
+        self._reservoir = (
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+        )
+        self._reservoir_n_seen = 0
 
     def _standard_distance_func(self, X, y=None):
         X = np.atleast_2d(X)
@@ -1161,6 +1229,18 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.X = np.atleast_2d(X)
         self.y = np.asarray(y, dtype=float)
         self.D = self.distance_func(self.X)
+        # Reservoir pruning: seed the reservoir from a uniform random subset of
+        # the initial bag (valid when the bag is a sample of the stream). When
+        # n <= budget, keep everything (exact, no pruning occurs yet).
+        if self._reservoir is not None:
+            n = self.X.shape[0]
+            self._reservoir_n_seen = n
+            if n > self.budget:
+                keep = self.rnd_gen.choice(n, size=self.budget, replace=False)
+                keep = np.sort(keep)
+                self.X = self.X[keep]
+                self.y = self.y[keep]
+                self.D = _evict_masked_distance(self.D, keep)
         # Cache constant parts of affine scores: a_i = y_i - ŷ_i (with y_n=0)
         self._update_residuals()
         # Cache k-th nearest distances for efficient reverse-neighbour detection
@@ -1226,24 +1306,52 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         """
         x = np.asarray(x).ravel()
 
+        # Reservoir pruning: decide accept/evict *before* touching state.
+        # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
+        if self._reservoir is not None:
+            self._reservoir_n_seen += 1
+            eviction = self._reservoir.decide(self._reservoir_n_seen)
+        else:
+            eviction = -1
+
         if self.X is None:
+            # First example ever: always keep (reservoir trivially holds it).
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=float)
             self.D = self.distance_func(self.X)
             # Cache residuals for efficient conformal prediction
             self._update_residuals()
             self._update_kth_distances()
+            return
+
+        # Discard: the reservoir is at capacity and this example lost the
+        # accept/evict draw -- state is unchanged.
+        if eviction is None:
+            return
+
+        # Append the new example (it occupies the last position).
+        if precomputed is not None and "D" in precomputed:
+            self.D = precomputed["D"]
         else:
-            if precomputed is not None and "D" in precomputed:
-                self.D = precomputed["D"]
-            else:
-                d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
-                self.D = self._update_distance_matrix(self.D, d)
-            self.X = np.vstack([self.X, x.reshape(1, -1)])
-            self.y = np.append(self.y, y)
-            # Refresh cached residuals and k-th distances after adding new point
-            self._update_residuals()
-            self._update_kth_distances()
+            d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
+            self.D = self._update_distance_matrix(self.D, d)
+        self.X = np.vstack([self.X, x.reshape(1, -1)])
+        self.y = np.append(self.y, y)
+
+        # If an existing position was evicted, drop it (row/col i of D, row i of
+        # X, element i of y). The appended example is at the last position and is
+        # kept. After the eviction, the bag is back at size `budget`.
+        if eviction >= 0:
+            i = eviction
+            self.D = _evict_distance_matrix(self.D, i)
+            self.X = np.delete(self.X, i, axis=0)
+            self.y = np.delete(self.y, i, axis=0)
+
+        # Refresh cached residuals and k-th distances from the (possibly pruned)
+        # matrices. These are rebuilt from scratch each step, so they automatically
+        # track the pruned state.
+        self._update_residuals()
+        self._update_kth_distances()
 
     def predict(
         self,
@@ -1554,8 +1662,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         "epsilon",
         "recompute_every",
         "studentised",
+        "pruning",
+        "budget",
     )
-    _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "_n_sm_updates")
+    _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "_n_sm_updates", "_reservoir_n_seen")
     _SAVE_CALLABLES: tuple = ("kernel",)
 
     def __init__(
@@ -1568,6 +1678,8 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         epsilon: float = default_epsilon,
         recompute_every: int | None = None,
         studentised: bool = False,
+        pruning: str | None = None,
+        budget: int | None = None,
     ) -> None:
         """
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is
@@ -1586,6 +1698,18 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             Default False.
         rnd_state : int, np.random.Generator, or None, default None
             Seed or Generator for the random number generator.
+        pruning : {'reservoir'} or None, default None
+            Stream-pruning strategy that bounds the retained training bag.
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
+            from the stream (reservoir sampling), which **preserves
+            exchangeability** and therefore the exact finite-sample coverage
+            guarantee. On each eviction the kernel inverse is recomputed from
+            scratch at size ``budget`` (O(budget³), bounded by the user's
+            budget). ``None`` (default) keeps every example.
+        budget : int or None, default None
+            Retained-bag size for reservoir pruning. Must be set together with
+            ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
+            identical to no pruning (exact, not just close).
         """
         super().__init__(epsilon=epsilon)
 
@@ -1616,6 +1740,23 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         self.recompute_every = recompute_every
         self._n_sm_updates = 0
 
+        # --- Reservoir pruning (budget-bounded stream) ---
+        self.pruning = pruning
+        self.budget = budget
+        if pruning is not None and pruning != "reservoir":
+            raise ValueError(
+                f"pruning must be 'reservoir' or None, got {pruning!r}. "
+                "Other strategies (window, sv, ...) break exchangeability and "
+                "are not yet implemented."
+            )
+        if pruning == "reservoir":
+            if budget is None:
+                raise ValueError("pruning='reservoir' requires a positive integer budget")
+        self._reservoir = (
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+        )
+        self._reservoir_n_seen = 0
+
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
@@ -1627,6 +1768,20 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         except np.linalg.LinAlgError:
             raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
         self._n_sm_updates = 0
+        # Reservoir pruning: seed the reservoir from a uniform random subset of
+        # the initial bag. With n > budget, keep a size-`budget` sample and rebuild
+        # K / Kinv on the retained positions.
+        if self._reservoir is not None:
+            n = self.X.shape[0]
+            self._reservoir_n_seen = n
+            if n > self.budget:
+                keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                self.X = self.X[keep]
+                self.y = self.y[keep]
+                self.K = _evict_masked_distance(self.K, keep)
+                Id = np.identity(self.X.shape[0])
+                self.Kinv = np.linalg.inv(self.K + self.a * Id)
+                self._n_sm_updates = 0
 
     def recompute_inverse(self) -> None:
         """Recompute (K + aI)^{-1} from scratch to correct numerical drift.
@@ -1668,6 +1823,19 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         """
         Learn a single example
         """
+        # Reservoir pruning: decide accept/evict *before* touching state.
+        # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
+        if self._reservoir is not None:
+            self._reservoir_n_seen += 1
+            eviction = self._reservoir.decide(self._reservoir_n_seen)
+        else:
+            eviction = -1
+
+        # Discard: reservoir at capacity and this example lost the draw -- state
+        # unchanged (no append, no kernel/inverse update).
+        if eviction is None:
+            return
+
         # Learn label y
         if self.y is None:
             self.y = np.array([y])
@@ -1722,6 +1890,20 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
                 if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
                     self.recompute_inverse()
+
+        # If an existing position was evicted, drop row/col i of K, row i of X and
+        # element i of y, then rebuild Kinv from scratch on the pruned kernel. The
+        # recomputation is O(n³) with n == budget (the bag is capped), so it is
+        # bounded by a constant set by the user's budget -- this is the intended
+        # "flatten at budget" behaviour of reservoir pruning.
+        if eviction >= 0:
+            i = eviction
+            self.K = _evict_distance_matrix(self.K, i)
+            self.X = np.delete(self.X, i, axis=0)
+            self.y = np.delete(self.y, i, axis=0)
+            Id = np.identity(self.X.shape[0])
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+            self._n_sm_updates = 0
 
     def compute_A_and_B(self, X, K, Kinv, y):
         """Compute A and B vectors for kernel conformal ridge regression.

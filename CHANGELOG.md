@@ -36,6 +36,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     current codebase; the only non-vectorised rank computation was the O(n * m)
     matrix above, now swept. No separate T4a JIT work is required.
 
+### Added
+  - **Reservoir-sampling stream pruning** (`pruning="reservoir"`, `budget=B`)
+    on `ConformalNearestNeighboursRegressor`,
+    `ConformalNearestNeighboursClassifier`, `KernelConformalRidgeRegressor`, and
+    `ConformalSupportVectorMachine`. The retained training bag is a uniform
+    random sample of `budget` examples from the stream (Vitter's Algorithm R),
+    which **preserves exchangeability** and therefore the exact finite-sample
+    coverage guarantee — the only pruning strategy with that property. With
+    `budget >= n` seen, behaviour is *bit-identical* to no pruning. The shared
+    controller lives in `online_cp._pruning` (`_ReservoirBuffer`); the pruned
+    state (bag, example count, `budget`, RNG position) round-trips through
+    `save`/`load`. Kernel-ridge recomputes the kernel inverse from scratch at
+    size `budget` on each eviction (O(budget³), bounded by the user's budget);
+    the k-NN classifier rebuilds its label index from the pruned labels.
+    Verified by `tests/test_pruning.py` (bit-identity, bag cap, index
+    consistency, coverage preservation, save/load round-trip).
+  - **Batch prediction API** — `predict_batch(X)` on the `ConformalRegressor`
+    and `ConformalClassifier` bases. The default is a loop over `predict`, which
+    is **bit-identical** to `predict(X[i])` per row by construction (Lasso and
+    SVM use this). A vectorised override on the k-NN classifier replaces the
+    per-point distance computation with one `cdist(X_batch, X_train)` call.
+    Contract: `predict_batch(X)[i] == predict(X[i])` exactly (enforced by
+    `tests/test_batch_predict.py`). Note: the smoothing variable `tau` is
+    positional, so a batch is not permutation-invariant for tau-smoothed models;
+    non-smoothed models (e.g. ridge) are.
+
 ---
 
 ## [0.4.0] — 2026-10-22

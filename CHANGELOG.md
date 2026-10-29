@@ -40,26 +40,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Stream pruning** (`pruning=`, `budget=B`) on
     `ConformalNearestNeighboursRegressor`,
     `ConformalNearestNeighboursClassifier`, `KernelConformalRidgeRegressor`, and
-    `ConformalSupportVectorMachine`. Two strategies, both of which **preserve
-    exchangeability** (and therefore the exact finite-sample coverage
-    guarantee):
+    `ConformalSupportVectorMachine`. Only **strictly-valid** (data-blind)
+    strategies are accepted, so the exact finite-sample coverage guarantee is
+    preserved unchanged. A strategy is strictly valid iff the retained bag is a
+    *bag-function* of the stream — a symmetric, value-blind sub-selection,
+    randomised only by data-independent randomness. Two built-ins:
     - `pruning="reservoir"` — the retained training bag is a uniform random
       sample of `budget` examples from the stream (Vitter's Algorithm R).
     - `pruning="window"` — the retained training bag is the most recent
-      `budget` examples (FIFO). Deterministic (seed-independent); less robust
-      than the reservoir on drifting / non-i.i.d. streams but trivial to
-      maintain and useful for adaptation.
-    Both are value-based, order-invariant sub-selections of the exchangeable
-    stream, so the new example remains exchangeable with the bag. With
-    `budget >= n` seen, behaviour is *bit-identical* to no pruning. The shared
-    controller lives in `online_cp._pruning` (`_ReservoirBuffer`); the pruned
+      `budget` examples (FIFO; expands to `budget` then slides). Deterministic
+      (seed-independent); less robust than the reservoir on drifting /
+      non-i.i.d. streams but trivial to maintain and useful for adaptation.
+    Both are data-blind bag-functions, so the new example remains exchangeable
+    with the bag. With `budget >= n` seen, behaviour is *bit-identical* to no
+    pruning.
+  - **Custom pruning strategies + validator** — a user may supply their own
+    strictly-valid strategy via `online_cp.PruningStrategy` (or an object
+    exposing `decide(n_seen)`), passed to a model with `pruning=<strategy>` and
+    `budget=B`. The library enforces the data-blind contract at the API boundary
+    with `online_cp.validate_strategy`: a strategy is accepted only if its
+    `decide` signature does **not** receive the data (`x`, `y`, `model`, `d`,
+    `alpha`, `leverage`, `point`, `example`, `bag`, `labels`, `features`,
+    `data`, `train`); model-state / value-dependent selectors (SV, leverage,
+    core-set, self-pruning, stratification) are **rejected** at construction —
+    there is no "best-effort" mode. The model injects its own `budget` and
+    `rnd_gen` into the strategy, so the RNG state serialises with the model and
+    save/load round-trips reproducibly. The shared controller lives in
+    `online_cp._pruning` (`PruningStrategy`, `_ReservoirBuffer`,
+    `_WindowBuffer`, `_make_strategy_buffer`, `validate_strategy`). The pruned
     state (bag, example count, `budget`, RNG position) round-trips through
     `save`/`load`. Kernel-ridge recomputes the kernel inverse from scratch at
     size `budget` on each eviction (O(budget³), bounded by the user's budget);
     the k-NN classifier rebuilds its label index from the pruned labels.
     Verified by `tests/test_pruning.py` (bit-identity, bag cap, index
-    consistency, coverage preservation, determinism, save/load round-trip, for
-    both strategies).
+    consistency, coverage preservation, determinism, save/load round-trip,
+    validator acceptance/rejection, custom-strategy save/load).
   - **Batch prediction API** — `predict_batch(X)` on the `ConformalRegressor`
     and `ConformalClassifier` bases. The default is a loop over `predict`, which
     is **bit-identical** to `predict(X[i])` per row by construction (Lasso and

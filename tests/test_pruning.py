@@ -23,7 +23,14 @@ from online_cp import (
     ConformalSupportVectorMachine,
     KernelConformalRidgeRegressor,
 )
-from online_cp._pruning import _ReservoirBuffer, _evict_distance_matrix, _evict_masked_distance
+from online_cp._pruning import (
+    _ReservoirBuffer,
+    _WindowBuffer,
+    PruningStrategy,
+    _evict_distance_matrix,
+    _evict_masked_distance,
+    validate_strategy,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +660,193 @@ def test_window_seed_in_initial_training_set():
     # Window keeps the last budget examples
     assert np.allclose(m.X, X[n - budget:])
     assert np.allclose(m.y, y[n - budget:])
+
+
+# ---------------------------------------------------------------------------
+# Validator: data-blind (strictly-valid) contract
+# ---------------------------------------------------------------------------
+
+
+# A module-level data-blind strategy (picklable by reference, unlike the
+# locally-defined helpers), used to exercise save/load reproducibility.
+class _EveryKthTestStrategy(PruningStrategy):
+    def __init__(self, budget, rnd_gen, period=3):
+        super().__init__(budget, rnd_gen)
+        self.period = period
+
+    def decide(self, n_seen):
+        if n_seen <= self.budget:
+            return -1
+        return (n_seen // self.period) % self.budget
+
+
+def _valid_strategy(period=3):
+    """A minimal data-blind strategy: evict position (n // period) % budget."""
+
+    class _EveryPeriod(PruningStrategy):
+        def __init__(self, budget, rnd_gen, period):
+            super().__init__(budget, rnd_gen)
+            self.period = period
+
+        def decide(self, n_seen):
+            if n_seen <= self.budget:
+                return -1
+            return (n_seen // self.period) % self.budget
+
+    return _EveryPeriod(10, np.random.default_rng(0), period)
+
+
+def _invalid_strategy_with_data_param():
+    """A strategy that inspects the data via a 'y' parameter -> invalid."""
+
+    class _LabelHugger:
+        def __init__(self, budget, rnd_gen):
+            self.budget = budget
+
+        def decide(self, n_seen, y):  # <-- value-dependent parameter
+            return 0
+
+    return _LabelHugger(10, np.random.default_rng(0))
+
+
+def test_validate_builtin_names_pass():
+    validate_strategy("reservoir")
+    validate_strategy("window")
+
+
+def test_validate_rejects_unknown_name():
+    for bad in ("sv", "leverage", "window2", ""):
+        with pytest.raises(ValueError):
+            validate_strategy(bad)
+
+
+def test_validate_accepts_pruning_strategy_instance():
+    # A PruningStrategy instance is trusted per its documented contract.
+    validate_strategy(_valid_strategy())
+    # Built-in strategies are also PruningStrategy instances.
+    validate_strategy(_ReservoirBuffer(10, np.random.default_rng(0)))
+    validate_strategy(_WindowBuffer(10, np.random.default_rng(0)))
+
+
+def test_validate_accepts_data_blind_callable():
+    class _EveryKth:
+        def __init__(self, budget, rnd_gen):
+            self.budget = budget
+
+        def decide(self, n_seen, budget, period=3):
+            if n_seen <= budget:
+                return -1
+            return (n_seen // period) % budget
+
+    validate_strategy(_EveryKth(10, np.random.default_rng(0)))
+
+
+def test_validate_rejects_callable_inspecting_data():
+    """Each value-dependent parameter name must be rejected by the validator."""
+    for param in ("y", "x", "model", "d", "leverage", "alpha", "point", "example", "bag", "labels", "features", "data", "train"):
+        # Build a strategy whose `decide` signature names the offending parameter.
+        src = (
+            "class _S:\n"
+            f"    def decide(self, n_seen, {param}):\n"
+            "        return 0\n"
+        )
+        ns = {}
+        exec(src, ns)
+        strat = ns["_S"]()
+        with pytest.raises(ValueError):
+            validate_strategy(strat)
+
+
+def test_validate_rejects_callable_without_decide():
+    with pytest.raises(ValueError):
+        validate_strategy(object())
+
+
+def test_validate_rejects_ambiguous_k_param():
+    class _AmbiguousK:
+        def __init__(self, budget, rnd_gen):
+            self.budget = budget
+
+        def decide(self, n_seen, k):
+            return 0
+
+    with pytest.raises(ValueError):
+        validate_strategy(_AmbiguousK(10, np.random.default_rng(0)))
+
+
+def test_validate_accepts_keyword_only_k():
+    class _KWOnlyK:
+        def __init__(self, budget, rnd_gen):
+            self.budget = budget
+
+        def decide(self, n_seen, *, k=3):
+            if n_seen <= self.budget:
+                return -1
+            return (n_seen // k) % self.budget
+
+    validate_strategy(_KWOnlyK(10, np.random.default_rng(0)))
+
+
+def test_model_rejects_invalid_string_pruning():
+    from online_cp import ConformalNearestNeighboursRegressor
+
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursRegressor(k=3, pruning="leverage", budget=10)
+
+
+def test_model_accepts_custom_data_blind_strategy():
+    """A user-defined data-blind strategy is accepted and used by the model."""
+    from online_cp import ConformalNearestNeighboursRegressor
+
+    rng = np.random.default_rng(0)
+    n, d, budget = 60, 2, 20
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+
+    strat = _valid_strategy(period=5)
+    m = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning=strat, budget=budget)
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+    assert m.X.shape[0] == budget
+
+
+def test_model_rejects_data_dependent_callable_strategy():
+    """A callable strategy that inspects the data is rejected at construction."""
+    from online_cp import ConformalNearestNeighboursRegressor
+
+    bad = _invalid_strategy_with_data_param()
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning=bad, budget=10)
+
+
+def test_custom_strategy_saveload_reproducible(tmp_path):
+    """A custom data-blind strategy round-trips via save/load and the model's
+    injected RNG keeps the pruned stream reproducible."""
+    from online_cp import ConformalNearestNeighboursRegressor
+
+    rng = np.random.default_rng(0)
+    n, d, budget = 120, 3, 30
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+
+    m = ConformalNearestNeighboursRegressor(
+        k=3,
+        rnd_state=1,
+        pruning=_EveryKthTestStrategy(budget, np.random.default_rng(0), period=7),
+        budget=budget,
+    )
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+    pred_before = m.predict(X[0], epsilon=0.1)
+    fp = tmp_path / "custom.joblib"
+    m.save(fp)
+    m2 = ConformalNearestNeighboursRegressor.load(fp)
+    pred_after = m2.predict(X[0], epsilon=0.1)
+    assert np.isclose(pred_before.lower, pred_after.lower) and np.isclose(
+        pred_before.upper, pred_after.upper
+    )
+    assert m2.X.shape[0] == m.X.shape[0] <= budget
 
 
 if __name__ == "__main__":

@@ -302,13 +302,15 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             :meth:`predict`.
         epsilon : float, default 0.1
             Default significance level.
-        pruning : {'reservoir'} or None, default None
+        pruning : {'reservoir', 'window'} or None, default None
             Stream-pruning strategy that bounds the retained training bag.
-            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
-            from the stream (reservoir sampling), which **preserves
-            exchangeability** and therefore the exact finite-sample coverage
-            guarantee. ``None`` (default) keeps every example. See
-            :mod:`online_cp._pruning`.
+            Both strategies preserve exchangeability (and therefore the exact
+            finite-sample coverage guarantee):
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples;
+            ``'window'`` keeps the most recent ``budget`` examples (FIFO). The
+            window is less robust than the reservoir on drifting / non-i.i.d.
+            streams but is trivial to maintain. ``None`` (default) keeps every
+            example. See :mod:`online_cp._pruning`.
         budget : int or None, default None
             Retained-bag size for reservoir pruning. Must be set together with
             ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
@@ -351,20 +353,17 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         # --- Reservoir pruning (budget-bounded stream) ---
         self.pruning = pruning
         self.budget = budget
-        if pruning is not None and pruning != "reservoir":
+        if pruning is not None and pruning not in ("reservoir", "window"):
             raise ValueError(
-                f"pruning must be 'reservoir' or None, got {pruning!r}. "
-                "Other strategies (window, sv, ...) are not yet implemented. "
-                "(Note: a value-based, order-invariant selector such as a "
-                "sliding window is also exchangeability-valid under the "
-                "stream-exchangeability assumption; only model-state-based "
-                "selectors break it.)"
+                f"pruning must be 'reservoir', 'window', or None, got {pruning!r}. "
+                "Other strategies (sv, leverage, ...) select on model state and "
+                "break exchangeability; they are not yet implemented."
             )
-        if pruning == "reservoir":
+        if pruning in ("reservoir", "window"):
             if budget is None:
-                raise ValueError("pruning='reservoir' requires a positive integer budget")
+                raise ValueError(f"pruning={pruning!r} requires a positive integer budget")
         self._reservoir = (
-            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning is not None else None
         )
         self._reservoir_n_seen = 0
 
@@ -415,7 +414,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 n = self.X.shape[0]
                 self._reservoir_n_seen = n
                 if n > self.budget:
-                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                    if self.pruning == "reservoir":
+                        keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                    else:  # window: keep the most recent `budget` examples
+                        keep = np.arange(n - self.budget, n)
                     self.X = self.X[keep]
                     self.y = self.y[keep]
                     self.D = _evict_masked_distance(self.D, keep)
@@ -513,7 +515,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
         if self._reservoir is not None:
             self._reservoir_n_seen += 1
-            eviction = self._reservoir.decide(self._reservoir_n_seen)
+            eviction = self._reservoir.decide(self._reservoir_n_seen, strategy=self.pruning)
         else:
             eviction = -1
 
@@ -1202,13 +1204,16 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         Significance level. Default 0.1.
     rnd_state : int, np.random.Generator, or None
         Random seed or Generator.
-    pruning : {'reservoir'} or None, default None
+    pruning : {'reservoir', 'window'} or None, default None
         Stream-pruning strategy that bounds the retained training bag.
-        ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
-        from the stream (reservoir sampling), which **preserves
-        exchangeability** and therefore the exact finite-sample coverage
-        guarantee. The SVM dual is re-solved on the retained Gram matrix in
-        ``predict``. ``None`` (default) keeps every example.
+        Both strategies preserve exchangeability (and therefore the exact
+        finite-sample coverage guarantee):
+        ``'reservoir'`` keeps a uniform random sample of ``budget`` examples;
+        ``'window'`` keeps the most recent ``budget`` examples (FIFO). The
+        window is less robust than the reservoir on drifting / non-i.i.d.
+        streams but is trivial to maintain. The SVM dual is re-solved on the
+        retained Gram matrix in ``predict``. ``None`` (default) keeps every
+        example.
     budget : int or None, default None
         Retained-bag size for reservoir pruning. Must be set together with
         ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
@@ -1290,20 +1295,17 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         # --- Reservoir pruning (budget-bounded stream) ---
         self.pruning = pruning
         self.budget = budget
-        if pruning is not None and pruning != "reservoir":
+        if pruning is not None and pruning not in ("reservoir", "window"):
             raise ValueError(
-                f"pruning must be 'reservoir' or None, got {pruning!r}. "
-                "Other strategies (window, sv, ...) are not yet implemented. "
-                "(Note: a value-based, order-invariant selector such as a "
-                "sliding window is also exchangeability-valid under the "
-                "stream-exchangeability assumption; only model-state-based "
-                "selectors break it.)"
+                f"pruning must be 'reservoir', 'window', or None, got {pruning!r}. "
+                "Other strategies (sv, leverage, ...) select on model state and "
+                "break exchangeability; they are not yet implemented."
             )
-        if pruning == "reservoir":
+        if pruning in ("reservoir", "window"):
             if budget is None:
-                raise ValueError("pruning='reservoir' requires a positive integer budget")
+                raise ValueError(f"pruning={pruning!r} requires a positive integer budget")
         self._reservoir = (
-            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning is not None else None
         )
         self._reservoir_n_seen = 0
 
@@ -1359,7 +1361,10 @@ class ConformalSupportVectorMachine(ConformalClassifier):
             n = self.X.shape[0]
             self._reservoir_n_seen = n
             if n > self.budget:
-                keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                if self.pruning == "reservoir":
+                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                else:  # window: keep the most recent `budget` examples
+                    keep = np.arange(n - self.budget, n)
                 self.X = self.X[keep]
                 self.y = self.y[keep]
                 self.K = _evict_masked_distance(self.K, keep)
@@ -1372,7 +1377,7 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
         if self._reservoir is not None:
             self._reservoir_n_seen += 1
-            eviction = self._reservoir.decide(self._reservoir_n_seen)
+            eviction = self._reservoir.decide(self._reservoir_n_seen, strategy=self.pruning)
         else:
             eviction = -1
 

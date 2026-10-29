@@ -1103,13 +1103,15 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             Seed or Generator for the random number generator.
         epsilon : float
             Default significance level.
-        pruning : {'reservoir'} or None, default None
+        pruning : {'reservoir', 'window'} or None, default None
             Stream-pruning strategy that bounds the retained training bag.
-            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
-            from the stream (reservoir sampling), which **preserves
-            exchangeability** and therefore the exact finite-sample coverage
-            guarantee. ``None`` (default) keeps every example. See
-            :mod:`online_cp._pruning`.
+            Both strategies preserve exchangeability (and therefore the exact
+            finite-sample coverage guarantee):
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples;
+            ``'window'`` keeps the most recent ``budget`` examples (FIFO). The
+            window is less robust than the reservoir on drifting / non-i.i.d.
+            streams but is trivial to maintain. ``None`` (default) keeps every
+            example. See :mod:`online_cp._pruning`.
         budget : int or None, default None
             Retained-bag size for reservoir pruning. Must be set together with
             ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
@@ -1140,20 +1142,17 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # --- Reservoir pruning (budget-bounded stream) ---
         self.pruning = pruning
         self.budget = budget
-        if pruning is not None and pruning != "reservoir":
+        if pruning is not None and pruning not in ("reservoir", "window"):
             raise ValueError(
-                f"pruning must be 'reservoir' or None, got {pruning!r}. "
-                "Other strategies (window, sv, ...) are not yet implemented. "
-                "(Note: a value-based, order-invariant selector such as a "
-                "sliding window is also exchangeability-valid under the "
-                "stream-exchangeability assumption; only model-state-based "
-                "selectors break it.)"
+                f"pruning must be 'reservoir', 'window', or None, got {pruning!r}. "
+                "Other strategies (sv, leverage, ...) select on model state and "
+                "break exchangeability; they are not yet implemented."
             )
-        if pruning == "reservoir":
+        if pruning in ("reservoir", "window"):
             if budget is None:
-                raise ValueError("pruning='reservoir' requires a positive integer budget")
+                raise ValueError(f"pruning={pruning!r} requires a positive integer budget")
         self._reservoir = (
-            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning is not None else None
         )
         self._reservoir_n_seen = 0
 
@@ -1239,8 +1238,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             n = self.X.shape[0]
             self._reservoir_n_seen = n
             if n > self.budget:
-                keep = self.rnd_gen.choice(n, size=self.budget, replace=False)
-                keep = np.sort(keep)
+                if self.pruning == "reservoir":
+                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                else:  # window: keep the most recent `budget` examples
+                    keep = np.arange(n - self.budget, n)
                 self.X = self.X[keep]
                 self.y = self.y[keep]
                 self.D = _evict_masked_distance(self.D, keep)
@@ -1313,7 +1314,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
         if self._reservoir is not None:
             self._reservoir_n_seen += 1
-            eviction = self._reservoir.decide(self._reservoir_n_seen)
+            eviction = self._reservoir.decide(self._reservoir_n_seen, strategy=self.pruning)
         else:
             eviction = -1
 
@@ -1701,14 +1702,17 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             Default False.
         rnd_state : int, np.random.Generator, or None, default None
             Seed or Generator for the random number generator.
-        pruning : {'reservoir'} or None, default None
+        pruning : {'reservoir', 'window'} or None, default None
             Stream-pruning strategy that bounds the retained training bag.
-            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples
-            from the stream (reservoir sampling), which **preserves
-            exchangeability** and therefore the exact finite-sample coverage
-            guarantee. On each eviction the kernel inverse is recomputed from
-            scratch at size ``budget`` (O(budget³), bounded by the user's
-            budget). ``None`` (default) keeps every example.
+            Both strategies preserve exchangeability (and therefore the exact
+            finite-sample coverage guarantee):
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples;
+            ``'window'`` keeps the most recent ``budget`` examples (FIFO). The
+            window is less robust than the reservoir on drifting / non-i.i.d.
+            streams but is trivial to maintain. On each eviction the kernel
+            inverse is recomputed from scratch at size ``budget``
+            (O(budget³), bounded by the user's budget). ``None`` (default)
+            keeps every example.
         budget : int or None, default None
             Retained-bag size for reservoir pruning. Must be set together with
             ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
@@ -1746,20 +1750,17 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         # --- Reservoir pruning (budget-bounded stream) ---
         self.pruning = pruning
         self.budget = budget
-        if pruning is not None and pruning != "reservoir":
+        if pruning is not None and pruning not in ("reservoir", "window"):
             raise ValueError(
-                f"pruning must be 'reservoir' or None, got {pruning!r}. "
-                "Other strategies (window, sv, ...) are not yet implemented. "
-                "(Note: a value-based, order-invariant selector such as a "
-                "sliding window is also exchangeability-valid under the "
-                "stream-exchangeability assumption; only model-state-based "
-                "selectors break it.)"
+                f"pruning must be 'reservoir', 'window', or None, got {pruning!r}. "
+                "Other strategies (sv, leverage, ...) select on model state and "
+                "break exchangeability; they are not yet implemented."
             )
-        if pruning == "reservoir":
+        if pruning in ("reservoir", "window"):
             if budget is None:
-                raise ValueError("pruning='reservoir' requires a positive integer budget")
+                raise ValueError(f"pruning={pruning!r} requires a positive integer budget")
         self._reservoir = (
-            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning == "reservoir" else None
+            _ReservoirBuffer(int(budget), self.rnd_gen) if pruning is not None else None
         )
         self._reservoir_n_seen = 0
 
@@ -1781,7 +1782,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             n = self.X.shape[0]
             self._reservoir_n_seen = n
             if n > self.budget:
-                keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                if self.pruning == "reservoir":
+                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                else:  # window: keep the most recent `budget` examples
+                    keep = np.arange(n - self.budget, n)
                 self.X = self.X[keep]
                 self.y = self.y[keep]
                 self.K = _evict_masked_distance(self.K, keep)
@@ -1833,7 +1837,7 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
         if self._reservoir is not None:
             self._reservoir_n_seen += 1
-            eviction = self._reservoir.decide(self._reservoir_n_seen)
+            eviction = self._reservoir.decide(self._reservoir_n_seen, strategy=self.pruning)
         else:
             eviction = -1
 

@@ -1,7 +1,8 @@
-"""Tests for reservoir-sampling stream pruning (``online_cp._pruning``).
+"""Tests for stream pruning (``online_cp._pruning``): reservoir sampling and sliding window.
 
-Reservoir sampling is the *only* pruning strategy that preserves exchangeability,
-and therefore the exact finite-sample coverage guarantee. These tests verify:
+Both reservoir sampling and the sliding window are value-based, order-invariant
+sub-selections of the exchangeable stream, so both preserve exchangeability and
+the exact finite-sample coverage guarantee. These tests verify:
 
 * **Bit-identity**: with ``budget >= n`` seen, pruning is a no-op and predictions
   match the unpruned model exactly.
@@ -283,7 +284,7 @@ def test_pruning_requires_budget(tmp_path):
     with pytest.raises(ValueError):
         ConformalNearestNeighboursClassifier(k=1, pruning="reservoir")
     with pytest.raises(ValueError):
-        ConformalNearestNeighboursRegressor(k=1, pruning="window", budget=10)
+        ConformalNearestNeighboursRegressor(k=1, pruning="window")
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +450,209 @@ def test_svm_coverage_preserved():
         m.learn_one(X[i], y[i])
     rate = covered / total
     assert rate >= 1 - eps - 0.03, f"coverage {rate:.3f} < {1 - eps}"
+
+
+# ---------------------------------------------------------------------------
+# Sliding-window pruning: bit-identity, bag cap, determinism, coverage,
+# save/load
+# ---------------------------------------------------------------------------
+
+
+def test_window_requires_budget():
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursRegressor(k=1, pruning="window")
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursClassifier(k=1, pruning="window")
+    with pytest.raises(ValueError):
+        ConformalSupportVectorMachine(kernel="rbf", label_space=[-1, 1], pruning="window")
+    with pytest.raises(ValueError):
+        KernelConformalRidgeRegressor(kernel="rbf", pruning="window")
+
+
+def test_window_rejects_unknown_strategy():
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursRegressor(k=1, pruning="sv", budget=10)
+    with pytest.raises(ValueError):
+        ConformalNearestNeighboursClassifier(k=1, pruning="sv", budget=10)
+
+
+def test_window_keeps_most_recent_and_caps_bag():
+    """Window keeps the most recent `budget` examples; bag never exceeds budget."""
+    rng = np.random.default_rng(0)
+    n, d, budget = 80, 3, 20
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    m = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning="window", budget=budget)
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+        assert m._reservoir_n_seen == i + 1
+    assert m.X.shape[0] == budget
+    # Window keeps the most recent: last row == X[-1], first row == X[n-budget]
+    assert np.allclose(m.X[-1], X[-1])
+    assert np.allclose(m.X[0], X[n - budget])
+    assert np.allclose(m.y[-1], y[-1])
+    assert np.allclose(m.y[0], y[n - budget])
+
+
+def test_window_bit_identical_when_budget_ge_n():
+    """budget >= n -> no eviction ever -> exact match with the unpruned model."""
+    rng = np.random.default_rng(1)
+    n, d = 120, 3
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    full = ConformalNearestNeighboursRegressor(k=3, rnd_state=1)
+    win = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning="window", budget=n)
+    for i in range(n):
+        gf = full.predict(X[i], epsilon=0.1, return_update=True)
+        gw = win.predict(X[i], epsilon=0.1, return_update=True)
+        assert np.isclose(gf[0].lower, gw[0].lower) and np.isclose(gf[0].upper, gw[0].upper), i
+        full.learn_one(X[i], y[i], precomputed=gf[1])
+        win.learn_one(X[i], y[i], precomputed=gw[1])
+    assert full.X.shape[0] == win.X.shape[0] == n
+
+
+def test_window_deterministic_across_seeds():
+    """Window eviction is deterministic (FIFO), so two models with different
+    seeds but the same data/budget produce identical predictions."""
+    rng = np.random.default_rng(2)
+    n, d, budget = 200, 3, 30
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    m1 = ConformalNearestNeighboursRegressor(k=3, rnd_state=7, pruning="window", budget=budget)
+    m2 = ConformalNearestNeighboursRegressor(k=3, rnd_state=999, pruning="window", budget=budget)
+    for i in range(n):
+        g1 = m1.predict(X[i], epsilon=0.1)
+        g2 = m2.predict(X[i], epsilon=0.1)
+        assert np.isclose(g1.lower, g2.lower) and np.isclose(g1.upper, g2.upper), i
+        m1.learn_one(X[i], y[i])
+        m2.learn_one(X[i], y[i])
+
+
+def test_window_classifier_keeps_most_recent_and_indices_consistent():
+    rng = np.random.default_rng(3)
+    n, budget = 40, 15
+    A = rng.normal(0, 1, (n, 2))
+    B = rng.normal(3, 1, (n, 2))
+    X = np.vstack([A, B])
+    y = np.concatenate([np.zeros(n, int), np.ones(n, int)])
+    perm = rng.permutation(2 * n)
+    X, y = X[perm], y[perm]
+    m = ConformalNearestNeighboursClassifier(
+        k=1, label_space=np.array([0, 1]), rnd_state=4, pruning="window", budget=budget
+    )
+    for i in range(2 * n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+        for lab, idx in m._label_indices.items():
+            for pos in idx:
+                assert m.y[pos] == lab, (i, pos, m.y[pos], lab)
+    assert m.X.shape[0] == budget
+    assert np.allclose(m.X[-1], X[-1])
+    assert np.allclose(m.X[0], X[2 * n - budget])
+
+
+def test_window_kernel_ridge_keeps_most_recent_and_kinv_consistent():
+    from online_cp.kernels import GaussianKernel
+
+    rng = np.random.default_rng(4)
+    n, budget = 60, 15
+    X = rng.uniform(0, 1, (n, 2))
+    y = np.sin(4 * X[:, 0]) + 0.1 * rng.standard_normal(n)
+    m = KernelConformalRidgeRegressor(
+        kernel=GaussianKernel(sigma=0.5), a=0.1, rnd_state=1, pruning="window", budget=budget
+    )
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+        assert m.K.shape == (m.X.shape[0], m.X.shape[0]), i
+        assert m.Kinv.shape == (m.X.shape[0], m.X.shape[0]), i
+    assert m.X.shape[0] == budget
+    assert np.allclose(m.X[-1], X[-1])
+    assert np.allclose(m.X[0], X[n - budget])
+    # K must equal the kernel of the retained X (consistency)
+    assert np.allclose(m.K, m.kernel(m.X))
+
+
+def test_window_svm_keeps_most_recent():
+    rng = np.random.default_rng(5)
+    n, budget = 40, 15
+    A = rng.normal(-1, 1, (n, 2))
+    B = rng.normal(1, 1, (n, 2))
+    X = np.vstack([A, B])
+    y = np.concatenate([np.full(n, -1.0), np.full(n, 1.0)])
+    perm = rng.permutation(2 * n)
+    X, y = X[perm], y[perm]
+    m = ConformalSupportVectorMachine(
+        kernel="rbf",
+        sigma=1.0,
+        C=10.0,
+        label_space=np.array([-1.0, 1.0]),
+        rnd_state=6,
+        pruning="window",
+        budget=budget,
+    )
+    for i in range(2 * n):
+        m.learn_one(X[i], y[i])
+        assert m.X.shape[0] <= budget, i
+    assert m.X.shape[0] == budget
+    assert np.allclose(m.X[-1], X[-1])
+    assert np.allclose(m.X[0], X[2 * n - budget])
+
+
+def test_window_coverage_preserved():
+    """Window pruning keeps coverage near the target (within a looser tolerance
+    than reservoir, since the window is less robust on drifting streams)."""
+    rng = np.random.default_rng(6)
+    n, d = 2000, 3
+    X = rng.uniform(0, 1, (n, d))
+    y = X[:, 0] * 2 + 0.2 * rng.standard_normal(n)
+    eps = 0.1
+    model = ConformalNearestNeighboursRegressor(k=5, rnd_state=7, pruning="window", budget=200)
+    model.learn_initial_training_set(X[:100], y[:100])
+    covered = total = 0
+    for i in range(100, n):
+        interval = model.predict(X[i], epsilon=eps)
+        covered += interval.lower <= y[i] <= interval.upper
+        total += 1
+        model.learn_one(X[i], y[i])
+    rate = covered / total
+    assert rate >= 1 - eps - 0.03, f"window coverage {rate:.3f} < {1 - eps - 0.03}"
+
+
+def test_window_saveload_preserves_state(tmp_path):
+    rng = np.random.default_rng(7)
+    n, d, budget = 120, 3, 30
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    m = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning="window", budget=budget)
+    for i in range(n):
+        m.learn_one(X[i], y[i])
+    bag, nseen = m.X.shape[0], m._reservoir_n_seen
+    pred_before = m.predict(X[0], epsilon=0.1)
+    fp = tmp_path / "win.joblib"
+    m.save(fp)
+    m2 = ConformalNearestNeighboursRegressor.load(fp)
+    assert m2.X.shape[0] == bag
+    assert m2._reservoir_n_seen == nseen
+    assert m2.budget == budget and m2.pruning == "window"
+    pred_after = m2.predict(X[0], epsilon=0.1)
+    assert np.isclose(pred_before.lower, pred_after.lower) and np.isclose(pred_before.upper, pred_after.upper)
+
+
+def test_window_seed_in_initial_training_set():
+    """When learn_initial_training_set is called with n > budget, the window keeps
+    the last `budget` examples (not a random sample)."""
+    rng = np.random.default_rng(8)
+    n, d, budget = 50, 3, 20
+    X = rng.uniform(0, 1, (n, d))
+    y = rng.standard_normal(n)
+    m = ConformalNearestNeighboursRegressor(k=3, rnd_state=1, pruning="window", budget=budget)
+    m.learn_initial_training_set(X, y)
+    assert m.X.shape[0] == budget
+    # Window keeps the last budget examples
+    assert np.allclose(m.X, X[n - budget:])
+    assert np.allclose(m.y, y[n - budget:])
 
 
 if __name__ == "__main__":

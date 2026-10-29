@@ -1,31 +1,33 @@
 """Reservoir-sampling stream pruning for budget-bounded online conformal learning.
 
-This module implements reservoir sampling (Vitter's Algorithm R) as the
-reference stream-pruning strategy. It keeps a uniform random sample of size
-``budget`` from the stream seen so far, so the retained bag is exchangeable
-with the full stream and the conformal guarantee is maintained unchanged.
+This module implements the two exchangeability-preserving stream-pruning
+strategies: **reservoir sampling** (Vitter's Algorithm R) and a **sliding
+window** (FIFO). Both keep a value-based, order-invariant sub-selection of the
+stream, so the retained bag is exchangeable with the full stream and the
+conformal guarantee is maintained unchanged.
 
-A pruning strategy preserves exchangeability -- and hence the exact finite-sample
-coverage guarantee -- whenever its retention rule is a function of the *values*
-of the stream that is *order-invariant*. Reservoir sampling satisfies this (the
-retained bag is a uniform random subset of the stream). So does a sliding window
-(a value-based, order-invariant selection): under the stream-exchangeability
-assumption that this library takes as its validity model, the new example is
-exchangeable with the window, and the window is a valid (though not the
-*only*) budget-bounded strategy. What *does* break exchangeability are
-model-state-based selectors (SV-informed, leverage, core-set, self-pruning),
+- **Reservoir** keeps a uniform random sample of size ``budget``.
+- **Window** keeps the most recent ``budget`` examples.
+
+A pruning strategy preserves exchangeability -- and hence the exact
+finite-sample coverage guarantee -- whenever its retention rule is a function
+of the *values* of the stream that is *order-invariant*. Both reservoir
+sampling and the sliding window satisfy this. What *does* break exchangeability
+are model-state-based selectors (SV-informed, leverage, core-set, self-pruning),
 whose selection correlates with the test point's own nonconformity.
 
 Design
 ------
 The :class:`_ReservoirBuffer` is a thin, model-agnostic controller. It is
 stateless with respect to the stream count (the model owns ``n_seen`` so it
-serialises cleanly). At each ``learn_one``, ``decide(n_seen)`` reports whether
-the just-arrived example is *kept* or *discarded*:
+serialises cleanly). At each ``learn_one``, ``decide(n_seen, strategy)``
+reports whether the just-arrived example is *kept* or *discarded*:
 
-- kept with probability ``budget / n_seen`` (Vitter's Algorithm R); when kept,
-  it also reports which existing position (``0 .. budget - 1``) was evicted, so
-  the model can drop that row/column from its own state;
+- reservoir: kept with probability ``budget / n_seen`` (Vitter's Algorithm R);
+  when kept, it also reports which existing position (``0 .. budget - 1``) was
+  evicted, so the model can drop that row/column from its own state;
+- window: kept unconditionally; when the bag is full it evicts position ``0``
+  (the oldest element);
 - discarded otherwise (state unchanged).
 
 The eviction mechanic is model-specific (k-NN drops row/col ``i`` of the
@@ -50,20 +52,23 @@ if TYPE_CHECKING:
 
 
 class _ReservoirBuffer:
-    """Reservoir-sampling budget controller (stateless w.r.t. the stream count).
+    """Pruning budget controller (stateless w.r.t. the stream count).
 
     The model owns the running count of examples seen (``n_seen``) so it can be
     serialised/restored trivially; the buffer only needs the budget and the RNG.
-    ``decide(n_seen)`` reports the accept/evict decision for the *just-arrived*
-    example, given that ``n_seen`` (including it) is the total seen so far.
+    ``decide(n_seen, strategy)`` reports the accept/evict decision for the
+    *just-arrived* example, given that ``n_seen`` (including it) is the total
+    seen so far. ``strategy`` is ``"reservoir"`` (default, random eviction) or
+    ``"window"`` (FIFO eviction of the oldest element).
 
     Parameters
     ----------
     budget : int
-        Maximum number of examples retained (the reservoir size).
+        Maximum number of examples retained (the reservoir / window size).
     rnd_gen : numpy.random.Generator
         The model's random generator (advanced in place; serialised with the
-        model). Used for all accept/evict draws.
+        model). Used for the accept/evict draws in reservoir mode (unused by
+        the window, which is deterministic).
     """
 
     def __init__(self, budget: int, rnd_gen: "_npr.Generator") -> None:
@@ -72,7 +77,7 @@ class _ReservoirBuffer:
         self.budget = int(budget)
         self.rnd_gen = rnd_gen
 
-    def decide(self, n_seen: int) -> int | None:
+    def decide(self, n_seen: int, strategy: str = "reservoir") -> int | None:
         """Accept/evict decision for the example that brings the stream to
         ``n_seen`` examples in total (``n_seen`` counts the new example).
 
@@ -83,13 +88,26 @@ class _ReservoirBuffer:
           position ``i`` (``0 <= i < budget``).
         - ``None``      -- *discard* the new example (state unchanged).
 
-        This is Vitter's Algorithm R: for ``n_seen > budget`` the new example is
-        kept with probability ``budget / n_seen``; when kept, the evicted
-        position is uniform over ``{0, ..., budget - 1}``. For ``n_seen <=
-        budget`` every example is kept.
+        Two strategies:
+
+        - ``strategy="reservoir"`` (default): Vitter's Algorithm R. For
+          ``n_seen > budget`` the new example is kept with probability
+          ``budget / n_seen``; when kept, the evicted position is uniform over
+          ``{0, ..., budget - 1}``. For ``n_seen <= budget`` every example is
+          kept.
+
+        - ``strategy="window"``: keep the new example unconditionally; when the
+          bag is already full (``n_seen > budget``) evict position ``0`` (the
+          oldest element). For ``n_seen <= budget`` every example is kept. The
+          window is a value-based, order-invariant sub-selection of the
+          exchangeable stream, so it preserves exchangeability and the exact
+          finite-sample coverage guarantee (less robust on drifting streams,
+          see ``design/pruning.md``).
         """
         if n_seen <= self.budget:
             return -1  # reservoir not yet full: keep, no eviction
+        if strategy == "window":
+            return 0  # window: always keep the new example; evict the oldest
         # Reservoir at capacity. Keep with prob budget / n_seen.
         j = int(self.rnd_gen.integers(0, n_seen))  # uniform on {0, ..., n_seen-1}
         if j < self.budget:

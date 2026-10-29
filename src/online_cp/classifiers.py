@@ -354,8 +354,11 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         if pruning is not None and pruning != "reservoir":
             raise ValueError(
                 f"pruning must be 'reservoir' or None, got {pruning!r}. "
-                "Other strategies (window, sv, ...) break exchangeability and "
-                "are not yet implemented."
+                "Other strategies (window, sv, ...) are not yet implemented. "
+                "(Note: a value-based, order-invariant selector such as a "
+                "sliding window is also exchangeability-valid under the "
+                "stream-exchangeability assumption; only model-state-based "
+                "selectors break it.)"
             )
         if pruning == "reservoir":
             if budget is None:
@@ -1290,8 +1293,11 @@ class ConformalSupportVectorMachine(ConformalClassifier):
         if pruning is not None and pruning != "reservoir":
             raise ValueError(
                 f"pruning must be 'reservoir' or None, got {pruning!r}. "
-                "Other strategies (window, sv, ...) break exchangeability and "
-                "are not yet implemented."
+                "Other strategies (window, sv, ...) are not yet implemented. "
+                "(Note: a value-based, order-invariant selector such as a "
+                "sliding window is also exchangeability-valid under the "
+                "stream-exchangeability assumption; only model-state-based "
+                "selectors break it.)"
             )
         if pruning == "reservoir":
             if budget is None:

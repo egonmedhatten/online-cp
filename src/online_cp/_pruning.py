@@ -1,10 +1,20 @@
 """Reservoir-sampling stream pruning for budget-bounded online conformal learning.
 
-This module implements the *only* pruning strategy that preserves exchangeability
-(and therefore the exact finite-sample coverage guarantee) -- reservoir sampling
-(Vitter's Algorithm R). It keeps a uniform random sample of size ``budget`` from
-the stream seen so far, so the retained bag is exchangeable with the full stream
-and the conformal guarantee is maintained unchanged.
+This module implements reservoir sampling (Vitter's Algorithm R) as the
+reference stream-pruning strategy. It keeps a uniform random sample of size
+``budget`` from the stream seen so far, so the retained bag is exchangeable
+with the full stream and the conformal guarantee is maintained unchanged.
+
+A pruning strategy preserves exchangeability -- and hence the exact finite-sample
+coverage guarantee -- whenever its retention rule is a function of the *values*
+of the stream that is *order-invariant*. Reservoir sampling satisfies this (the
+retained bag is a uniform random subset of the stream). So does a sliding window
+(a value-based, order-invariant selection): under the stream-exchangeability
+assumption that this library takes as its validity model, the new example is
+exchangeable with the window, and the window is a valid (though not the
+*only*) budget-bounded strategy. What *does* break exchangeability are
+model-state-based selectors (SV-informed, leverage, core-set, self-pruning),
+whose selection correlates with the test point's own nonconformity.
 
 Design
 ------

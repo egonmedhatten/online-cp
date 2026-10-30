@@ -41,9 +41,9 @@ except ImportError:
     from _serialization import SerializableMixin
 
 try:
-    from ._pruning import _make_strategy_buffer, _evict_distance_matrix, _evict_masked_distance
+    from ._pruning import _evict_distance_matrix, _evict_masked_distance, _make_strategy_buffer
 except ImportError:
-    from _pruning import _make_strategy_buffer, _evict_distance_matrix, _evict_masked_distance
+    from _pruning import _evict_distance_matrix, _evict_masked_distance, _make_strategy_buffer
 
 import numpy as np
 from joblib import Parallel, delayed

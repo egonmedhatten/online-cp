@@ -95,7 +95,7 @@ class PruningStrategy:
     >>> strat = EveryKth(1000, np.random.default_rng(0), period=3)
     """
 
-    def __init__(self, budget: int, rnd_gen: "_npr.Generator") -> None:
+    def __init__(self, budget: int, rnd_gen: _npr.Generator) -> None:
         if budget is None or int(budget) < 1:
             raise ValueError(f"budget must be a positive integer, got {budget!r}")
         self.budget = int(budget)
@@ -146,7 +146,7 @@ class _WindowBuffer(PruningStrategy):
         return 0
 
 
-def _reservoir_decide(n_seen: int, budget: int, rnd_gen: "_npr.Generator") -> int | None:
+def _reservoir_decide(n_seen: int, budget: int, rnd_gen: _npr.Generator) -> int | None:
     """Vitter's Algorithm R decision (module-level helper, used by the default
     :class:`PruningStrategy` and :class:`_ReservoirBuffer`)."""
     if n_seen <= budget:
@@ -246,7 +246,7 @@ def validate_strategy(pruning) -> None:
     return
 
 
-def _make_strategy_buffer(pruning, budget: int, rnd_gen: "_npr.Generator") -> PruningStrategy:
+def _make_strategy_buffer(pruning, budget: int, rnd_gen: _npr.Generator) -> PruningStrategy:
     """Build the strategy buffer from a ``pruning`` argument.
 
     ``pruning`` is one of:

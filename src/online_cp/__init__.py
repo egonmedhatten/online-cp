@@ -50,6 +50,12 @@ True
 
 __version__ = "0.4.0"
 
+from online_cp._pruning import (
+    PruningStrategy as PruningStrategy,
+)
+from online_cp._pruning import (
+    validate_strategy as validate_strategy,
+)
 from online_cp._serialization import (
     SerializationError as SerializationError,
 )
@@ -355,12 +361,6 @@ from online_cp.preprocessing import (
 )
 from online_cp.preprocessing import (
     StandardScaler as StandardScaler,
-)
-from online_cp._pruning import (
-    PruningStrategy as PruningStrategy,
-)
-from online_cp._pruning import (
-    validate_strategy as validate_strategy,
 )
 from online_cp.regressors import (
     ConformalLassoRegressor as ConformalLassoRegressor,

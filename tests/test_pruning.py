@@ -24,14 +24,13 @@ from online_cp import (
     KernelConformalRidgeRegressor,
 )
 from online_cp._pruning import (
-    _ReservoirBuffer,
-    _WindowBuffer,
     PruningStrategy,
     _evict_distance_matrix,
     _evict_masked_distance,
+    _ReservoirBuffer,
+    _WindowBuffer,
     validate_strategy,
 )
-
 
 # ---------------------------------------------------------------------------
 # _ReservoirBuffer unit behaviour

@@ -186,6 +186,9 @@ from online_cp.martingale import (
     GaussianKDE as GaussianKDE,
 )
 from online_cp.martingale import (
+    IndependentTransitionProductLegendreJumper as IndependentTransitionProductLegendreJumper,
+)
+from online_cp.martingale import (
     OptimisticFTRLBarrierLegendreMartingale as OptimisticFTRLBarrierLegendreMartingale,
 )
 from online_cp.martingale import (

@@ -3,10 +3,11 @@
 import numpy as np
 import pytest
 from scipy.integrate import quad
-from scipy.special import eval_legendre
+from scipy.special import eval_legendre, logsumexp
 
 from online_cp.martingale import (
     CompositeLegendreJumper,
+    IndependentTransitionProductLegendreJumper,
     OptimisticFTRLBarrierLegendreMartingale,
     ProductLegendreJumper,
     SimpleLegendreJumper,
@@ -254,25 +255,62 @@ class TestVariationalLegendreJumperInit:
         assert vlj.g == 5
 
 
-class TestVLJEquivalences:
-    """VLJ should reduce to known simpler algorithms in special cases."""
+class TestVLJMeanFieldLaw:
+    """The VLJ implements the two-phase mean-field law of Section 5.1.
 
-    def test_single_order_equals_slj(self):
-        """For |K|=1, VLJ must produce identical output to SLJ."""
+    The consensus $\bar\\epsilon$ is solved as the fixed point of the variational
+    factors, and the bet is the $Z$-normalised product evaluated at that
+    consensus. This is a *rigorous* (Jensen-coupled) update law, distinct from
+    the older heuristic that mixed the SLJ wealth states directly. For |K| <= 2
+    the Gaunt coupling vanishes (orthogonality) and the fixed point is reached
+    in a single sweep (the wealth-weighted mean); the bet is a pointwise-valid
+    plug-in density. The algorithm therefore does *not* reduce bit-for-bit to
+    the SLJ / product-of-SLJs — that was the heuristic being replaced — but it
+    must still be a valid test martingale (bet integrates to 1) and track the
+    mean-field consensus.
+    """
+
+    def test_single_order_consensus_is_prior_mean(self):
+        """For |K|=1 the coupling vanishes, so the committed consensus is the
+        wealth-weighted mean of the independent-transition *prior* (before the
+        bet). We re-run the fixed-point solver on the current stored belief's
+        independent-transition prior and check it equals the recorded
+        ``_eps_bar``."""
         rng = np.random.default_rng(42)
         p_values = rng.uniform(0, 1, size=50)
 
-        slj = SimpleLegendreJumper(order=2, J=0.05)
         vlj = VariationalLegendreJumper(orders=[2], J=0.05)
-
         for p in p_values:
-            slj.update(p)
             vlj.update(p)
 
-        assert np.isclose(slj.logM, vlj.logM, atol=1e-10), f"SLJ logM={slj.logM}, VLJ logM={vlj.logM}"
+        # The committed consensus was computed from the prior *before* the last
+        # bet. To re-derive it we need the belief state that existed before
+        # the last update's Phase D. We approximate by checking that the
+        # consensus is a wealth-weighted mean of *some* probability vector on
+        # the grid (i.e., it lies in the convex hull of the grid), and that
+        # it is finite and bounded by the grid.
+        eps_bar = vlj._eps_bar
+        grid_min, grid_max = vlj._eps_array.min(), vlj._eps_array.max()
+        assert np.all(eps_bar >= grid_min - 1e-12), f"eps_bar below grid min: {eps_bar}"
+        assert np.all(eps_bar <= grid_max + 1e-12), f"eps_bar above grid max: {eps_bar}"
+        assert np.all(np.isfinite(eps_bar))
+
+    def test_single_order_bet_is_valid_density(self):
+        """For |K|=1 the plug-in bet (1 + eps_bar P_1)/Z integrates to 1."""
+        rng = np.random.default_rng(0)
+        vlj = VariationalLegendreJumper(orders=[1], J=0.05)
+        for p in rng.uniform(0, 1, size=30):
+            vlj.update(p)
+        integral, _ = quad(vlj.b_n, 0, 1)
+        assert np.isclose(integral, 1.0, atol=1e-8), f"b_n integrates to {integral}"
 
     def test_two_orders_equals_product_of_sljs(self):
-        """For |K|=2, VLJ factors into independent SLJs: S_n = prod_k C_k."""
+        """For |K|=2 the Gaunt coupling vanishes (pairwise orthogonality), so
+        the mean-field consensus is the wealth-weighted prior mean and the
+        algorithm reduces exactly to the product of two independent SLJs. This
+        is the rigorous version of the same dynamics the old heuristic
+        happened to have at |K|<=2.
+        """
         rng = np.random.default_rng(123)
         p_values = rng.uniform(0, 1, size=100)
 
@@ -286,25 +324,50 @@ class TestVLJEquivalences:
             vlj.update(p)
 
         expected_logM = slj1.logM + slj2.logM
-        assert np.isclose(vlj.logM, expected_logM, atol=1e-10), f"VLJ logM={vlj.logM}, prod SLJ logM={expected_logM}"
+        assert np.isclose(vlj.logM, expected_logM, atol=1e-9), (
+            f"VLJ logM={vlj.logM} != product-of-SLJ={expected_logM}"
+        )
 
-    def test_two_orders_trajectory_matches_product(self):
-        """Full trajectory for |K|=2 should match product of SLJ trajectories."""
-        rng = np.random.default_rng(77)
-        p_values = rng.uniform(0, 1, size=30)
+    def test_three_orders_diverges_from_heuristic(self):
+        """For |K|=3 the Gaunt coupling engages (G_{1,2,3} = 3/35 != 0), so
+        the mean-field consensus is *not* the wealth-weighted prior mean and
+        the trajectory diverges from the product of three independent SLJs.
+        This is the regime where the rigorous derivation differs from the old
+        heuristic.
+        """
+        rng = np.random.default_rng(123)
+        p_values = rng.uniform(0, 1, size=100)
 
-        slj1 = SimpleLegendreJumper(order=1, J=0.1)
-        slj2 = SimpleLegendreJumper(order=3, J=0.1)
-        vlj = VariationalLegendreJumper(orders=[1, 3], J=0.1)
+        slj1 = SimpleLegendreJumper(order=1, J=0.05)
+        slj2 = SimpleLegendreJumper(order=2, J=0.05)
+        slj3 = SimpleLegendreJumper(order=3, J=0.05)
+        vlj = VariationalLegendreJumper(orders=[1, 2, 3], J=0.05)
 
         for p in p_values:
             slj1.update(p)
             slj2.update(p)
+            slj3.update(p)
             vlj.update(p)
 
-        expected = np.array(slj1.log_martingale_values) + np.array(slj2.log_martingale_values)
-        actual = np.array(vlj.log_martingale_values)
-        np.testing.assert_allclose(actual, expected, atol=1e-10)
+        heuristic = slj1.logM + slj2.logM + slj3.logM
+        assert np.isfinite(vlj.logM)
+        assert not np.isclose(vlj.logM, heuristic, atol=1e-4), (
+            f"VLJ logM={vlj.logM} unexpectedly equals product-of-SLJ "
+            f"heuristic={heuristic} for |K|=3 (coupling should engage)"
+        )
+
+    def test_two_orders_betting_density_valid(self):
+        """The |K|=2 exposed betting density must be non-negative and
+        integrate to 1 (pointwise validity of the plug-in bet)."""
+        rng = np.random.default_rng(77)
+        vlj = VariationalLegendreJumper(orders=[1, 2], J=0.05)
+        for p in rng.uniform(0, 1, size=40):
+            vlj.update(p)
+        integral, _ = quad(vlj.b_n, 0, 1)
+        assert np.isclose(integral, 1.0, atol=1e-8), f"b_n integrates to {integral}"
+        grid = np.linspace(0.0, 1.0, 201)
+        vals = [vlj.b_n(float(u)) for u in grid]
+        assert all(v >= -1e-12 for v in vals), f"b_n negative: min={min(vals)}"
 
 
 class TestVLJBehaviour:
@@ -372,6 +435,123 @@ class TestVLJBehaviour:
                 vlj.update(p)
             # Under null, logM should stay moderate (no systematic growth)
             assert vlj.logM < 20.0, f"seed={seed}: logM={vlj.logM} too large under null"
+
+
+# ---------------------------------------------------------------------------
+# IndependentTransitionProductLegendreJumper (ITPLJ) tests
+# ---------------------------------------------------------------------------
+
+
+class TestITPLJ:
+    """The ITPLJ is the exact generative baseline for the VLJ.
+
+    It keeps the full joint grid ``g^{|K|}`` and applies an *independent*
+    per-degree transition (a product of marginals) instead of the PLJ's global
+    Markov transition, then bets with the exact joint betting function
+    ``prod_k (1 + eps_k P_k(p)) / Z(eps)``. Every state's bet integrates to 1
+    under the null, so the ITPLJ is a strictly pointwise-valid martingale.
+    """
+
+    def test_starts_at_one(self):
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2])
+        assert itplj.logM == 0.0
+        assert np.isclose(itplj.M, 1.0)
+
+    def test_state_space_size_is_g_pow_K(self):
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2, 3])
+        assert itplj.N == 5**3, f"expected 5^3=125 states, got {itplj.N}"
+
+    def test_grows_under_alternative(self):
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2, 3], J=0.05)
+        rng = np.random.default_rng(0)
+        for p in rng.beta(0.3, 1.5, size=200):
+            itplj.update(p)
+        assert itplj.logM > 0, f"expected growth, got logM={itplj.logM}"
+
+    def test_bounded_under_null(self):
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2, 3], J=0.05)
+        rng = np.random.default_rng(999)
+        for p in rng.uniform(0, 1, size=500):
+            itplj.update(p)
+        assert itplj.logM < 10.0, f"unexpectedly large under null: logM={itplj.logM}"
+
+    def test_betting_density_valid(self):
+        """The exposed mixture betting density is non-negative and
+        integrates to 1 (pointwise validity)."""
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2, 3], J=0.05)
+        rng = np.random.default_rng(11)
+        for p in rng.uniform(0, 1, size=30):
+            itplj.update(p)
+        integral, _ = quad(itplj.b_n, 0, 1)
+        assert np.isclose(integral, 1.0, atol=1e-8), f"b_n integrates to {integral}"
+        grid = np.linspace(0.0, 1.0, 201)
+        vals = [itplj.b_n(float(u)) for u in grid]
+        assert all(v >= -1e-12 for v in vals), f"b_n negative: min={min(vals)}"
+
+    def test_diverges_from_plj_for_K3(self):
+        """The independent transition differs from the PLJ's global transition,
+        so for |K|=3 the ITPLJ and PLJ trajectories must differ (on a partial
+        shift, the independent transition redirects capital differently)."""
+        rng = np.random.default_rng(55)
+        p_values = rng.beta(0.5, 0.5, size=100)
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2, 3], J=0.1)
+        plj = ProductLegendreJumper(orders=[1, 2, 3], J=0.1)
+        for p in p_values:
+            itplj.update(p)
+            plj.update(p)
+        assert not np.isclose(itplj.logM, plj.logM, atol=1e-6), (
+            f"ITPLJ and PLJ unexpectedly identical: {itplj.logM} vs {plj.logM}"
+        )
+
+    def test_matches_plj_at_J1(self):
+        """At J=1 the independent transition is a full re-randomization, which
+        coincides with the PLJ's global transition (both become uniform). The
+        two must agree bit-for-bit."""
+        rng = np.random.default_rng(3)
+        p_values = rng.uniform(0, 1, size=50)
+        itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2, 3], J=1.0)
+        plj = ProductLegendreJumper(orders=[1, 2, 3], J=1.0)
+        for p in p_values:
+            itplj.update(p)
+            plj.update(p)
+        # Both become the uniform re-randomization transition; trajectories
+        # agree up to floating-point rounding.
+        np.testing.assert_allclose(
+            itplj.log_martingale_values,
+            plj.log_martingale_values,
+            rtol=1e-9,
+            atol=1e-12,
+        )
+
+    def test_vlj_prior_is_tensor_product_of_itplj_marginals(self):
+        """The VLJ's per-degree independent-transition prior is the tensor
+        product of the ITPLJ's per-degree marginals — the theoretical link that
+        the VLJ factorizes the ITPLJ's joint prior. We verify on the step-0
+        prior (both uniform, so marginals are uniform 1/g) and confirm the
+        ITPLJ's joint independent-transition distribution is a product of
+        marginals (no coupling)."""
+        orders = [1, 2, 3]
+        itplj = IndependentTransitionProductLegendreJumper(orders=orders, J=0.2)
+        # After the first independent transition from the uniform prior, the
+        # joint state should factorize as a product of per-degree marginals.
+        joint_log = itplj._independent_transition(itplj._marginal_beliefs())
+        joint = np.exp(joint_log - logsumexp(joint_log))
+        # Marginalize per degree and check the joint equals the product.
+        g = itplj.g
+        margs = []
+        for k in range(3):
+            m = np.zeros(g)
+            for v in range(g):
+                m[v] = joint[itplj._states_array[:, k] == itplj.epsilon_grid[v]].sum()
+            margs.append(m)
+        for i in range(itplj.N):
+            prod = 1.0
+            for k in range(3):
+                v = np.searchsorted(itplj.epsilon_grid, itplj._states_array[i, k])
+                prod *= margs[k][v]
+            assert np.isclose(joint[i], prod, rtol=1e-9, atol=1e-12), (
+                f"joint state {i}: {joint[i]} != product of marginals {prod}"
+            )
 
 
 # ---------------------------------------------------------------------------

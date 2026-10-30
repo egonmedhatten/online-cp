@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`VariationalLegendreJumper` rewritten to the rigorous two-phase mean-field law** (Section 5.1). Each degree undergoes an independent Markov transition, the consensus `$\bar\epsilon$` is solved to a fixed point via Gauss-Seidel from the mean-field variational factors (Jensen-coupled normalizer), and the bet is the `Z`-normalised product evaluated at that consensus — a pointwise-valid plug-in density. For `|K| <= 2` the Gaunt coupling vanishes and the algorithm reduces exactly to the product of independent SLJs; for `|K| >= 3` the coupling engages and the VLJ diverges from the old heuristic, as the derivation requires. Per-step cost: `O(|K| * g * 2^{|K|})`.
+- **`IndependentTransitionProductLegendreJumper` (ITPLJ)** — the exact generative baseline for the VLJ. It keeps the full joint grid `g^{|K|}` and applies an independent per-degree transition (a product of marginals) instead of the PLJ's global Markov transition, then bets with the exact joint betting function `prod_k (1 + eps_k P_k(p)) / Z(eps)`. Every state's bet integrates to 1 under the null, so the ITPLJ is a strictly pointwise-valid martingale; its only limitation is the `O(g^{|K|})` state space (the jumping tax), which is why the VLJ approximates it with a mean-field factorization. The ITPLJ and the PLJ are distinct algorithms for any `J < 1` and `|K| >= 2` (they coincide only at `J = 1`).
+
 ### Improved
   - **Conformal Lasso: `predict` cost is now O(n + m) instead of O(n * m)**
     (speed target T2). The previous `_find_intervals_in_piece` materialised an

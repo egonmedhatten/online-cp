@@ -68,6 +68,9 @@ from online_cp.martingale.legendre import (
     CompositeLegendreJumper as CompositeLegendreJumper,
 )
 from online_cp.martingale.legendre import (
+    IndependentTransitionProductLegendreJumper as IndependentTransitionProductLegendreJumper,
+)
+from online_cp.martingale.legendre import (
     OptimisticFTRLBarrierLegendreMartingale as OptimisticFTRLBarrierLegendreMartingale,
 )
 from online_cp.martingale.legendre import (
@@ -122,6 +125,7 @@ __all__ = [
     # Legendre jumpers
     "SimpleLegendreJumper",
     "ProductLegendreJumper",
+    "IndependentTransitionProductLegendreJumper",
     "VariationalLegendreJumper",
     "OptimisticFTRLBarrierLegendreMartingale",
     "CompositeLegendreJumper",

@@ -109,7 +109,7 @@ class PruningStrategy:
         -------
         - ``-1`` (int)  -- *keep*, evict nothing (bag not yet full).
         - ``i >= 0``    -- *keep* the new example; evict the existing element at
-          position ``i`` (``0 <= i < budget``).
+            position ``i`` (``0 <= i < budget``).
         - ``None``      -- *discard* the new example (state unchanged).
 
         The default implementation is reservoir sampling (Vitter's Algorithm R);

@@ -112,8 +112,11 @@ class MondrianConformalRegressor(SerializableMixin):
         r"""Batch-train the pooled model and record each object's category.
 
         Fits ``base_model`` on the full training set ``(X, y)`` and stores the
-        Mondrian category $\kappa(x_i)$ of every training object, so later
-        predictions can be calibrated within categories.
+        Mondrian category $\kappa(x_i)$ of every *retained* training object, so
+        later predictions can be calibrated within categories. If the base model
+        prunes its training bag (``pruning="reservoir"`` / ``"window"``),
+        ``categories_`` is kept aligned with the *pruned* bag, so the category
+        mask applied at prediction time matches the stored rows exactly.
 
         Parameters
         ----------
@@ -125,10 +128,15 @@ class MondrianConformalRegressor(SerializableMixin):
         X = np.asarray(X)
         y = np.asarray(y)
         self.base_model.learn_initial_training_set(X, y)
-        self.categories_ = [self.category_fn(x_i) for x_i in X]
+        self._sync_categories()
 
     def learn_one(self, x, y, **kwargs):
         """Update the pooled model with one example and record its category.
+
+        After the base model's update, :meth:`_sync_categories` rebuilds
+        ``categories_`` from the base model's *retained* (possibly pruned)
+        training rows, so the category mask stays aligned even when the base
+        model evicts rows from its bag.
 
         Parameters
         ----------
@@ -141,7 +149,25 @@ class MondrianConformalRegressor(SerializableMixin):
             ``precomputed`` cache returned by :meth:`predict`).
         """
         self.base_model.learn_one(x, y, **kwargs)
-        self.categories_.append(self.category_fn(x))
+        self._sync_categories()
+
+    def _sync_categories(self) -> None:
+        """Rebuild ``categories_`` from the base model's retained rows.
+
+        The base model stores its (possibly pruned) training objects in
+        ``base_model.X`` (2-D) and responses in ``base_model.y`` (1-D), aligned
+        row-for-row. Rebuilding the category list from those rows keeps it
+        index-aligned with the bag the base model actually calibrates against,
+        regardless of whether the base model prunes. For an unpruned base model
+        the retained rows are exactly the appended stream in order, so this is
+        a no-op behaviourally.
+        """
+        model = self.base_model
+        X = getattr(model, "X", None)
+        if X is None:
+            self.categories_ = []
+            return
+        self.categories_ = [self.category_fn(X[i]) for i in range(X.shape[0])]
 
     def predict(
         self,
@@ -694,9 +720,11 @@ class MondrianConformalClassifier(SerializableMixin):
         r"""Batch-train the pooled model and record each example's category.
 
         Fits ``base_model`` on the full training set and stores the Mondrian
-        category of every training example. For a label-aware taxonomy (e.g.
-        ``category_fn="label"``) the category depends on both $x_i$ and $y_i$;
-        for an object-conditional taxonomy it depends on $x_i$ only.
+        category of every *retained* training example. For a label-aware
+        taxonomy (e.g. ``category_fn="label"``) the category depends on both
+        $x_i$ and $y_i$; for an object-conditional taxonomy it depends on $x_i$
+        only. If the base model prunes its training bag (``pruning="reservoir"``
+        / ``"window"``), ``categories_`` is kept aligned with the *pruned* bag.
 
         Parameters
         ----------
@@ -708,13 +736,15 @@ class MondrianConformalClassifier(SerializableMixin):
         X = np.asarray(X)
         y = np.asarray(y)
         self.base_model.learn_initial_training_set(X, y)
-        if self._label_aware:
-            self.categories_ = [self._category_fn(x_i, y_i) for x_i, y_i in zip(X, y)]
-        else:
-            self.categories_ = [self._category_fn(x_i) for x_i in X]
+        self._sync_categories()
 
     def learn_one(self, x: NDArray[np.floating[Any]], y: Any, **kwargs: Any) -> None:
         """Update the pooled model with one example and record its category.
+
+        After the base model's update, :meth:`_sync_categories` rebuilds
+        ``categories_`` from the base model's *retained* (possibly pruned)
+        training rows, so the category mask stays aligned even when the base
+        model evicts rows from its bag.
 
         Parameters
         ----------
@@ -726,10 +756,30 @@ class MondrianConformalClassifier(SerializableMixin):
             Forwarded to the underlying model's ``learn_one``.
         """
         self.base_model.learn_one(x, y, **kwargs)
+        self._sync_categories()
+
+    def _sync_categories(self) -> None:
+        """Rebuild ``categories_`` from the base model's retained rows.
+
+        The base model stores its (possibly pruned) training objects in
+        ``base_model.X`` (2-D) and labels in ``base_model.y`` (1-D), aligned
+        row-for-row. Rebuilding the category list from those rows keeps it
+        index-aligned with the bag the base model actually calibrates against,
+        regardless of whether the base model prunes. For an unpruned base model
+        the retained rows are exactly the appended stream in order, so this is
+        a no-op behaviourally.
+        """
+        model = self.base_model
+        X = getattr(model, "X", None)
+        if X is None:
+            self.categories_ = []
+            return
+        y = getattr(model, "y", None)
+        n = X.shape[0]
         if self._label_aware:
-            self.categories_.append(self._category_fn(x, y))
+            self.categories_ = [self._category_fn(X[i], y[i]) for i in range(n)]
         else:
-            self.categories_.append(self._category_fn(x))
+            self.categories_ = [self._category_fn(X[i]) for i in range(n)]
 
     def predict(
         self,

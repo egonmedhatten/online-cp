@@ -84,6 +84,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tests/test_batch_predict.py`). Note: the smoothing variable `tau` is
     positional, so a batch is not permutation-invariant for tau-smoothed models;
     non-smoothed models (e.g. ridge) are.
+  - **Mondrian wrapper with a pruned base model** — `MondrianConformalRegressor`
+    and `MondrianConformalClassifier` now keep their category list
+    (`categories_`) aligned with the base model's *retained* (possibly pruned)
+    training rows, so a pruned base model can be used directly, e.g.
+    `MondrianConformalRegressor(KernelConformalRidgeRegressor(kernel, pruning="reservoir",
+    budget=1000), category_fn=...)`. The wrapper rebuilds `categories_` from
+    `base_model.X`/`base_model.y` after every `learn_one` and
+    `learn_initial_training_set` (a no-op behaviourally for unpruned bases, where
+    the retained rows are exactly the appended stream in order). Restricting the
+    pruned bag to a fixed Mondrian category is still a data-blind sub-selection,
+    so the group-conditional coverage guarantee is preserved. No new constructor
+    arguments: the user passes an already-configured base model. Verified by
+    `tests/test_mondrian.py::TestMondrianPrunedBase` (alignment invariant for
+    reservoir/window, bit-identity vs. unpruned, marginal coverage, label-aware
+    classifier alignment, save/load round-trip).
 
 ---
 

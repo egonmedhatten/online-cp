@@ -896,3 +896,146 @@ class TestMondrianTinyCategory:
                 base_model=ConformalNearestNeighboursClassifier(k=3),
                 category_fn=42,
             )
+
+
+# ---------------------------------------------------------------------------
+# Pruned base model pass-through: categories_ stays aligned with the bag
+# ---------------------------------------------------------------------------
+
+
+class TestMondrianPrunedBase:
+    """The wrapper must keep categories_ aligned with the base model's
+    *retained* (possibly pruned) training rows so the category mask applied at
+    prediction time matches the stored rows exactly.
+    """
+
+    def _stream_kernel_reg(self, pruning, budget, n_stream, seed=7):
+        rng = np.random.default_rng(seed)
+        d = 3
+        X = rng.standard_normal((n_stream, d))
+        y = X @ np.array([2.0, -1.0, 0.5]) + rng.normal(0, 0.5, n_stream)
+        base = KernelConformalRidgeRegressor(GaussianKernel(sigma=1.0), a=1.0, pruning=pruning, budget=budget)
+        wrapper = MondrianConformalRegressor(base_model=base, category_fn=_category_fn)
+        for i in range(n_stream):
+            wrapper.learn_one(X[i], y[i])
+        return wrapper, X, y
+
+    def test_reservoir_alignment(self):
+        """Reservoir-pruned base: len(categories_) == budget (not n_stream)."""
+        wrapper, X, y = self._stream_kernel_reg("reservoir", 20, 60)
+        assert wrapper.base_model.X.shape[0] == 20
+        assert len(wrapper.categories_) == 20
+        assert set(wrapper.categories_) <= {"pos", "neg"}
+
+    def test_window_alignment(self):
+        """Window-pruned base: len(categories_) == window size (budget)."""
+        rng = np.random.default_rng(11)
+        d = 3
+        n_stream = 60
+        X = rng.standard_normal((n_stream, d))
+        y = X @ np.array([1.0, -1.0, 0.0]) + rng.normal(0, 0.3, n_stream)
+        base = KernelConformalRidgeRegressor(GaussianKernel(sigma=1.0), a=1.0, pruning="window", budget=15)
+        wrapper = MondrianConformalRegressor(base_model=base, category_fn=_category_fn)
+        for i in range(n_stream):
+            wrapper.learn_one(X[i], y[i])
+        assert wrapper.base_model.X.shape[0] == 15
+        assert len(wrapper.categories_) == 15
+
+    def test_unpruned_bit_identical(self):
+        """A pruned wrapper with budget >= n_stream must give the same
+        categories_ and prediction as a non-pruned wrapper."""
+        rng = np.random.default_rng(42)
+        n, d = 30, 3
+        X = rng.standard_normal((n, d))
+        y = X @ np.array([2.0, -1.0, 0.5]) + rng.normal(0, 0.5, n)
+
+        wrapper_pruned = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(GaussianKernel(sigma=1.0), a=1.0, pruning="reservoir", budget=n),
+            category_fn=_category_fn,
+        )
+        wrapper_plain = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(GaussianKernel(sigma=1.0), a=1.0),
+            category_fn=_category_fn,
+        )
+        for i in range(n):
+            wrapper_pruned.learn_one(X[i], y[i])
+            wrapper_plain.learn_one(X[i], y[i])
+
+        assert wrapper_pruned.categories_ == wrapper_plain.categories_
+        x_test = rng.standard_normal(d)
+        iv_p = wrapper_pruned.predict(x_test, epsilon=0.1)
+        iv_o = wrapper_plain.predict(x_test, epsilon=0.1)
+        assert iv_p.lower == iv_o.lower
+        assert iv_p.upper == iv_o.upper
+
+    def test_coverage_pruned_base(self):
+        """A pruned-base Mondrian regressor still achieves marginal coverage
+        >= 1 - eps on a stationary stream (reservoir is a valid bag-function)."""
+        rng = np.random.default_rng(7)
+        n_stream, n_test, d = 40, 60, 3
+        beta = np.array([2.0, -1.0, 0.5])
+        X_all = rng.standard_normal((n_stream + n_test, d))
+        y_all = X_all @ beta + rng.normal(0, 0.5, n_stream + n_test)
+
+        wrapper = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(GaussianKernel(sigma=1.0), a=1.0, pruning="reservoir", budget=25),
+            category_fn=_category_fn,
+        )
+        for i in range(n_stream):
+            wrapper.learn_one(X_all[i], y_all[i])
+
+        covered = 0
+        for i in range(n_stream, n_stream + n_test):
+            x, y = X_all[i], y_all[i]
+            interval = wrapper.predict(x, epsilon=0.1)
+            covered += int(interval.lower <= y <= interval.upper)
+            wrapper.learn_one(x, y)
+
+        assert covered / n_test >= 0.80  # generous; target is 0.9
+
+    def test_label_aware_classifier_alignment(self):
+        """Label-aware classifier with pruned base: len(categories_) ==
+        base_model.y.shape[0] and predict returns a valid set."""
+        rng = np.random.default_rng(13)
+        n_stream, d = 80, 3
+        X = rng.standard_normal((n_stream, d))
+        y = (X @ np.array([1.0, -1.0, 0.0]) > 0).astype(int)
+        base = ConformalNearestNeighboursClassifier(k=3, pruning="reservoir", budget=30)
+        wrapper = MondrianConformalClassifier(base_model=base, category_fn="label")
+        for i in range(n_stream):
+            wrapper.learn_one(X[i], y[i])
+
+        assert wrapper.base_model.y.shape[0] == 30
+        assert len(wrapper.categories_) == 30
+        assert set(wrapper.categories_) <= {0, 1}
+        x_test = rng.standard_normal(d)
+        Gamma = wrapper.predict(x_test, epsilon=0.1)
+        assert not Gamma.is_empty
+
+    def test_save_load_pruned_base(self, tmp_path):
+        """A pruned-base wrapper must round-trip via save/load and produce
+        identical predictions."""
+        rng = np.random.default_rng(23)
+        d = 3
+        n_stream = 40
+        X = rng.standard_normal((n_stream, d))
+        y = X @ np.array([1.0, -0.5, 0.0]) + rng.normal(0, 0.3, n_stream)
+
+        wrapper = MondrianConformalRegressor(
+            base_model=KernelConformalRidgeRegressor(GaussianKernel(sigma=1.0), a=1.0, pruning="reservoir", budget=20),
+            category_fn=_category_fn,
+        )
+        for i in range(n_stream):
+            wrapper.learn_one(X[i], y[i])
+
+        path = tmp_path / "mondrian_pruned.joblib"
+        wrapper.save(str(path))
+        wrapper2 = MondrianConformalRegressor.load(str(path))
+        assert wrapper2.base_model.X.shape[0] == 20
+        assert len(wrapper2.categories_) == 20
+
+        x_test = rng.standard_normal(d)
+        iv1 = wrapper.predict(x_test, epsilon=0.1)
+        iv2 = wrapper2.predict(x_test, epsilon=0.1)
+        assert iv1.lower == iv2.lower
+        assert iv1.upper == iv2.upper

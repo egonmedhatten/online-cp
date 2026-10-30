@@ -40,6 +40,11 @@ try:
 except ImportError:
     from _serialization import SerializableMixin
 
+try:
+    from ._pruning import _evict_distance_matrix, _evict_masked_distance, _make_strategy_buffer
+except ImportError:
+    from _pruning import _evict_distance_matrix, _evict_masked_distance, _make_strategy_buffer
+
 import numpy as np
 from joblib import Parallel, delayed
 from numpy.typing import NDArray
@@ -366,6 +371,37 @@ class ConformalRegressor(SerializableMixin):
                 return int(np.ceil(2 / epsilon.min()))
             else:
                 return int(np.ceil(1 / epsilon.min()))
+
+    def predict_batch(
+        self,
+        X: NDArray[np.floating[Any]],
+        epsilon: float | NDArray[np.floating[Any]] = default_epsilon,
+        **kwargs: Any,
+    ) -> list:
+        r"""Predict a batch of test objects.
+
+        Default implementation: call :meth:`predict` once per row of ``X``. The
+        result ``i`` is **bit-identical** to ``predict(X[i], epsilon=epsilon,
+        **kwargs)`` by construction. Subclasses that can vectorise the
+        nonconformity computation override this to be faster while still
+        returning the same values.
+
+        Parameters
+        ----------
+        X : ndarray, shape (m, d)
+            ``m`` test objects, one per row.
+        epsilon : float or array-like
+            Significance level (or levels). Passed through to :meth:`predict`.
+        **kwargs
+            Forwarded to :meth:`predict` (e.g. ``bounds``).
+
+        Returns
+        -------
+        list
+            A list of ``m`` prediction sets, ``results[i] == predict(X[i], ...)``.
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        return [self.predict(x, epsilon=epsilon, **kwargs) for x in X]
 
 
 class ConformalRidgeRegressor(ConformalRegressor):
@@ -1029,8 +1065,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         "verbose",
         "rnd_state",
         "epsilon",
+        "pruning",
+        "budget",
     )
-    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const", "_kth_distances")
+    _SAVE_STATE: tuple = ("X", "y", "D", "_a_const", "_kth_distances", "_reservoir_n_seen")
     _SAVE_CALLABLES: tuple = ("distance_func",)
     _PARAM_MAP: dict = {"distance_func": "_distance_func_arg"}
 
@@ -1043,6 +1081,8 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         verbose=0,
         rnd_state=None,
         epsilon=default_epsilon,
+        pruning: str | None = None,
+        budget: int | None = None,
     ):
         """
         Parameters
@@ -1063,6 +1103,22 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             Seed or Generator for the random number generator.
         epsilon : float
             Default significance level.
+        pruning : {'reservoir', 'window'} or PruningStrategy or None, default None
+            Stream-pruning strategy that bounds the retained training bag.
+            Only **strictly-valid** (data-blind) strategies are accepted, so the
+            exact finite-sample coverage guarantee is preserved unchanged:
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples;
+            ``'window'`` keeps the most recent ``budget`` examples (FIFO). The
+            window is less robust than the reservoir on drifting / non-i.i.d.
+            streams but is trivial to maintain. A custom ``PruningStrategy``
+            (or an object exposing ``decide(n_seen)``) is accepted if it is
+            data-blind, per :func:`online_cp.validate_strategy`. Model-state /
+            value-dependent selectors break exchangeability and are rejected.
+            ``None`` (default) keeps every example. See :mod:`online_cp._pruning`.
+        budget : int or None, default None
+            Retained-bag size for reservoir pruning. Must be set together with
+            ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
+            identical to no pruning (exact, not just close).
         """
         super().__init__(epsilon=epsilon)
         self.k = k
@@ -1085,6 +1141,22 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.rnd_gen = rnd_state
         else:
             self.rnd_gen = np.random.default_rng(rnd_state)
+
+        # --- Pruning (budget-bounded stream) ---
+        self.pruning = pruning
+        self.budget = budget
+        if pruning is not None:
+            # Enforce the data-blind (strictly-valid) contract at the boundary.
+            from ._pruning import validate_strategy
+            validate_strategy(pruning)
+            if budget is None:
+                raise ValueError(f"pruning={pruning!r} requires a positive integer budget")
+        self._reservoir = (
+            _make_strategy_buffer(pruning, int(budget), self.rnd_gen)
+            if pruning is not None
+            else None
+        )
+        self._reservoir_n_seen = 0
 
     def _standard_distance_func(self, X, y=None):
         X = np.atleast_2d(X)
@@ -1161,6 +1233,20 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         self.X = np.atleast_2d(X)
         self.y = np.asarray(y, dtype=float)
         self.D = self.distance_func(self.X)
+        # Reservoir pruning: seed the reservoir from a uniform random subset of
+        # the initial bag (valid when the bag is a sample of the stream). When
+        # n <= budget, keep everything (exact, no pruning occurs yet).
+        if self._reservoir is not None:
+            n = self.X.shape[0]
+            self._reservoir_n_seen = n
+            if n > self.budget:
+                if self.pruning == "reservoir":
+                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                else:  # window: keep the most recent `budget` examples
+                    keep = np.arange(n - self.budget, n)
+                self.X = self.X[keep]
+                self.y = self.y[keep]
+                self.D = _evict_masked_distance(self.D, keep)
         # Cache constant parts of affine scores: a_i = y_i - ŷ_i (with y_n=0)
         self._update_residuals()
         # Cache k-th nearest distances for efficient reverse-neighbour detection
@@ -1226,24 +1312,52 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         """
         x = np.asarray(x).ravel()
 
+        # Pruning: decide accept/evict *before* touching state.
+        # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
+        if self._reservoir is not None:
+            self._reservoir_n_seen += 1
+            eviction = self._reservoir.decide(self._reservoir_n_seen)
+        else:
+            eviction = -1
+
         if self.X is None:
+            # First example ever: always keep (reservoir trivially holds it).
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=float)
             self.D = self.distance_func(self.X)
             # Cache residuals for efficient conformal prediction
             self._update_residuals()
             self._update_kth_distances()
+            return
+
+        # Discard: the reservoir is at capacity and this example lost the
+        # accept/evict draw -- state is unchanged.
+        if eviction is None:
+            return
+
+        # Append the new example (it occupies the last position).
+        if precomputed is not None and "D" in precomputed:
+            self.D = precomputed["D"]
         else:
-            if precomputed is not None and "D" in precomputed:
-                self.D = precomputed["D"]
-            else:
-                d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
-                self.D = self._update_distance_matrix(self.D, d)
-            self.X = np.vstack([self.X, x.reshape(1, -1)])
-            self.y = np.append(self.y, y)
-            # Refresh cached residuals and k-th distances after adding new point
-            self._update_residuals()
-            self._update_kth_distances()
+            d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
+            self.D = self._update_distance_matrix(self.D, d)
+        self.X = np.vstack([self.X, x.reshape(1, -1)])
+        self.y = np.append(self.y, y)
+
+        # If an existing position was evicted, drop it (row/col i of D, row i of
+        # X, element i of y). The appended example is at the last position and is
+        # kept. After the eviction, the bag is back at size `budget`.
+        if eviction >= 0:
+            i = eviction
+            self.D = _evict_distance_matrix(self.D, i)
+            self.X = np.delete(self.X, i, axis=0)
+            self.y = np.delete(self.y, i, axis=0)
+
+        # Refresh cached residuals and k-th distances from the (possibly pruned)
+        # matrices. These are rebuilt from scratch each step, so they automatically
+        # track the pruned state.
+        self._update_residuals()
+        self._update_kth_distances()
 
     def predict(
         self,
@@ -1554,8 +1668,10 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         "epsilon",
         "recompute_every",
         "studentised",
+        "pruning",
+        "budget",
     )
-    _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "_n_sm_updates")
+    _SAVE_STATE: tuple = ("X", "y", "K", "Kinv", "_n_sm_updates", "_reservoir_n_seen")
     _SAVE_CALLABLES: tuple = ("kernel",)
 
     def __init__(
@@ -1568,6 +1684,8 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         epsilon: float = default_epsilon,
         recompute_every: int | None = None,
         studentised: bool = False,
+        pruning: str | None = None,
+        budget: int | None = None,
     ) -> None:
         """
         KernelConformalRidgeRegressor requires a kernel. Some common kernels are found in kernels.py, but it is
@@ -1586,6 +1704,24 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
             Default False.
         rnd_state : int, np.random.Generator, or None, default None
             Seed or Generator for the random number generator.
+        pruning : {'reservoir', 'window'} or PruningStrategy or None, default None
+            Stream-pruning strategy that bounds the retained training bag.
+            Only **strictly-valid** (data-blind) strategies are accepted, so the
+            exact finite-sample coverage guarantee is preserved unchanged:
+            ``'reservoir'`` keeps a uniform random sample of ``budget`` examples;
+            ``'window'`` keeps the most recent ``budget`` examples (FIFO). The
+            window is less robust than the reservoir on drifting / non-i.i.d.
+            streams but is trivial to maintain. On each eviction the kernel
+            inverse is recomputed from scratch at size ``budget``
+            (O(budget³), bounded by the user's budget). A custom
+            ``PruningStrategy`` (or an object exposing ``decide(n_seen)``) is
+            accepted if it is data-blind, per :func:`online_cp.validate_strategy`;
+            model-state / value-dependent selectors break exchangeability and are
+            rejected. ``None`` (default) keeps every example.
+        budget : int or None, default None
+            Retained-bag size for reservoir pruning. Must be set together with
+            ``pruning='reservoir'``. With ``budget >= n`` seen, behaviour is
+            identical to no pruning (exact, not just close).
         """
         super().__init__(epsilon=epsilon)
 
@@ -1616,6 +1752,22 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         self.recompute_every = recompute_every
         self._n_sm_updates = 0
 
+        # --- Pruning (budget-bounded stream) ---
+        self.pruning = pruning
+        self.budget = budget
+        if pruning is not None:
+            # Enforce the data-blind (strictly-valid) contract at the boundary.
+            from ._pruning import validate_strategy
+            validate_strategy(pruning)
+            if budget is None:
+                raise ValueError(f"pruning={pruning!r} requires a positive integer budget")
+        self._reservoir = (
+            _make_strategy_buffer(pruning, int(budget), self.rnd_gen)
+            if pruning is not None
+            else None
+        )
+        self._reservoir_n_seen = 0
+
     def learn_initial_training_set(self, X: NDArray[np.floating[Any]], y: NDArray[np.floating[Any]]) -> None:
         self.X = X
         self.y = y
@@ -1627,6 +1779,23 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         except np.linalg.LinAlgError:
             raise ValueError("K + aI is singular. Set a > 0 (ridge parameter) to regularise.") from None
         self._n_sm_updates = 0
+        # Reservoir pruning: seed the reservoir from a uniform random subset of
+        # the initial bag. With n > budget, keep a size-`budget` sample and rebuild
+        # K / Kinv on the retained positions.
+        if self._reservoir is not None:
+            n = self.X.shape[0]
+            self._reservoir_n_seen = n
+            if n > self.budget:
+                if self.pruning == "reservoir":
+                    keep = np.sort(self.rnd_gen.choice(n, size=self.budget, replace=False))
+                else:  # window: keep the most recent `budget` examples
+                    keep = np.arange(n - self.budget, n)
+                self.X = self.X[keep]
+                self.y = self.y[keep]
+                self.K = _evict_masked_distance(self.K, keep)
+                Id = np.identity(self.X.shape[0])
+                self.Kinv = np.linalg.inv(self.K + self.a * Id)
+                self._n_sm_updates = 0
 
     def recompute_inverse(self) -> None:
         """Recompute (K + aI)^{-1} from scratch to correct numerical drift.
@@ -1668,6 +1837,19 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
         """
         Learn a single example
         """
+        # Pruning: decide accept/evict *before* touching state.
+        # Returns -1 (keep, no eviction), i >= 0 (keep & evict i), or None (discard).
+        if self._reservoir is not None:
+            self._reservoir_n_seen += 1
+            eviction = self._reservoir.decide(self._reservoir_n_seen)
+        else:
+            eviction = -1
+
+        # Discard: reservoir at capacity and this example lost the draw -- state
+        # unchanged (no append, no kernel/inverse update).
+        if eviction is None:
+            return
+
         # Learn label y
         if self.y is None:
             self.y = np.array([y])
@@ -1722,6 +1904,20 @@ class KernelConformalRidgeRegressor(ConformalRegressor):
 
                 if self.recompute_every and self._n_sm_updates % self.recompute_every == 0:
                     self.recompute_inverse()
+
+        # If an existing position was evicted, drop row/col i of K, row i of X and
+        # element i of y, then rebuild Kinv from scratch on the pruned kernel. The
+        # recomputation is O(n³) with n == budget (the bag is capped), so it is
+        # bounded by a constant set by the user's budget -- this is the intended
+        # "flatten at budget" behaviour of reservoir pruning.
+        if eviction >= 0:
+            i = eviction
+            self.K = _evict_distance_matrix(self.K, i)
+            self.X = np.delete(self.X, i, axis=0)
+            self.y = np.delete(self.y, i, axis=0)
+            Id = np.identity(self.X.shape[0])
+            self.Kinv = np.linalg.inv(self.K + self.a * Id)
+            self._n_sm_updates = 0
 
     def compute_A_and_B(self, X, K, Kinv, y):
         """Compute A and B vectors for kernel conformal ridge regression.
@@ -2078,6 +2274,45 @@ def _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k):
                     crossings[count] = d
                     count += 1
     return crossings[:count]
+
+
+@njit(cache=True)
+def _compute_crossings_with_index(r_train, slopes_train, r_test, slope_test, n, dt_k):
+    """Find all delta values where |r_i(delta)| = |r_{n+1}(delta)|, with identity.
+
+    Same crossing logic as :func:`_compute_crossings`, but additionally returns
+    the index ``i`` of the training point that crossed and the sign-case ``s``
+    (``+1`` for ``r_i = r_{n+1}``, ``-1`` for ``r_i = -r_{n+1}``). This lets the
+    caller sweep the conformal rank incrementally in ``O(n + m)`` instead of
+    building an ``O(n * m)`` residual matrix (see T2 speed target).
+
+    Returns
+    -------
+    d : (m,) float array of valid crossing times within [0, dt_k]
+    i : (m,) int array of the training-point index for each crossing
+    s : (m,) float array of the sign-case (+1 / -1) for each crossing
+    """
+    nmax = 2 * n
+    d = np.empty(nmax)
+    i = np.empty(nmax, dtype=np.int64)
+    s = np.empty(nmax)
+    count = 0
+    for idx in range(n):
+        for sg in (1.0, -1.0):
+            a = r_train[idx] - sg * r_test
+            b = slopes_train[idx] - sg * slope_test
+            if abs(b) > 1e-15:
+                dd = -a / b
+                if -1e-12 < dd < dt_k + 1e-12:
+                    if dd < 0.0:
+                        dd = 0.0
+                    elif dd > dt_k:
+                        dd = dt_k
+                    d[count] = dd
+                    i[count] = idx
+                    s[count] = sg
+                    count += 1
+    return d[:count], i[:count], s[:count]
 
 
 class ConformalLassoRegressor(ConformalRegressor):
@@ -2656,11 +2891,13 @@ class ConformalLassoRegressor(ConformalRegressor):
 
         Returns intervals in GLOBAL t-space (t_accumulated + sign*delta mapped to t).
         """
-        # Find all crossing points using the JIT-compiled function
-        raw_crossings = _compute_crossings(r_train, slopes_train, r_test, slope_test, n, dt_k)
+        # Find all crossing points WITH identity (index + sign-case) so the
+        # conformal rank can be swept incrementally in O(n + m) instead of the
+        # O(n * m) residual-matrix materialization used previously (T2 fix).
+        raw_d, raw_i, raw_s = _compute_crossings_with_index(r_train, slopes_train, r_test, slope_test, n, dt_k)
 
         # Build sorted unique crossings with endpoints (C-level, no Python set/sort)
-        crossings = np.unique(np.concatenate(([0.0, dt_k], raw_crossings)))
+        crossings = np.unique(np.concatenate(([0.0, dt_k], raw_d)))
 
         if len(crossings) < 2:
             return []
@@ -2669,28 +2906,73 @@ class ConformalLassoRegressor(ConformalRegressor):
         d_starts = crossings[:-1]
         d_ends = crossings[1:]
         widths = d_ends - d_starts
-        # Drop degenerate sub-intervals (zero width).
+
+        # Ascending rank per sub-interval via an O(n + m) incremental sweep.
+        #
+        # Within a sub-interval (d_starts[j], d_ends[j]) the *relative order* of
+        # |r_i| vs |r_{n+1}| is constant, so the rank is constant there. The rank
+        # only changes at the crossings. Start from the rank at d = 0 (O(n)) and
+        # update by +/-1 at each crossing: a crossing flips exactly one training
+        # point's contribution, and the flip direction is set by the derivative of
+        # (|r_i| - |r_{n+1}|) at the crossing.
+        #
+        # Lei (2019) conformal criterion (prelim.tex line 141 / method.tex line
+        # 459): a candidate is kept iff its ascending rank is NO HIGHER than
+        # ceil((n+1)(1-alpha)), i.e. the test residual must be among the SMALLEST
+        # in magnitude. The +1 below counts the test point itself.
+        raw_d_sorted = raw_d
+        if raw_d_sorted.size:
+            order = np.argsort(raw_d_sorted)
+            cs_d = raw_d_sorted[order]
+            cs_i = raw_i[order]
+        else:
+            cs_d = np.array([])
+            cs_i = np.array([], dtype=np.int64)
+
+        # Rank at d = 0: #training |r_i(0)| <= |r_{n+1}(0)|  (+1 for the test point).
+        mag_train0 = np.abs(r_train)
+        mag_test0 = np.abs(r_test)
+        rank0 = int((mag_train0 <= mag_test0).sum()) + 1
+
+        # Per-crossing flip: -1 if (|r_i| - |r_{n+1}|) is increasing at the
+        # crossing (point moves from below to above -> drops out of the rank),
+        # +1 if decreasing (point moves from above to below -> enters the rank).
+        flips = np.zeros(cs_d.size, dtype=np.int64)
+        for k in range(cs_d.size):
+            idx = int(cs_i[k])
+            dd = cs_d[k]
+            ri = r_train[idx] + slopes_train[idx] * dd
+            rn = r_test + slope_test * dd
+            sri = 1.0 if ri > 0 else (-1.0 if ri < 0 else 0.0)
+            srn = 1.0 if rn > 0 else (-1.0 if rn < 0 else 0.0)
+            deriv = sri * slopes_train[idx] - srn * slope_test
+            if deriv > 0:
+                flips[k] = -1
+            elif deriv < 0:
+                flips[k] = 1
+
+        # Accumulate flips onto the sorted-unique crossing grid, then take the
+        # cumulative sum so sub-interval j (between crossings[j] and crossings[j+1])
+        # sees every crossing at crossings[0..j] as already passed.
+        flip_at = np.zeros(crossings.size, dtype=np.int64)
+        if cs_d.size:
+            idx_at = np.searchsorted(crossings, cs_d, side="left")
+            np.add.at(flip_at, idx_at, flips)
+        cum = np.cumsum(flip_at)
+        # Rank in sub-interval j (between crossings[j] and crossings[j+1]) is
+        # rank0 + cum[j]: a crossing exactly at crossings[j] sits on the sub-interval's
+        # left boundary, so it has already been passed by the sub-interval interior.
+        ranks = rank0 + cum[:-1]  # length == len(crossings) - 1
+
+        # Drop degenerate sub-intervals (zero width) from all three arrays at once.
         valid = widths >= 1e-14
         if not np.any(valid):
             return []
         d_starts = d_starts[valid]
         d_ends = d_ends[valid]
+        ranks = ranks[valid]
 
-        # Evaluate residuals at each sub-interval's midpoint, all at once.
-        #   r_i(d_mid)    = r_train[i] + slopes_train[i] * d_mid   (n, m)
-        #   r_{n+1}(d_mid)= r_test + slope_test * d_mid           (m,)
-        d_mids = 0.5 * (d_starts + d_ends)
-        r_i_mid = r_train[:, None] + slopes_train[:, None] * d_mids[None, :]
-        r_test_mid = r_test + slope_test * d_mids
-
-        # Ascending rank per sub-interval: #training residuals with
-        # |r_j| <= |r_{n+1}| + 1 (the +1 counts the test point itself, which
-        # always satisfies |r_{n+1}| <= |r_{n+1}|).  Lei (2019) conformal
-        # criterion (prelim.tex line 141 / method.tex line 459): a candidate
-        # is kept iff this ascending rank is NO HIGHER than
-        # ceil((n+1)(1-alpha)), i.e. the test residual must be among the
-        # SMALLEST in magnitude.
-        in_set = (np.abs(r_i_mid) <= np.abs(r_test_mid)[None, :]).sum(axis=0) + 1 <= threshold
+        in_set = ranks <= threshold
 
         if not np.any(in_set):
             return []
@@ -2789,8 +3071,13 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     """
 
     _SAVE_PARAMS: tuple = (
-        "lifetime", "epsilon", "rnd_state", "verbose", "max_depth",
-        "feature_weights", "online",
+        "lifetime",
+        "epsilon",
+        "rnd_state",
+        "verbose",
+        "max_depth",
+        "feature_weights",
+        "online",
     )
     _SAVE_STATE: tuple = ("X", "y", "_online_tree")
 
@@ -2807,15 +3094,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
         if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
-            raise ValueError(
-                f"Unknown lifetime string {lifetime!r}. "
-                "Recognised values: 'sqrt_n', 'density'."
-            )
+            raise ValueError(f"Unknown lifetime string {lifetime!r}. Recognised values: 'sqrt_n', 'density'.")
         if isinstance(feature_weights, str) and feature_weights not in ("variance",):
-            raise ValueError(
-                f"Unknown feature_weights string {feature_weights!r}. "
-                "Recognised value: 'variance'."
-            )
+            raise ValueError(f"Unknown feature_weights string {feature_weights!r}. Recognised value: 'variance'.")
         if online:
             if not isinstance(lifetime, (int, float)):
                 raise ValueError(
@@ -2823,9 +3104,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                     "lifetimes recompute a master tree per step and are batch-only."
                 )
             if max_depth is not None:
-                raise ValueError(
-                    "online=True requires max_depth=None (the projective Mondrian regime)."
-                )
+                raise ValueError("online=True requires max_depth=None (the projective Mondrian regime).")
         super().__init__(epsilon=epsilon)
         self.lifetime = lifetime
         self.feature_weights = feature_weights
@@ -2862,8 +3141,10 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         self.y = y.copy()
         if self.online:
             self._online_tree = MondrianTree.grow(
-                self.X, self.rnd_gen,
-                lifetime=self.lifetime, feature_weights=self.feature_weights,
+                self.X,
+                self.rnd_gen,
+                lifetime=self.lifetime,
+                feature_weights=self.feature_weights,
             )
 
     def learn_one(
@@ -2895,8 +3176,10 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             self.y = np.array([float(y)])
             if self.online:
                 self._online_tree = MondrianTree.grow(
-                    self.X, self.rnd_gen,
-                    lifetime=self.lifetime, feature_weights=self.feature_weights,
+                    self.X,
+                    self.rnd_gen,
+                    lifetime=self.lifetime,
+                    feature_weights=self.feature_weights,
                 )
             return
         if x.shape[0] != self.X.shape[1]:
@@ -2909,9 +3192,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 cand = getattr(self, "_pending_tree", None)
             self._pending_tree = None
             self._online_tree = (
-                cand
-                if self._is_consistent_extension(cand, x)
-                else self._online_tree.extend(x, self.rnd_gen)
+                cand if self._is_consistent_extension(cand, x) else self._online_tree.extend(x, self.rnd_gen)
             )
 
     # ------------------------------------------------------------------
@@ -3289,7 +3570,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             if p_val > epsilon:
                 if first_valid_idx == -1:
                     first_valid_idx = i  # first valid cell index
-                last_valid_idx = i     # update last valid cell index
+                last_valid_idx = i  # update last valid cell index
 
             # Check validity of the knot itself (if not the first knot)
             # Evaluate p(y) exactly at the knot location
@@ -3360,9 +3641,11 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 # This is a singleton at the left boundary
                 pass  # Keep lo as is, valid_knots will record it
 
-        return float(lo) if lo is not None else float(knots_events[0]["value"]), \
-               float(hi) if hi is not None else float(knots_events[-1]["value"]), \
-               valid_knots
+        return (
+            float(lo) if lo is not None else float(knots_events[0]["value"]),
+            float(hi) if hi is not None else float(knots_events[-1]["value"]),
+            valid_knots,
+        )
 
     # ------------------------------------------------------------------
     # compute_p_value
@@ -3417,9 +3700,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
         ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
         # tau was already set above if None
-        p_val = float(
-            self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau)[0]
-        )
+        p_val = float(self._pvalues_at(y_cand, A, B, ext_sorted, self.y[leaf_star_train_idx], n, tau)[0])
 
         # Cache the tree for inspection utilities
         self._last_tree = tree
@@ -3533,8 +3814,15 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         # Perform left-to-right sweep to find valid region
         lo, hi, valid_knots = self._pvalue_from_sweep(
-            knots_events, A, B, ext_sorted, y_star, n, permanent_ties,
-            epsilon if not hasattr(epsilon, "__iter__") else epsilon[0], tau
+            knots_events,
+            A,
+            B,
+            ext_sorted,
+            y_star,
+            n,
+            permanent_ties,
+            epsilon if not hasattr(epsilon, "__iter__") else epsilon[0],
+            tau,
         )
 
         # Build result with correct topology
@@ -3555,7 +3843,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             result = MultiLevelPredictionSet(predictions)
         else:
             result = predictions[float(eps_arr[0])]
-
 
         if return_update:
             return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
@@ -3593,9 +3880,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     def _make_result(self, epsilon, lo: float, hi: float):
         """Construct a ContinuousPredictionSet or MultiLevelPredictionSet."""
         if hasattr(epsilon, "__iter__"):
-            return MultiLevelPredictionSet(
-                {float(eps): self._construct_Gamma((lo, hi), float(eps)) for eps in epsilon}
-            )
+            return MultiLevelPredictionSet({float(eps): self._construct_Gamma((lo, hi), float(eps)) for eps in epsilon})
         return self._construct_Gamma((lo, hi), float(epsilon))
 
     def _make_multi_result(
@@ -3656,8 +3941,16 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
     """
 
     _SAVE_PARAMS: tuple = (
-        "n_trees", "lifetime", "epsilon", "rnd_state", "verbose",
-        "n_jobs", "grid_resolution", "bisection_tol", "max_depth", "online",
+        "n_trees",
+        "lifetime",
+        "epsilon",
+        "rnd_state",
+        "verbose",
+        "n_jobs",
+        "grid_resolution",
+        "bisection_tol",
+        "max_depth",
+        "online",
         "return_interval",
     )
     _SAVE_STATE: tuple = ("X", "y", "_forest")
@@ -3685,9 +3978,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
                     "lifetimes recompute a master tree per step and are batch-only."
                 )
             if max_depth is not None:
-                raise ValueError(
-                    "online=True requires max_depth=None (the projective Mondrian regime)."
-                )
+                raise ValueError("online=True requires max_depth=None (the projective Mondrian regime).")
         super().__init__(epsilon=epsilon)
         self.n_trees = n_trees
         self.lifetime = lifetime
@@ -3725,8 +4016,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         if self.online:
             seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
             self._forest = [
-                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime)
-                for s in seeds
+                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime) for s in seeds
             ]
 
     def learn_one(
@@ -3769,9 +4059,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             return False
         xr = np.asarray(x, dtype=float).ravel()
         base_n = self._forest[0].X.shape[0]
-        return all(
-            t.X.shape[0] == base_n + 1 and np.array_equal(t.X[-1], xr) for t in cand
-        )
+        return all(t.X.shape[0] == base_n + 1 and np.array_equal(t.X[-1], xr) for t in cand)
 
     def _forest_summaries(self, X_aug, x, n, seeds: NDArray | None = None):
         """Per-tree ``(base_ncm, ls_idx, ls_mu)`` summaries + viz/reuse caches.
@@ -3992,9 +4280,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         if self.online:
             pending = getattr(self, "_pending_forest", None)
             if pending is None:
-                raise RuntimeError(
-                    "No trees cached. Call predict() or compute_p_value() first."
-                )
+                raise RuntimeError("No trees cached. Call predict() or compute_p_value() first.")
             if not (0 <= i < self.n_trees):
                 raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
             view = ConformalMondrianTreeRegressor(
@@ -4008,9 +4294,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
             return view
 
         if self._last_seeds is None:
-            raise RuntimeError(
-                "No trees cached. Call predict() or compute_p_value() first."
-            )
+            raise RuntimeError("No trees cached. Call predict() or compute_p_value() first.")
         if not (0 <= i < self.n_trees):
             raise IndexError(f"Tree index {i} out of range [0, {self.n_trees}).")
 
@@ -4110,9 +4394,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
 
         for eps_val in eps_arr:
             if return_interval:
-                lo, hi = forest_sweepline_solver(
-                    summaries, self.y, float(eps_val), tau, n, M, return_exact=False
-                )
+                lo, hi = forest_sweepline_solver(summaries, self.y, float(eps_val), tau, n, M, return_exact=False)
                 # Single interval mode: pass as (lo, hi) tuple
                 if np.isnan(lo) and np.isnan(hi):
                     predictions[float(eps_val)] = self._construct_Gamma((np.nan, np.nan), float(eps_val))

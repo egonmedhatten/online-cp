@@ -2015,3 +2015,317 @@ class TestMondrianTreeCore:
         tree = MondrianTree.grow(X, rng, lifetime=2.0)
         with pytest.raises(ValueError):
             tree.draw_partition()
+
+
+class TestMinSamplesLeafConformal:
+    """Tests for the ``min_samples_leaf`` spatial regularizer on the four
+    Mondrian conformal predictors (tree + forest, regression + classification).
+
+    ``min_samples_leaf`` is a label-independent truncation: it depends only on
+    leaf cardinalities (the feature geometry X), never on the candidate label y.
+    Therefore the partition remains rigid during the algebraic y-sweep and the
+    exact O(n log n) solver is untouched — exchangeability is preserved.
+    """
+
+    def _reg_data(self, n=60, d=2, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.uniform(0, 1, (n, d))
+        y = X.sum(axis=1) + rng.normal(0, 0.1, n)
+        return X, y
+
+    def _clf_data(self, n=60, d=2, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.uniform(0, 1, (n, d))
+        y = (X[:, 0] > 0.5).astype(int)
+        return X, y
+
+    # ---- param validation ------------------------------------------------
+
+    def test_min_samples_leaf_zero_rejected(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(ValueError, match="positive integer"):
+            ConformalMondrianTreeRegressor(min_samples_leaf=0)
+
+    def test_min_samples_leaf_negative_rejected(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(ValueError, match="positive integer"):
+            ConformalMondrianTreeRegressor(min_samples_leaf=-1)
+
+    def test_min_samples_leaf_float_rejected(self):
+        from online_cp import ConformalMondrianTreeClassifier
+
+        with pytest.raises(ValueError, match="positive integer"):
+            ConformalMondrianTreeClassifier(min_samples_leaf=1.5)
+
+    def test_online_with_min_samples_leaf_gt1_rejected(self):
+        """online=True + min_samples_leaf>1 is rejected: the projective
+        ExtendMondrianBlock is only valid for the uncapped process, and a
+        cardinality-gated online unfreeze has no established exact law.
+        min_samples_leaf=1 (the pure process) remains allowed online."""
+        from online_cp import (
+            ConformalMondrianForestClassifier,
+            ConformalMondrianForestRegressor,
+            ConformalMondrianTreeClassifier,
+            ConformalMondrianTreeRegressor,
+        )
+
+        for cls, kw in [
+            (ConformalMondrianTreeRegressor, {}),
+            (ConformalMondrianForestRegressor, {"n_trees": 2}),
+            (ConformalMondrianTreeClassifier, {}),
+            (ConformalMondrianForestClassifier, {"n_trees": 2}),
+        ]:
+            with pytest.raises(ValueError, match="min_samples_leaf>1 is not yet supported"):
+                cls(online=True, min_samples_leaf=3, **kw)
+            # min_samples_leaf=1 is the pure process and remains valid online.
+            assert cls(online=True, min_samples_leaf=1, **kw).min_samples_leaf == 1
+
+    def test_min_samples_leaf_attr_stored(self):
+        from online_cp import (
+            ConformalMondrianForestClassifier,
+            ConformalMondrianForestRegressor,
+            ConformalMondrianTreeClassifier,
+            ConformalMondrianTreeRegressor,
+        )
+
+        for cls, kw in [
+            (ConformalMondrianTreeRegressor, {}),
+            (ConformalMondrianForestRegressor, {"n_trees": 2}),
+            (ConformalMondrianTreeClassifier, {}),
+            (ConformalMondrianForestClassifier, {"n_trees": 2}),
+        ]:
+            obj = cls(min_samples_leaf=5, **kw)
+            assert obj.min_samples_leaf == 5
+
+    # ---- functional: prediction runs and is finite ------------------------
+
+    def test_tree_regressor_prediction_finite_with_min_leaf(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        X, y = self._reg_data()
+        m = ConformalMondrianTreeRegressor(lifetime=3.0, min_samples_leaf=5, rnd_state=0)
+        m.learn_initial_training_set(X, y)
+        iv = m.predict(X[0], epsilon=0.1)
+        lo, hi = iv.lower, iv.upper
+        assert np.isfinite(lo) and np.isfinite(hi)
+        assert lo <= hi
+
+    def test_tree_classifier_runs_with_min_leaf_and_lambda_zero(self):
+        from online_cp import ConformalMondrianTreeClassifier
+
+        X, y = self._clf_data()
+        c = ConformalMondrianTreeClassifier(lifetime=3.0, min_samples_leaf=5, lambda_=0.0, rnd_state=0)
+        c.learn_initial_training_set(X, y)
+        ps = c.predict(X[0], epsilon=0.1)
+        assert len(ps) >= 1
+        assert set(np.asarray(ps.elements).tolist()).issubset(set([0, 1]))
+
+    def test_forest_regressor_runs_with_min_leaf(self):
+        from online_cp import ConformalMondrianForestRegressor
+
+        X, y = self._reg_data()
+        f = ConformalMondrianForestRegressor(n_trees=3, lifetime=3.0, min_samples_leaf=5, rnd_state=0)
+        f.learn_initial_training_set(X, y)
+        iv = f.predict(X[0], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+        assert iv.lower <= iv.upper
+
+    def test_forest_classifier_runs_with_min_leaf(self):
+        from online_cp import ConformalMondrianForestClassifier
+
+        X, y = self._clf_data()
+        f = ConformalMondrianForestClassifier(n_trees=3, lifetime=3.0, min_samples_leaf=5, lambda_=0.0, rnd_state=0)
+        f.learn_initial_training_set(X, y)
+        ps = f.predict(X[0], epsilon=0.1)
+        assert len(ps) >= 1
+
+    # ---- leaf-size guarantee on the partition ----------------------------
+
+    def test_leaf_size_guarantee_tree_regressor(self):
+        from online_cp import ConformalMondrianTreeRegressor
+        from online_cp.mondrian.tree import _collect_leaves
+
+        X, y = self._reg_data(n=60)
+        m = 4
+        pred = ConformalMondrianTreeRegressor(lifetime=3.0, min_samples_leaf=m, rnd_state=0)
+        pred.learn_initial_training_set(X, y)
+        pred.predict(X[0], epsilon=0.1)
+        tree = pred._last_tree
+        n_train = X.shape[0]
+        for leaf in _collect_leaves(tree):
+            train_idx = leaf.indices[leaf.indices < n_train]
+            # A non-root leaf must hold >= m training points. The root leaf is
+            # the only legitimate sub-threshold case (min_samples_leaf >> n).
+            if len(train_idx) < m:
+                # This is only allowed if the tree is a single root leaf.
+                assert len(_collect_leaves(tree)) == 1
+
+    def test_min_samples_leaf_identity_at_one(self):
+        """min_samples_leaf=1 must reproduce the default (pure Mondrian) tree exactly."""
+        from online_cp import ConformalMondrianTreeRegressor
+        from online_cp.mondrian.tree import _collect_leaves
+
+        X, y = self._reg_data(n=40)
+
+        def _groups(model):
+            model.predict(X[0], epsilon=0.1)
+            return sorted(
+                tuple(sorted(leaf.indices.tolist())) for leaf in _collect_leaves(model._last_tree)
+            )
+
+        a = ConformalMondrianTreeRegressor(lifetime=2.0, rnd_state=7)
+        a.learn_initial_training_set(X, y)
+        b = ConformalMondrianTreeRegressor(lifetime=2.0, min_samples_leaf=1, rnd_state=7)
+        b.learn_initial_training_set(X, y)
+        assert _groups(a) == _groups(b)
+
+    # ---- symmetry / permutation invariance --------------------------------
+
+    def test_permutation_invariance_with_min_leaf(self):
+        """Permuting the training data must not change the prediction for a fixed x."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        X, y = self._reg_data(n=51, seed=11)
+        rng = np.random.default_rng(77)
+        perm = rng.permutation(50)
+
+        m1 = ConformalMondrianTreeRegressor(lifetime=2.0, min_samples_leaf=3, rnd_state=0)
+        m1.learn_initial_training_set(X[:50], y[:50])
+        iv1 = m1.predict(X[50], epsilon=0.1)
+
+        m2 = ConformalMondrianTreeRegressor(lifetime=2.0, min_samples_leaf=3, rnd_state=0)
+        m2.learn_initial_training_set(X[:50][perm], y[:50][perm])
+        iv2 = m2.predict(X[50], epsilon=0.1)
+
+        assert np.isclose(iv1.lower, iv2.lower, atol=1e-12)
+        assert np.isclose(iv1.upper, iv2.upper, atol=1e-12)
+
+    # ---- degenerate inputs ------------------------------------------------
+
+    def test_min_leaf_larger_than_n_root_leaf_fallback(self):
+        """min_samples_leaf >> n collapses to a root leaf — still a valid, finite prediction."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        X, y = self._reg_data(n=10)
+        m = ConformalMondrianTreeRegressor(lifetime=100.0, min_samples_leaf=1000, rnd_state=0)
+        m.learn_initial_training_set(X, y)
+        iv = m.predict(X[0], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+        assert iv.lower <= iv.upper
+
+    def test_min_leaf_classifier_root_leaf_fallback(self):
+        """With a huge min_samples_leaf the classifier falls back to a root leaf but stays valid."""
+        from online_cp import ConformalMondrianTreeClassifier
+
+        X, y = self._clf_data(n=10)
+        c = ConformalMondrianTreeClassifier(lifetime=100.0, min_samples_leaf=1000, lambda_=0.0, rnd_state=0)
+        c.learn_initial_training_set(X, y)
+        ps = c.predict(X[0], epsilon=0.1)
+        assert len(ps) >= 1
+
+
+# ===========================================================================
+# Hierarchical (ancestor) prior — Phase 5
+# ===========================================================================
+
+class TestHierarchicalPrior:
+    """The opt-in ``hierarchical_prior`` walks up to the deepest ancestor
+    holding >= min_samples_leaf training samples when the test point's own leaf
+    is too small, so isolated points get a finite interval instead of
+    (-inf, inf). Label-blind (counts only) and a no-op when the leaf is large.
+    """
+
+    def test_isolated_point_gets_finite_interval(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        rng = np.random.default_rng(0)
+        X = rng.uniform(0, 1, (40, 1))
+        y = X[:, 0] * 2.0
+        x_test = np.array([5.0])  # far from training data -> isolated leaf
+        reg = ConformalMondrianTreeRegressor(
+            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=True, rnd_state=0
+        )
+        reg.learn_initial_training_set(X, y)
+        ps = reg.predict(x_test, epsilon=0.1)
+        # Without the prior the leaf holds 0 training points -> (-inf, inf).
+        # With the prior it walks up to an ancestor and is finite.
+        assert np.isfinite(ps.lower) and np.isfinite(ps.upper)
+        assert ps.lower < ps.upper
+
+    def test_prior_is_noop_when_leaf_large(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        rng = np.random.default_rng(0)
+        X = rng.uniform(0, 1, (40, 1))
+        y = X[:, 0] * 2.0
+        # A central test point whose leaf holds many points: the prior must be
+        # a no-op (results identical to hierarchical_prior=False).
+        x_test = X[0]
+        reg_off = ConformalMondrianTreeRegressor(
+            lifetime=4.0, min_samples_leaf=3, hierarchical_prior=False, rnd_state=0
+        )
+        reg_off.learn_initial_training_set(X, y)
+        reg_on = ConformalMondrianTreeRegressor(
+            lifetime=4.0, min_samples_leaf=3, hierarchical_prior=True, rnd_state=0
+        )
+        reg_on.learn_initial_training_set(X, y)
+        ps_off = reg_off.predict(x_test, epsilon=0.1)
+        ps_on = reg_on.predict(x_test, epsilon=0.1)
+        assert ps_off.lower == pytest.approx(ps_on.lower)
+        assert ps_off.upper == pytest.approx(ps_on.upper)
+
+    def test_prior_matches_category_walk_up(self):
+        """With min_samples_leaf=1 and an empty test leaf, the prior category is
+        the deepest ancestor holding >= 1 training point. When the test point is
+        fully isolated, that is the root, so (A, B) is the full training set and
+        the resulting interval must be finite and close to the global mean."""
+        from online_cp import ConformalMondrianTreeRegressor
+        from online_cp.mondrian.tree import (
+            MondrianTree,
+            _find_leaf,
+            _select_ancestor_with_min_samples,
+        )
+
+        rng = np.random.default_rng(0)
+        n = 40
+        X = rng.uniform(0, 1, (n, 1))
+        y = X[:, 0] * 2.0
+        x_test = np.array([5.0])
+        reg = ConformalMondrianTreeRegressor(
+            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=True, rnd_state=0
+        )
+        reg.learn_initial_training_set(X, y)
+
+        # Independently verify the walk-up: the isolated test point's own leaf
+        # holds 0 training points, so the prior must climb to the deepest
+        # ancestor whose subtree holds >= 1 training point.
+        X_aug = np.vstack([X, x_test])
+        tree = MondrianTree.grow(X_aug, np.random.default_rng(0), lifetime=4.0)
+        leaf = _find_leaf(tree.root, x_test)
+        assert len(leaf.indices[leaf.indices < n]) == 0
+        category = _select_ancestor_with_min_samples(tree.root, x_test, n, 1)
+        # The selected category is a strict ancestor of the (empty) test leaf
+        # and holds at least one training point.
+        assert category is not leaf
+        from online_cp.mondrian.tree import _subtree_training_indices
+        cat_idx = _subtree_training_indices(category, n)
+        assert cat_idx.size >= 1
+
+        ps = reg.predict(x_test, epsilon=0.5)
+        # Finite, non-degenerate, and within a reasonable scale of the data.
+        assert np.isfinite(ps.lower) and np.isfinite(ps.upper)
+        assert ps.lower < ps.upper
+        # The category mean is close to the global mean (the category is a
+        # large ancestor), so the interval sits near the data range.
+        assert abs(ps.lower - y.mean()) < 5.0
+        assert abs(ps.upper - y.mean()) < 5.0
+
+    def test_prior_validation(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(ValueError, match="boolean"):
+            ConformalMondrianTreeRegressor(hierarchical_prior="yes")
+        assert ConformalMondrianTreeRegressor(hierarchical_prior=True).hierarchical_prior is True
+        assert ConformalMondrianTreeRegressor().hierarchical_prior is False

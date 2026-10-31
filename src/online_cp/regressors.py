@@ -69,6 +69,9 @@ from online_cp.mondrian.tree import (
     _collect_leaves,
     _find_leaf,
     _MondrianNode,
+    _resolve_lifetime,
+    _select_ancestor_with_min_samples,
+    _subtree_training_indices,
     _summarize_tree_reg,
 )
 from online_cp.prediction_set import (
@@ -3041,7 +3044,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
     Parameters
     ----------
-    lifetime : float or {'sqrt_n', 'density'}
+    lifetime : float or {'sqrt_n', 'density', 'adaptive'}
         Mondrian tree depth budget L. Larger → more splits → smaller leaves.
         Default 1.0.
 
@@ -3050,6 +3053,9 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         - ``'sqrt_n'``: halt when the leaf count drops to ≤ √n.
         - ``'density'``: choose τ maximising Σ_leaf n_leaf · log(n_leaf / V_leaf).
+        - ``'adaptive'``: the minimax-optimal rate of Mourtada et al. (2020),
+          λ* = n^{1/(d+2)}, where n is the bag size and d the ambient
+          feature dimension. Closed-form; no master tree is grown.
     epsilon : float
         Default significance level. Default 0.1.
     rnd_state : int, optional
@@ -3059,6 +3065,22 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     max_depth : int or None
         Hard depth cap. Nodes at depth >= max_depth become leaves regardless
         of remaining lifetime. None = no cap.
+    min_samples_leaf : int
+        Minimum number of points allowed in each leaf. A split is refused if it
+        would create a child with fewer than ``min_samples_leaf`` points. This is
+        a label-independent, spatially-adaptive truncation that prevents test
+        points from being isolated into empty or singleton leaves (the
+        "reference class problem"). Default 1 is the pure Mondrian process.
+    hierarchical_prior : bool
+        If True, apply the *hierarchical (ancestor) prior*: when the test
+        point's own leaf holds fewer than ``min_samples_leaf`` training
+        samples, the deepest ancestor whose subtree holds at least
+        ``min_samples_leaf`` training samples is used as the conformal
+        category, borrowing strength from the coarser partition cell so that
+        isolated test points still receive a finite, non-degenerate interval
+        instead of ``(-inf, inf)``. This is a label-blind rule (ancestor
+        selection depends only on training-point counts, a function of the
+        X-only partition), so exchangeability is preserved. Default False.
     feature_weights : {'variance'} or array-like of shape (d,) or None
         Unsupervised feature importance for split dimension sampling. Labels
         are never accessed.
@@ -3076,8 +3098,10 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         "rnd_state",
         "verbose",
         "max_depth",
+        "min_samples_leaf",
         "feature_weights",
         "online",
+        "hierarchical_prior",
     )
     _SAVE_STATE: tuple = ("X", "y", "_online_tree")
 
@@ -3088,13 +3112,19 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         rnd_state: int | None = None,
         verbose: int = 0,
         max_depth: int | None = None,
+        min_samples_leaf: int = 1,
         feature_weights: str | NDArray | None = None,
         online: bool = False,
+        hierarchical_prior: bool = False,
     ) -> None:
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
-        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
-            raise ValueError(f"Unknown lifetime string {lifetime!r}. Recognised values: 'sqrt_n', 'density'.")
+        if not isinstance(min_samples_leaf, int) or min_samples_leaf < 1:
+            raise ValueError("min_samples_leaf must be a positive integer")
+        if not isinstance(hierarchical_prior, bool):
+            raise ValueError("hierarchical_prior must be a boolean")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density", "adaptive"):
+            raise ValueError(f"Unknown lifetime string {lifetime!r}. Recognised values: 'sqrt_n', 'density', 'adaptive'.")
         if isinstance(feature_weights, str) and feature_weights not in ("variance",):
             raise ValueError(f"Unknown feature_weights string {feature_weights!r}. Recognised value: 'variance'.")
         if online:
@@ -3105,13 +3135,23 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 )
             if max_depth is not None:
                 raise ValueError("online=True requires max_depth=None (the projective Mondrian regime).")
+            if min_samples_leaf > 1:
+                raise ValueError(
+                    "online=True with min_samples_leaf>1 is not yet supported: the "
+                    "projective Mondrian extension (ExtendMondrianBlock) is only "
+                    "valid for the uncapped process, and a cardinality-gated online "
+                    "unfreeze has no established exact law. Use min_samples_leaf=1 "
+                    "for online mode, or online=False (batch) for min_samples_leaf>1."
+                )
         super().__init__(epsilon=epsilon)
         self.lifetime = lifetime
         self.feature_weights = feature_weights
         self.rnd_state = rnd_state
         self.verbose = verbose
         self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
         self.online = online
+        self.hierarchical_prior = hierarchical_prior
         self.X: NDArray | None = None
         self.y: NDArray | None = None
         self.rnd_gen = np.random.default_rng(rnd_state)
@@ -3224,6 +3264,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 lifetime=self.lifetime,
                 x_test=x,
                 max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
                 feature_weights=self.feature_weights,
                 verbose=self.verbose,
             ).root
@@ -3257,6 +3298,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 lifetime=self.lifetime,
                 x_test=x,
                 max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
                 feature_weights=self.feature_weights,
                 verbose=self.verbose,
             ).root
@@ -3277,21 +3319,44 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
             and np.array_equal(cand.X[-1], np.asarray(x, dtype=float).ravel())
         )
 
-    def _outside_ncms_sorted(self, tree: _MondrianNode, leaf_star: _MondrianNode, n_train: int) -> NDArray:
-        """Sorted nonconformity scores of all training points *outside* leaf_star.
+    def _outside_ncms_sorted(
+        self,
+        tree: _MondrianNode,
+        leaf_star: _MondrianNode,
+        n_train: int,
+        exclude_idx: NDArray | None = None,
+    ) -> NDArray:
+        """Sorted nonconformity scores of all training points *outside* the category.
 
         These scores are independent of the candidate ``y`` (the test point only
         affects its own leaf), so they are computed once per prediction — a
         single O(n) tree traversal + O(n log n) sort — and then reused for every
         candidate via binary search (see :meth:`_pvalues_at`).
+
+        When ``exclude_idx`` is given (hierarchical prior), the exclusion set is
+        that index array (the conformal category's training points, which may
+        span several leaves when the category is an ancestor); otherwise the
+        single ``leaf_star`` leaf is excluded by identity.
         """
+        if exclude_idx is not None:
+            exclude = np.zeros(n_train, dtype=bool)
+            exclude_idx = np.asarray(exclude_idx, dtype=np.int64)
+            if exclude_idx.size:
+                exclude[exclude_idx] = True
+        else:
+            exclude = None
         outside: list[NDArray] = []
         for leaf in _collect_leaves(tree):
-            if leaf is leaf_star:
-                continue
+            if exclude is None:
+                if leaf is leaf_star:
+                    continue
             train_idx = leaf.indices[leaf.indices < n_train]
             if len(train_idx) == 0:
                 continue
+            if exclude is not None:
+                train_idx = train_idx[~exclude[train_idx]]
+                if train_idx.size == 0:
+                    continue
             mu = self.y[train_idx].mean()
             outside.append(np.abs(self.y[train_idx] - mu))
         ext = np.concatenate(outside) if outside else np.empty(0)
@@ -3756,13 +3821,32 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         A = len(leaf_star_train_idx)
         B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
 
+        # ---- Hierarchical (ancestor) prior --------------------------------
+        # When the test point's own leaf holds too few training samples to be
+        # statistically meaningful, the deepest ancestor whose subtree holds at
+        # least min_samples_leaf training samples becomes the conformal
+        # category, borrowing strength from the coarser partition cell. Ancestor
+        # selection is label-blind (depends only on training counts in the
+        # X-only partition), so exchangeability is preserved. The knot solver
+        # below is reused unchanged on the re-derived (A, B).
+        category_idx: NDArray | None = None
+        if self.hierarchical_prior and A < self.min_samples_leaf:
+            category = _select_ancestor_with_min_samples(
+                tree, x, n, self.min_samples_leaf
+            )
+            leaf_star_train_idx = _subtree_training_indices(category, n)
+            A = len(leaf_star_train_idx)
+            B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
+            leaf_star = category
+            category_idx = leaf_star_train_idx
+
         # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
         # Use it for smoothed p-value calculation. This must be done BEFORE any A==0 checks.
         tau = self.rnd_gen.uniform(0.0, 1.0)
 
         # ---- A = 0: empty leaf → total epistemic uncertainty -----------
         if A == 0:
-            ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+            ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, category_idx)
 
             # Since test score is 0, rank depends entirely on outside scores >= 0
             gt = int(np.sum(ext_sorted > 0))
@@ -3789,7 +3873,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # ---- Collect knot points ----------------------------------------
         # The candidate-independent outside-leaf scores are computed once here
         # and reused for the knots and for every p-value evaluation below.
-        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n)
+        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, category_idx)
 
         # Outside-leaf_star points: ncm_i is fixed → rank changes when
         #   ncm_test(y) = ncm_i  ↔  y = (B ± ncm_i*(A+1)) / A
@@ -3916,8 +4000,9 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
     ----------
     n_trees : int
         Number of Mondrian trees. Default 10.
-    lifetime : float
-        Mondrian depth budget L. Default 1.0.
+    lifetime : float or {'sqrt_n', 'density', 'adaptive'}
+        Mondrian depth budget L. Default 1.0. String values auto-tune
+        unsupervised; ``'adaptive'`` uses the minimax rate n^{1/(d+2)}.
     epsilon : float
         Default significance level. Default 0.1.
     rnd_state : int, optional
@@ -3936,6 +4021,9 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         Default True for backward compatibility.
     max_depth : int or None, optional
         Hard depth cap for Mondrian trees. Default None.
+    min_samples_leaf : int, optional
+        Minimum number of points allowed in each leaf (label-independent spatial
+        truncation that prevents test-point isolation). Default 1.
     online : bool, optional
         If True, use the online Mondrian forest mode. Default False.
     """
@@ -3950,6 +4038,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         "grid_resolution",
         "bisection_tol",
         "max_depth",
+        "min_samples_leaf",
         "online",
         "return_interval",
     )
@@ -3958,7 +4047,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
     def __init__(
         self,
         n_trees: int = 10,
-        lifetime: float = 1.0,
+        lifetime: float | str = 1.0,
         epsilon: float = 0.1,
         rnd_state: int | None = None,
         verbose: int = 0,
@@ -3966,11 +4055,19 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         grid_resolution: int = 200,
         bisection_tol: float = 1e-6,
         max_depth: int | None = None,
+        min_samples_leaf: int = 1,
         online: bool = False,
         return_interval: bool = True,
     ) -> None:
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
+        if not isinstance(min_samples_leaf, int) or min_samples_leaf < 1:
+            raise ValueError("min_samples_leaf must be a positive integer")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density", "adaptive"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density', 'adaptive'."
+            )
         if online:
             if not isinstance(lifetime, (int, float)):
                 raise ValueError(
@@ -3979,6 +4076,13 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
                 )
             if max_depth is not None:
                 raise ValueError("online=True requires max_depth=None (the projective Mondrian regime).")
+            if min_samples_leaf > 1:
+                raise ValueError(
+                    "online=True with min_samples_leaf>1 is not yet supported: the "
+                    "projective Mondrian extension (ExtendMondrianBlock) is only "
+                    "valid for the uncapped process. Use min_samples_leaf=1 for "
+                    "online mode, or online=False (batch) for min_samples_leaf>1."
+                )
         super().__init__(epsilon=epsilon)
         self.n_trees = n_trees
         self.lifetime = lifetime
@@ -3988,6 +4092,7 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         self.grid_resolution = grid_resolution
         self.bisection_tol = bisection_tol
         self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
         self.online = online
         self.return_interval = return_interval
         self.X: NDArray | None = None
@@ -4016,7 +4121,11 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         if self.online:
             seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
             self._forest = [
-                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime) for s in seeds
+                MondrianTree.grow(
+                    self.X, np.random.default_rng(int(s)),
+                    lifetime=self.lifetime, min_samples_leaf=self.min_samples_leaf,
+                )
+                for s in seeds
             ]
 
     def learn_one(
@@ -4097,9 +4206,21 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
         self._last_x = x.copy()
         self._pending_forest = None
         _rng0 = np.random.default_rng(int(seeds[0]))
-        self._last_tree = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
+        # Resolve the (possibly string) lifetime to a concrete float ONCE, on the
+        # first tree's RNG (matching the historical behaviour where
+        # MondrianTree.grow resolved internally), before the parallel worker
+        # fan-out. This gives every worker tree the same shared truncation
+        # budget so they share the same spatial law.
+        lt_val = _resolve_lifetime(X_aug, np.asarray(x).ravel(), self.lifetime, _rng0, None)
+        self._last_tree = MondrianTree.grow(
+            X_aug, _rng0, lifetime=lt_val,
+            max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf,
+        ).root
         return Parallel(n_jobs=self.n_jobs)(
-            delayed(_build_tree_summary_reg)(s, X_aug, self.y, n, self.lifetime, self.max_depth) for s in seeds
+            delayed(_build_tree_summary_reg)(
+                s, X_aug, self.y, n, lt_val, self.max_depth, self.min_samples_leaf
+            )
+            for s in seeds
         )
 
     def _tree_seeds(self) -> NDArray:
@@ -4300,12 +4421,16 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
 
         X_aug = np.vstack([self.X, self._last_x])
         rng_i = np.random.default_rng(int(self._last_seeds[i]))
-        tree_i = MondrianTree.grow(X_aug, rng_i, lifetime=self.lifetime, max_depth=self.max_depth).root
+        tree_i = MondrianTree.grow(
+            X_aug, rng_i, lifetime=self.lifetime,
+            max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf,
+        ).root
 
         view = ConformalMondrianTreeRegressor(
             lifetime=self.lifetime,
             epsilon=self.epsilon,
             max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
         )
         view.X = self.X
         view.y = self.y

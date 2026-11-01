@@ -63,6 +63,7 @@ except ImportError:
 
 from online_cp.mondrian._forest_solver import forest_sweepline_solver
 from online_cp.mondrian._inspection import _MondrianRegressorInspection
+from online_cp.mondrian._tree_knot_solver import tree_knot_solver
 from online_cp.mondrian.tree import (
     MondrianTree,
     _build_tree_summary_reg,
@@ -3527,19 +3528,24 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         """
         # Test nonconformity score: alpha_n(y) = |A*y - B| / (A+1)
         ncm_test = abs(A * y - B) / (A + 1)
-
-        # Count outside points with alpha_i > ncm_test
-        gt = int(np.sum(ext_sorted > ncm_test))
-
-        # Count outside points with alpha_i == ncm_test (for tie-breaking)
         _TOL = 1e-9
+
+        # Mutually-exclusive classification (matches _pvalues_at and the
+        # forest solver's state machine):
+        #   gt: alpha_i - ncm_test >  _TOL   (strictly greater by > tol)
+        #   eq: |alpha_i - ncm_test| <= _TOL (within tol, a "tie")
+        #   lt: ncm_test - alpha_i  >  _TOL   (strictly less by > tol)
+        # A point is in exactly one of these categories.  This prevents
+        # double-counting of "near-greater" points (alpha_i - ncm_test in
+        # (0, _TOL]) that would otherwise be counted in BOTH gt and eq.
+        gt = int(np.sum(ext_sorted - ncm_test > _TOL))
         eq = int(np.sum(np.abs(ext_sorted - ncm_test) <= _TOL))
 
         # Add contributions from inside points (in leaf_star)
         if A > 0 and y_star.size > 0:
             # Inside scores: alpha_j(y) = |(A+1)*y_j - B - y| / (A+1)
             inside_ncm = np.abs((A + 1) * y_star - B - y) / (A + 1)
-            gt += int(np.sum(inside_ncm > ncm_test))
+            gt += int(np.sum(inside_ncm - ncm_test > _TOL))
             eq += int(np.sum(np.abs(inside_ncm - ncm_test) <= _TOL))
 
         # p-value = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1)
@@ -3870,58 +3876,27 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
             return result
 
-        # ---- Collect knot points ----------------------------------------
+        # ---- Collect outside-leaf scores ---------------------------------
         # The candidate-independent outside-leaf scores are computed once here
-        # and reused for the knots and for every p-value evaluation below.
+        # and reused by the knot solver.
         ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, category_idx)
 
-        # Outside-leaf_star points: ncm_i is fixed → rank changes when
-        #   ncm_test(y) = ncm_i  ↔  y = (B ± ncm_i*(A+1)) / A
-        knots: list[float] = []
-        if ext_sorted.size:
-            fac = (A + 1) / A
-            knots.extend(((B / A) + fac * ext_sorted).tolist())
-            knots.extend(((B / A) - fac * ext_sorted).tolist())
-
-        # Inside-leaf_star points:
-        #   always: y_j
-        #   if A > 1: (2B − (A+1)*y_j) / (A−1)
+        # Inside-leaf y-values
         y_star = self.y[leaf_star_train_idx]
-        knots.extend(y_star.tolist())
-        if A > 1:
-            knots.extend(((2.0 * B - (A + 1) * y_star) / (A - 1)).tolist())
 
-        # Sort and de-duplicate (for potential future use)
-
-        # Build knot events with +1/-1 flags
-        knots_events, permanent_ties = self._build_knot_events(A, B, ext_sorted, y_star)
-
-        # Perform left-to-right sweep to find valid region
-        lo, hi, valid_knots = self._pvalue_from_sweep(
-            knots_events,
-            A,
-            B,
-            ext_sorted,
-            y_star,
-            n,
-            permanent_ties,
-            epsilon if not hasattr(epsilon, "__iter__") else epsilon[0],
-            tau,
-        )
-
+        # ---- Exact O(k log k) knot solver (Numba-accelerated) -------------
+        # Replaces the pure-Python _build_knot_events + _pvalue_from_sweep.
+        # The solver is bit-identical to the Python reference (verified by
+        # tests/test_mondrian_tree.py::test_tree_knot_solver_matches_python).
         # Build result with correct topology
         eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
         predictions = {}
 
         for eps_val in eps_arr:
-            lo, hi, valid_knots = self._pvalue_from_sweep(
-                knots_events, A, B, ext_sorted, y_star, n, permanent_ties, float(eps_val), tau
+            lo, hi, valid_knots = tree_knot_solver(
+                A, B, ext_sorted, y_star, n, float(eps_val), tau
             )
-
-            if len(valid_knots) == 1 and lo == hi == valid_knots[0]:
-                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
-            else:
-                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
+            predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
 
         if hasattr(epsilon, "__iter__"):
             result = MultiLevelPredictionSet(predictions)

@@ -989,6 +989,111 @@ class TestConformalMondrianTreeRegressor:
         assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
         assert iv.width() > 0
 
+    def test_tree_knot_solver_matches_python_reference(self):
+        """The Numba knot solver must produce (lo, hi, valid_knots) identical
+        to the pure-Python _build_knot_events + _pvalue_from_sweep on many
+        random cases, including edge cases (A=0, A=1, A>1, empty ext, ties).
+        """
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+        from online_cp.mondrian.tree import MondrianTree, _find_leaf
+
+        rng = np.random.default_rng(0)
+        reg = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+        X = rng.uniform(0, 1, (200, 3))
+        y = rng.normal(0, 1, 200)
+        reg.learn_initial_training_set(X, y)
+        n = X.shape[0]
+
+        def close(a, b):
+            if np.isnan(a) and np.isnan(b):
+                return True
+            if a == np.inf and b == np.inf:
+                return True
+            if a == -np.inf and b == -np.inf:
+                return True
+            return abs(a - b) < 1e-9
+
+        for trial in range(30):
+            x = rng.uniform(0, 1, 3)
+            X_aug = np.vstack([reg.X, x])
+            root = MondrianTree.grow(
+                X_aug, np.random.default_rng(42 + trial), lifetime=1.0, x_test=x
+            ).root
+            leaf = _find_leaf(root, x)
+            idx = leaf.indices[leaf.indices < n]
+            A = len(idx)
+            B = float(reg.y[idx].sum()) if A > 0 else 0.0
+            y_star = reg.y[idx]
+            ext = reg._outside_ncms_sorted(root, leaf, n)
+            tau = 0.7
+
+            for eps in [0.05, 0.1, 0.25, 0.5, 0.9]:
+                ke, pt = reg._build_knot_events(A, B, ext, y_star)
+                lo_p, hi_p, vk_p = reg._pvalue_from_sweep(
+                    ke, A, B, ext, y_star, n, pt, float(eps), tau
+                )
+                lo_c, hi_c, vk_c = tree_knot_solver(A, B, ext, y_star, n, float(eps), tau)
+                assert close(lo_p, lo_c), f"lo mismatch trial={trial} A={A} eps={eps}: {lo_p} vs {lo_c}"
+                assert close(hi_p, hi_c), f"hi mismatch trial={trial} A={A} eps={eps}: {hi_p} vs {hi_c}"
+                assert len(vk_p) == len(vk_c), (
+                    f"valid_knots count mismatch trial={trial} A={A} eps={eps}: "
+                    f"{len(vk_p)} vs {len(vk_c)}"
+                )
+
+    def test_knot_sweep_pvalue_consistent_with_pvalues_at(self):
+        """The knot-sweep p-value (_evaluate_pvalue_at_point) must agree with
+        _pvalues_at at every knot value.  This pins the mutually-exclusive
+        gt/eq counting convention: a point with score - ncm_test in (0, TOL]
+        is a 'tie' (eq), NOT 'greater' (gt).  A previous bug counted such
+        points in BOTH gt and eq, making predict and compute_p_value
+        internally inconsistent.
+        """
+        from online_cp.mondrian.tree import MondrianTree, _find_leaf
+
+        _TOL = 1e-9
+        rng = np.random.default_rng(0)
+        reg = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+        X = rng.uniform(0, 1, (200, 3))
+        y = rng.normal(0, 1, 200)
+        reg.learn_initial_training_set(X, y)
+        n = X.shape[0]
+        tau = 0.7
+
+        for trial in range(20):
+            x = rng.uniform(0, 1, 3)
+            X_aug = np.vstack([reg.X, x])
+            root = MondrianTree.grow(
+                X_aug, np.random.default_rng(7 + trial), lifetime=1.0, x_test=x
+            ).root
+            leaf = _find_leaf(root, x)
+            idx = leaf.indices[leaf.indices < n]
+            A = len(idx)
+            if A == 0:
+                continue  # empty leaf handled separately, no knot solver
+            B = float(reg.y[idx].sum())
+            y_star = reg.y[idx]
+            ext = reg._outside_ncms_sorted(root, leaf, n)
+            ke, pt = reg._build_knot_events(A, B, ext, y_star)
+
+            for i in range(1, ke.shape[0]):
+                kv = float(ke[i]["value"])
+                # Knot-sweep p-value
+                p_sweep = reg._evaluate_pvalue_at_point(kv, A, B, ext, y_star, n, tau, pt)
+                # _pvalues_at-style p-value (mutually exclusive)
+                ncm_test = abs(A * kv - B) / (A + 1)
+                inside = np.abs((A + 1) * y_star - B - kv) / (A + 1)
+                gt = int(np.sum(ext - ncm_test > _TOL)) + int(
+                    np.sum(inside - ncm_test > _TOL)
+                )
+                eq = int(np.sum(np.abs(ext - ncm_test) <= _TOL)) + int(
+                    np.sum(np.abs(inside - ncm_test) <= _TOL)
+                )
+                p_pv = (gt + tau * (eq + 1 + pt)) / (n + 1)
+                assert abs(p_sweep - p_pv) < 1e-12, (
+                    f"knot-sweep vs _pvalues_at mismatch trial={trial} i={i}: "
+                    f"p_sweep={p_sweep:.9f} p_pv={p_pv:.9f}"
+                )
+
 
 class TestConformalMondrianForestRegressor:
 

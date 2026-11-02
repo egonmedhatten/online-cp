@@ -2430,62 +2430,56 @@ class TestMinSamplesLeafConformal:
 
 
 # ===========================================================================
-# Hierarchical (ancestor) prior — Phase 5
+# Empty-leaf validity (hierarchical prior removed)
 # ===========================================================================
+#
+# The ``hierarchical_prior`` parameter was removed because the ancestor-
+# borrowing prior violated conformal validity: when the test point's leaf is
+# empty, borrowing from an ancestor with very few points (A=1) produced a
+# near-degenerate point interval at the ancestor's mean, giving coverage as
+# low as ~2% (vs the target 90%).  The valid behaviour for an empty leaf is
+# an infinite interval (total epistemic uncertainty), which always covers.
 
-class TestHierarchicalPrior:
-    """The opt-in ``hierarchical_prior`` walks up to the deepest ancestor
-    holding >= min_samples_leaf training samples when the test point's own leaf
-    is too small, so isolated points get a finite interval instead of
-    (-inf, inf). Label-blind (counts only) and a no-op when the leaf is large.
-    """
 
-    def test_hp_disabled_raises_when_triggered(self):
-        """The hierarchical prior is disabled because it violates conformal
-        validity.  When it would trigger (test point's leaf has fewer than
-        min_samples_leaf training samples), predict must raise a ValueError
-        with a clear message, rather than returning an invalid interval."""
+class TestEmptyLeafValidity:
+    """The regression predictor must return a valid (infinite or NaN) interval
+    when the test point's leaf holds no training samples.  The hierarchical
+    (ancestor) prior that once tried to 'fix' this by borrowing from an
+    ancestor has been removed because it broke the conformal validity
+    guarantee."""
+
+    def test_hierarchical_prior_parameter_removed(self):
+        """The ``hierarchical_prior`` parameter has been removed from the
+        constructor.  Passing it must raise a TypeError."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(TypeError):
+            ConformalMondrianTreeRegressor(hierarchical_prior=True)
+
+    def test_empty_leaf_gives_valid_interval(self):
+        """An empty test leaf (no training samples in the leaf containing the
+        test point) must yield a valid interval: either (-inf, +inf) (total
+        epistemic uncertainty, always covers) or (nan, nan) (no valid region).
+        It must NOT be a finite but too-narrow interval."""
         from online_cp import ConformalMondrianTreeRegressor
 
         rng = np.random.default_rng(0)
         X = rng.uniform(0, 1, (40, 1))
         y = X[:, 0] * 2.0
         x_test = np.array([5.0])  # far from training data -> isolated leaf
-        reg = ConformalMondrianTreeRegressor(
-            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=True, rnd_state=0
-        )
-        reg.learn_initial_training_set(X, y)
-        with pytest.raises(ValueError, match="hierarchical_prior"):
-            reg.predict(x_test, epsilon=0.1)
-
-    def test_hp_off_gives_valid_infinite_interval_for_empty_leaf(self):
-        """With hierarchical_prior=False (the default), an empty test leaf
-        yields a valid infinite interval (total epistemic uncertainty).
-        This is the correct, valid behaviour that the disabled HP tried to
-        'fix' by borrowing from an ancestor (which undercovered)."""
-        from online_cp import ConformalMondrianTreeRegressor
-
-        rng = np.random.default_rng(0)
-        X = rng.uniform(0, 1, (40, 1))
-        y = X[:, 0] * 2.0
-        x_test = np.array([5.0])  # far from training data -> isolated leaf
-        reg = ConformalMondrianTreeRegressor(
-            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=False, rnd_state=0
-        )
+        reg = ConformalMondrianTreeRegressor(lifetime=4.0, min_samples_leaf=1, rnd_state=0)
         reg.learn_initial_training_set(X, y)
         ps = reg.predict(x_test, epsilon=0.1)
-        # Either (-inf, +inf) (valid, always covers) or (nan, nan) (no valid
-        # region).  Must NOT be a finite but too-narrow interval.
         assert np.isinf(ps.lower) or np.isinf(ps.upper) or np.isnan(ps.lower)
 
-    def test_hp_off_maintains_valid_coverage_on_stream(self):
+    def test_empty_leaf_maintains_valid_coverage_on_stream(self):
         """Regression test for the HP undercoverage bug.
 
-        The disabled ancestor-borrowing prior produced intervals as narrow as
+        The removed ancestor-borrowing prior produced intervals as narrow as
         a single point (the ancestor's mean) for empty leaves, giving coverage
-        as low as ~2% on california housing.  With hierarchical_prior=False
-        (the default), empty leaves yield infinite intervals and coverage
-        remains valid (>= 1 - alpha) across a realistic stream.
+        as low as ~2% on california housing.  With the HP removed, empty
+        leaves yield infinite intervals and coverage remains valid
+        (>= 1 - alpha) across a realistic stream.
 
         This test uses a small but non-trivial dataset to keep runtime low
         while still exercising many empty-leaf (A=0) cases.
@@ -2503,8 +2497,7 @@ class TestHierarchicalPrior:
         y_test = X_test[:, 0] * 3.0 + rng.normal(0, 0.2, n_test)
 
         reg = ConformalMondrianTreeRegressor(
-            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=False,
-            online=True, rnd_state=0,
+            lifetime=4.0, min_samples_leaf=1, online=True, rnd_state=0,
         )
         reg.learn_initial_training_set(X_train, y_train)
 
@@ -2523,14 +2516,6 @@ class TestHierarchicalPrior:
         # With alpha=0.1 the target coverage is 0.9.  Allow a margin for
         # finite-sample noise but require clearly valid coverage.
         assert coverage >= 0.80, (
-            f"hierarchical_prior=False undercovered: {coverage:.3f} < 0.80 "
+            f"empty-leaf undercovered: {coverage:.3f} < 0.80 "
             f"on a 1-D stream with empty-leaf test points."
         )
-
-    def test_prior_validation(self):
-        from online_cp import ConformalMondrianTreeRegressor
-
-        with pytest.raises(ValueError, match="boolean"):
-            ConformalMondrianTreeRegressor(hierarchical_prior="yes")
-        assert ConformalMondrianTreeRegressor(hierarchical_prior=True).hierarchical_prior is True
-        assert ConformalMondrianTreeRegressor().hierarchical_prior is False

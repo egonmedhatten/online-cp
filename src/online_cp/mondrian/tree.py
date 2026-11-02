@@ -727,47 +727,7 @@ def _select_cps_category(root: _MondrianNode, x: NDArray, n: int) -> _MondrianNo
     return root
 
 
-def _select_ancestor_with_min_samples(
-    root: _MondrianNode,
-    x: NDArray,
-    n: int,
-    min_samples: int,
-) -> _MondrianNode:
-    """Select the deepest ancestor of the leaf containing ``x`` holding >= ``min_samples``.
 
-    Generalises :func:`_select_cps_category` (which uses ``min_samples == 1``).
-    This is the *hierarchical (ancestor) prior* for the regression knot solver:
-    when the test point's own leaf holds too few training samples to be
-    statistically meaningful, the deepest ancestor whose subtree holds at
-    least ``min_samples`` training samples is used as the conformal category,
-    borrowing strength from the coarser partition cell.
-
-    Ancestor selection depends only on the training-point *counts* in each
-    subtree, which are a function of the X-only partition alone (points are
-    assigned to cells by feature value). The ``y`` values are never inspected,
-    so the rule is label-blind and exchangeability is preserved.
-
-    Args:
-        root: Root of the tree grown on the augmented bag.
-        x: Test feature vector (d,).
-        n: Number of training samples (the test point has index ``n``).
-        min_samples: Minimum number of training samples required in the category.
-
-    Returns:
-        The selected ancestor node, guaranteed to hold at least
-        ``min_samples`` training samples (or the root if none qualifies).
-    """
-    counts = _compute_subtree_counts(root)
-    path = [root]
-    node = root
-    while not node.is_leaf():
-        node = node.left if x[node.split_dim] <= node.split_loc else node.right
-        path.append(node)
-    for node in reversed(path):
-        # Every node on the path also contains the test point (index n).
-        if counts[id(node)] - 1 >= min_samples:
-            return node
-    return root
 
 
 def _subtree_training_indices(node: _MondrianNode, n: int) -> NDArray:

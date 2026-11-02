@@ -3070,16 +3070,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         a label-independent, spatially-adaptive truncation that prevents test
         points from being isolated into empty or singleton leaves (the
         "reference class problem"). Default 1 is the pure Mondrian process.
-    hierarchical_prior : bool
-        If True, apply the *hierarchical (ancestor) prior*: when the test
-        point's own leaf holds fewer than ``min_samples_leaf`` training
-        samples, the deepest ancestor whose subtree holds at least
-        ``min_samples_leaf`` training samples is used as the conformal
-        category, borrowing strength from the coarser partition cell so that
-        isolated test points still receive a finite, non-degenerate interval
-        instead of ``(-inf, inf)``. This is a label-blind rule (ancestor
-        selection depends only on training-point counts, a function of the
-        X-only partition), so exchangeability is preserved. Default False.
     feature_weights : {'variance'} or array-like of shape (d,) or None
         Unsupervised feature importance for split dimension sampling. Labels
         are never accessed.
@@ -3100,7 +3090,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         "min_samples_leaf",
         "feature_weights",
         "online",
-        "hierarchical_prior",
     )
     _SAVE_STATE: tuple = ("X", "y", "_online_tree")
 
@@ -3114,14 +3103,11 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         min_samples_leaf: int = 1,
         feature_weights: str | NDArray | None = None,
         online: bool = False,
-        hierarchical_prior: bool = False,
     ) -> None:
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
         if not isinstance(min_samples_leaf, int) or min_samples_leaf < 1:
             raise ValueError("min_samples_leaf must be a positive integer")
-        if not isinstance(hierarchical_prior, bool):
-            raise ValueError("hierarchical_prior must be a boolean")
         if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density", "adaptive"):
             raise ValueError(f"Unknown lifetime string {lifetime!r}. Recognised values: 'sqrt_n', 'density', 'adaptive'.")
         if isinstance(feature_weights, str) and feature_weights not in ("variance",):
@@ -3150,7 +3136,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.online = online
-        self.hierarchical_prior = hierarchical_prior
         self.X: NDArray | None = None
         self.y: NDArray | None = None
         self.rnd_gen = np.random.default_rng(rnd_state)
@@ -3826,32 +3811,13 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
 
         # ---- Hierarchical (ancestor) prior --------------------------------
-        # DISABLED: the ancestor-borrowing prior was found to violate conformal
-        # validity (undercoverage as low as ~2% vs the target 90%) when the
-        # test point's leaf is empty.  Borrowing from an ancestor with very few
-        # points (A=1) produces a near-degenerate point interval at the
-        # ancestor's mean, which does not cover the true y.  The valid
-        # behaviour for an empty leaf (A=0) is to return an infinite interval
-        # (total epistemic uncertainty), which is what the A=0 branch below
-        # does.  See tests/test_mondrian_tree.py::TestHierarchicalPrior for
-        # the coverage regression test.
-        category_idx: NDArray | None = None
-        if self.hierarchical_prior and A < self.min_samples_leaf:
-            raise ValueError(
-                "hierarchical_prior=True is disabled: it violates conformal "
-                "validity (severe undercoverage) when the test point's leaf "
-                "holds fewer than min_samples_leaf training samples. Use "
-                "hierarchical_prior=False (the default) to get valid infinite "
-                "intervals for empty leaves. See the class docstring."
-            )
-
         # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
         # Use it for smoothed p-value calculation. This must be done BEFORE any A==0 checks.
         tau = self.rnd_gen.uniform(0.0, 1.0)
 
         # ---- A = 0: empty leaf → total epistemic uncertainty -----------
         if A == 0:
-            ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, category_idx)
+            ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, None)
 
             # Since test score is 0, rank depends entirely on outside scores >= 0
             gt = int(np.sum(ext_sorted > 0))
@@ -3878,7 +3844,7 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         # ---- Collect outside-leaf scores ---------------------------------
         # The candidate-independent outside-leaf scores are computed once here
         # and reused by the knot solver.
-        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, category_idx)
+        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, None)
 
         # Inside-leaf y-values
         y_star = self.y[leaf_star_train_idx]

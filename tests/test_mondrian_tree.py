@@ -2440,7 +2440,11 @@ class TestHierarchicalPrior:
     (-inf, inf). Label-blind (counts only) and a no-op when the leaf is large.
     """
 
-    def test_isolated_point_gets_finite_interval(self):
+    def test_hp_disabled_raises_when_triggered(self):
+        """The hierarchical prior is disabled because it violates conformal
+        validity.  When it would trigger (test point's leaf has fewer than
+        min_samples_leaf training samples), predict must raise a ValueError
+        with a clear message, rather than returning an invalid interval."""
         from online_cp import ConformalMondrianTreeRegressor
 
         rng = np.random.default_rng(0)
@@ -2451,79 +2455,77 @@ class TestHierarchicalPrior:
             lifetime=4.0, min_samples_leaf=1, hierarchical_prior=True, rnd_state=0
         )
         reg.learn_initial_training_set(X, y)
-        ps = reg.predict(x_test, epsilon=0.1)
-        # Without the prior the leaf holds 0 training points -> (-inf, inf).
-        # With the prior it walks up to an ancestor and is finite.
-        assert np.isfinite(ps.lower) and np.isfinite(ps.upper)
-        assert ps.lower < ps.upper
+        with pytest.raises(ValueError, match="hierarchical_prior"):
+            reg.predict(x_test, epsilon=0.1)
 
-    def test_prior_is_noop_when_leaf_large(self):
+    def test_hp_off_gives_valid_infinite_interval_for_empty_leaf(self):
+        """With hierarchical_prior=False (the default), an empty test leaf
+        yields a valid infinite interval (total epistemic uncertainty).
+        This is the correct, valid behaviour that the disabled HP tried to
+        'fix' by borrowing from an ancestor (which undercovered)."""
         from online_cp import ConformalMondrianTreeRegressor
 
         rng = np.random.default_rng(0)
         X = rng.uniform(0, 1, (40, 1))
         y = X[:, 0] * 2.0
-        # A central test point whose leaf holds many points: the prior must be
-        # a no-op (results identical to hierarchical_prior=False).
-        x_test = X[0]
-        reg_off = ConformalMondrianTreeRegressor(
-            lifetime=4.0, min_samples_leaf=3, hierarchical_prior=False, rnd_state=0
-        )
-        reg_off.learn_initial_training_set(X, y)
-        reg_on = ConformalMondrianTreeRegressor(
-            lifetime=4.0, min_samples_leaf=3, hierarchical_prior=True, rnd_state=0
-        )
-        reg_on.learn_initial_training_set(X, y)
-        ps_off = reg_off.predict(x_test, epsilon=0.1)
-        ps_on = reg_on.predict(x_test, epsilon=0.1)
-        assert ps_off.lower == pytest.approx(ps_on.lower)
-        assert ps_off.upper == pytest.approx(ps_on.upper)
-
-    def test_prior_matches_category_walk_up(self):
-        """With min_samples_leaf=1 and an empty test leaf, the prior category is
-        the deepest ancestor holding >= 1 training point. When the test point is
-        fully isolated, that is the root, so (A, B) is the full training set and
-        the resulting interval must be finite and close to the global mean."""
-        from online_cp import ConformalMondrianTreeRegressor
-        from online_cp.mondrian.tree import (
-            MondrianTree,
-            _find_leaf,
-            _select_ancestor_with_min_samples,
-        )
-
-        rng = np.random.default_rng(0)
-        n = 40
-        X = rng.uniform(0, 1, (n, 1))
-        y = X[:, 0] * 2.0
-        x_test = np.array([5.0])
+        x_test = np.array([5.0])  # far from training data -> isolated leaf
         reg = ConformalMondrianTreeRegressor(
-            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=True, rnd_state=0
+            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=False, rnd_state=0
         )
         reg.learn_initial_training_set(X, y)
+        ps = reg.predict(x_test, epsilon=0.1)
+        # Either (-inf, +inf) (valid, always covers) or (nan, nan) (no valid
+        # region).  Must NOT be a finite but too-narrow interval.
+        assert np.isinf(ps.lower) or np.isinf(ps.upper) or np.isnan(ps.lower)
 
-        # Independently verify the walk-up: the isolated test point's own leaf
-        # holds 0 training points, so the prior must climb to the deepest
-        # ancestor whose subtree holds >= 1 training point.
-        X_aug = np.vstack([X, x_test])
-        tree = MondrianTree.grow(X_aug, np.random.default_rng(0), lifetime=4.0)
-        leaf = _find_leaf(tree.root, x_test)
-        assert len(leaf.indices[leaf.indices < n]) == 0
-        category = _select_ancestor_with_min_samples(tree.root, x_test, n, 1)
-        # The selected category is a strict ancestor of the (empty) test leaf
-        # and holds at least one training point.
-        assert category is not leaf
-        from online_cp.mondrian.tree import _subtree_training_indices
-        cat_idx = _subtree_training_indices(category, n)
-        assert cat_idx.size >= 1
+    def test_hp_off_maintains_valid_coverage_on_stream(self):
+        """Regression test for the HP undercoverage bug.
 
-        ps = reg.predict(x_test, epsilon=0.5)
-        # Finite, non-degenerate, and within a reasonable scale of the data.
-        assert np.isfinite(ps.lower) and np.isfinite(ps.upper)
-        assert ps.lower < ps.upper
-        # The category mean is close to the global mean (the category is a
-        # large ancestor), so the interval sits near the data range.
-        assert abs(ps.lower - y.mean()) < 5.0
-        assert abs(ps.upper - y.mean()) < 5.0
+        The disabled ancestor-borrowing prior produced intervals as narrow as
+        a single point (the ancestor's mean) for empty leaves, giving coverage
+        as low as ~2% on california housing.  With hierarchical_prior=False
+        (the default), empty leaves yield infinite intervals and coverage
+        remains valid (>= 1 - alpha) across a realistic stream.
+
+        This test uses a small but non-trivial dataset to keep runtime low
+        while still exercising many empty-leaf (A=0) cases.
+        """
+        from online_cp import ConformalMondrianTreeRegressor
+
+        rng = np.random.default_rng(0)
+        # 1-D data with a gap: test points in the gap have empty leaves.
+        n_train = 300
+        X_train = rng.uniform(0, 1, (n_train, 1))
+        y_train = X_train[:, 0] * 3.0 + rng.normal(0, 0.2, n_train)
+        # Test stream spans the training range plus a gap beyond it.
+        n_test = 150
+        X_test = rng.uniform(-0.5, 1.5, (n_test, 1))
+        y_test = X_test[:, 0] * 3.0 + rng.normal(0, 0.2, n_test)
+
+        reg = ConformalMondrianTreeRegressor(
+            lifetime=4.0, min_samples_leaf=1, hierarchical_prior=False,
+            online=True, rnd_state=0,
+        )
+        reg.learn_initial_training_set(X_train, y_train)
+
+        covers = []
+        for i in range(n_test):
+            ps = reg.predict(X_test[i], epsilon=0.1)
+            lo, up = ps.lower, ps.upper
+            if np.isnan(lo):
+                # No valid region: count as non-covered (conservative).
+                covers.append(0.0)
+            else:
+                covers.append(1.0 if (lo <= y_test[i] <= up) else 0.0)
+            reg.learn_one(X_test[i], y_test[i])
+
+        coverage = float(np.mean(covers))
+        # With alpha=0.1 the target coverage is 0.9.  Allow a margin for
+        # finite-sample noise but require clearly valid coverage.
+        assert coverage >= 0.80, (
+            f"hierarchical_prior=False undercovered: {coverage:.3f} < 0.80 "
+            f"on a 1-D stream with empty-leaf test points."
+        )
 
     def test_prior_validation(self):
         from online_cp import ConformalMondrianTreeRegressor

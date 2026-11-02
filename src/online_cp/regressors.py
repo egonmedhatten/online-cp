@@ -71,8 +71,6 @@ from online_cp.mondrian.tree import (
     _find_leaf,
     _MondrianNode,
     _resolve_lifetime,
-    _select_ancestor_with_min_samples,
-    _subtree_training_indices,
     _summarize_tree_reg,
 )
 from online_cp.prediction_set import (
@@ -3828,23 +3826,24 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
         B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
 
         # ---- Hierarchical (ancestor) prior --------------------------------
-        # When the test point's own leaf holds too few training samples to be
-        # statistically meaningful, the deepest ancestor whose subtree holds at
-        # least min_samples_leaf training samples becomes the conformal
-        # category, borrowing strength from the coarser partition cell. Ancestor
-        # selection is label-blind (depends only on training counts in the
-        # X-only partition), so exchangeability is preserved. The knot solver
-        # below is reused unchanged on the re-derived (A, B).
+        # DISABLED: the ancestor-borrowing prior was found to violate conformal
+        # validity (undercoverage as low as ~2% vs the target 90%) when the
+        # test point's leaf is empty.  Borrowing from an ancestor with very few
+        # points (A=1) produces a near-degenerate point interval at the
+        # ancestor's mean, which does not cover the true y.  The valid
+        # behaviour for an empty leaf (A=0) is to return an infinite interval
+        # (total epistemic uncertainty), which is what the A=0 branch below
+        # does.  See tests/test_mondrian_tree.py::TestHierarchicalPrior for
+        # the coverage regression test.
         category_idx: NDArray | None = None
         if self.hierarchical_prior and A < self.min_samples_leaf:
-            category = _select_ancestor_with_min_samples(
-                tree, x, n, self.min_samples_leaf
+            raise ValueError(
+                "hierarchical_prior=True is disabled: it violates conformal "
+                "validity (severe undercoverage) when the test point's leaf "
+                "holds fewer than min_samples_leaf training samples. Use "
+                "hierarchical_prior=False (the default) to get valid infinite "
+                "intervals for empty leaves. See the class docstring."
             )
-            leaf_star_train_idx = _subtree_training_indices(category, n)
-            A = len(leaf_star_train_idx)
-            B = float(self.y[leaf_star_train_idx].sum()) if A > 0 else 0.0
-            leaf_star = category
-            category_idx = leaf_star_train_idx
 
         # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
         # Use it for smoothed p-value calculation. This must be done BEFORE any A==0 checks.

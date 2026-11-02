@@ -1094,6 +1094,104 @@ class TestConformalMondrianTreeRegressor:
                     f"p_sweep={p_sweep:.9f} p_pv={p_pv:.9f}"
                 )
 
+    def test_evaluate_pvalue_searchsorted_matches_linear_scan(self):
+        """The O(log n) searchsorted-based outside-point counting in
+        _evaluate_pvalue_at_point_compiled must agree with a naive O(n)
+        linear scan across many random (ncm_test, ext_sorted) pairs.
+
+        This pins the critical fix that replaced the O(n) linear scan with
+        np.searchsorted to make the knot solver O(n log n) instead of O(n^2).
+        """
+        from online_cp.mondrian._tree_knot_solver import _evaluate_pvalue_at_point_compiled
+
+        _TOL = 1e-9
+        rng = np.random.default_rng(1)
+        n_out = 2000
+        A = 3
+        B = 5.0
+        n_train = 5000
+        tau = 0.5
+        permanent_ties = 0
+        y_star = rng.normal(0, 1, A)
+
+        for trial in range(200):
+            # Random sorted outside scores (include some exact-duplicate ties
+            # to exercise the boundary conditions of searchsorted).
+            base = np.abs(rng.normal(0, 1, n_out))
+            if trial % 5 == 0:
+                # Inject exact duplicates to stress the tie boundary.
+                base[100:200] = base[100]
+            ext_sorted = np.sort(base)
+
+            # Random y (hence random ncm_test).
+            y = float(rng.uniform(-10, 10))
+
+            # O(log n) Numba solver.
+            p_numba = _evaluate_pvalue_at_point_compiled(
+                y, A, B, ext_sorted, y_star, n_train, tau, permanent_ties
+            )
+
+            # O(n) reference linear scan (same mutually-exclusive convention).
+            ncm_test = abs(A * y - B) / (A + 1.0)
+            gt = 0
+            eq = 0
+            for a in ext_sorted:
+                if a - ncm_test > _TOL:
+                    gt += 1
+                if abs(a - ncm_test) <= _TOL:
+                    eq += 1
+            for j in range(A):
+                inside_ncm = abs((A + 1.0) * y_star[j] - B - y) / (A + 1.0)
+                if inside_ncm - ncm_test > _TOL:
+                    gt += 1
+                if abs(inside_ncm - ncm_test) <= _TOL:
+                    eq += 1
+            p_ref = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1.0)
+
+            assert abs(p_numba - p_ref) < 1e-12, (
+                f"searchsorted vs linear-scan mismatch trial={trial} y={y:.6f}: "
+                f"p_numba={p_numba:.12f} p_ref={p_ref:.12f}"
+            )
+
+    def test_knot_solver_scales_near_linearly(self):
+        """The knot solver must scale close to O(n log n) in the number of
+        outside points, NOT O(n^2).  Doubling n should increase runtime by
+        ~2-3x, not ~4x.
+
+        Regression test for the O(n^2) -> O(n log n) fix: before the fix the
+        solver re-scanned all ext_sorted points at every knot, making the
+        total O(k*n) = O(n^2).
+        """
+        import time
+
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+
+        rng = np.random.default_rng(2)
+
+        def bench(n_out):
+            A = 1
+            B = 1.5
+            y_star = np.array([1.5])
+            ext_sorted = np.sort(np.abs(rng.normal(0, 1, n_out)))
+            # Warm up (JIT compile) then time.
+            tree_knot_solver(A, B, ext_sorted, y_star, n_out + A, 0.1, 0.5)
+            t0 = time.perf_counter()
+            for _ in range(5):
+                tree_knot_solver(A, B, ext_sorted, y_star, n_out + A, 0.1, 0.5)
+            return (time.perf_counter() - t0) / 5
+
+        t_small = bench(4000)
+        t_large = bench(16000)
+        ratio = t_large / t_small
+        # O(n log n) gives ~4x for 4x data; O(n^2) gives ~16x.
+        # Allow up to 8x to be robust to noise / fixed-overhead effects at
+        # small n (still far below the 16x that O(n^2) would produce).
+        assert ratio < 8.0, (
+            f"Knot solver grew super-linearly: n=4000 -> {t_small*1e3:.1f} ms, "
+            f"n=16000 -> {t_large*1e3:.1f} ms ({ratio:.1f}x). "
+            f"Expected <8x for O(n log n); O(n^2) would give ~16x."
+        )
+
 
 class TestConformalMondrianForestRegressor:
 

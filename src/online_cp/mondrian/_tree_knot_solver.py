@@ -148,14 +148,27 @@ def _evaluate_pvalue_at_point_compiled(
     # A point is in exactly one category.  This prevents double-counting
     # of "near-greater" points (score - ncm_test in (0, _TIE_TOL]) that
     # would otherwise be counted in BOTH gt and eq.
-    gt = 0
-    eq = 0
-    for k in range(ext_sorted.shape[0]):
-        a = ext_sorted[k]
-        if a - ncm_test > _TIE_TOL:
-            gt += 1
-        if abs(a - ncm_test) <= _TIE_TOL:
-            eq += 1
+    #
+    # Outside-leaf scores are constant in y and ext_sorted is already sorted,
+    # so we count via binary search (O(log n)) instead of a linear scan (O(n)).
+    # This is the critical fix: the sweep calls this function at every knot
+    # (~2n knots), so a linear scan made the total O(n^2).
+    n_out = ext_sorted.shape[0]
+    if n_out > 0:
+        # gt: a - ncm_test > TOL  <=>  a > ncm_test + TOL
+        #     count of a strictly greater than (ncm_test + TOL)
+        #     = n_out - searchsorted(ext_sorted, ncm_test + TOL, side="right")
+        right_gt = np.searchsorted(ext_sorted, ncm_test + _TIE_TOL, side="right")
+        gt = n_out - right_gt
+        # eq: |a - ncm_test| <= TOL  <=>  ncm_test - TOL <= a <= ncm_test + TOL
+        #     count = searchsorted(ext_sorted, ncm_test + TOL, "right")
+        #           - searchsorted(ext_sorted, ncm_test - TOL, "left")
+        lo_eq = np.searchsorted(ext_sorted, ncm_test - _TIE_TOL, side="left")
+        hi_eq = np.searchsorted(ext_sorted, ncm_test + _TIE_TOL, side="right")
+        eq = hi_eq - lo_eq
+    else:
+        gt = 0
+        eq = 0
 
     if A > 0 and y_star.shape[0] > 0:
         ap1 = A + 1.0

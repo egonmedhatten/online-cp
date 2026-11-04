@@ -3023,8 +3023,27 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
     where μ_leaf is the mean of **all** y-values (including the candidate) in
     the leaf.  Because the mean is computed over the full augmented multiset
-    this is a valid bag function and the resulting conformal predictor has
-    exact, finite-sample validity (ALRW2 §2.2.9).
+    this is a valid bag function.
+
+    What the tree does vs. what the conformal layer does. The Mondrian tree is
+    only an *unsupervised partitioner* — a bag function of the feature values,
+    with no statistical guarantee of its own. It supplies the **nonconformity
+    measure** (the residual from the leaf mean). The **conformal p-value** is
+    what provides validity, and it is the *standard* one: the test point is
+    ranked against the **whole** augmented bag of ``n`` training scores
+    (points *outside* the test leaf as well as those inside it), with
+    denominator ``n + 1``:
+
+        p(y) = (#{i in 1..n : α_i(y) > α_n(y)} + τ·#{ties} + τ) / (n + 1)
+
+    The leaf is used *only* to define the NCM; it does **not** restrict the
+    comparison bag. Consequently the predictor is **marginally valid**
+    (unconditional: the overall long-run error frequency does not exceed
+    epsilon, ALRW2 §2.2.9) but **not** leaf-conditional. This is *not* a
+    "Mondrian conformal predictor" in the sense of ALRW2 §4.6.2, where the
+    p-value is restricted to a taxonomy category (``κ_i = κ_n``) and is
+    categorywise-exact. Here the leaf plays the role of the NCM, not of the
+    comparison category.
 
     The prediction interval is computed **algebraically** via an O(n) knot-point
     solver: the p-value p(y) is piecewise-constant between O(n) critical y-values
@@ -3956,9 +3975,27 @@ class ConformalMondrianForestRegressor(_MondrianRegressorInspection, ConformalRe
 
     Builds T Mondrian trees per prediction step from the same augmented bag
     with different seeds. The per-tree NCMs are averaged to give a single
-    smoothed NCM per point, reducing variance while maintaining exact validity.
+    smoothed NCM per point:
 
         α_i = (1/T) Σ_t |y_i − μ_{leaf_t(x_i)}|
+
+    and the smoothed conformal p-value is formed by ranking the averaged NCMs
+    over the whole augmented bag (n+1 points, the test point included), so the
+    predictor is **marginally valid** (unconditional: the overall long-run
+    frequency of misses does not exceed epsilon). Averaging over T
+    independently-sampled trees reduces the variance of the NCM relative to a
+    single tree.
+
+    Note on the distinction between the *Mondrian tree* and the *conformal*
+    layer: the trees are only unsupervised partitioners (bag functions of the
+    feature values; they carry no statistical guarantee). They supply the
+    **nonconformity measure**; the **conformal p-value** — which ranks the test
+    point against the whole bag — is what provides the (marginal) validity.
+    The tree is used to build the NCM, not as a comparison category, so this
+    is *not* a "Mondrian conformal predictor" in the ALRW2 §4.6.2 sense (where
+    the p-value is restricted to a taxonomy category and is categorywise-exact
+    / leaf-conditional). Both the single tree and the forest here are marginally
+    valid; the forest simply averages NCMs across T trees to lower variance.
 
     The prediction set is found via an exact O(Mn log(Mn)) sweepline solver.
     For forests, the prediction set may be a union of disjoint intervals (the

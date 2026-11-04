@@ -164,6 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `njit` identity fallback emits a one-time `UserWarning` so the silent
     pure-Python O(k log k) degradation is never mistaken for a correctness
     issue.
+  - **Mondrian docstrings now state the tree-vs-conformal distinction and the
+    kind of validity.** The tree is only an unsupervised partitioner (a bag
+    function of the feature values); it supplies the nonconformity measure and
+    carries no statistical guarantee. The conformal p-value is what provides
+    validity, and it ranks the test point against the **whole** augmented bag
+    (denominator n+1) — the leaf is used only to build the NCM, not as a
+    comparison category. So both the single tree and the forest are
+    **marginally valid** (unconditional), *not* "Mondrian conformal predictors"
+    in the ALRW2 §4.6.2 sense (which restrict the p-value to a taxonomy
+    category and are leaf-conditional). This is now spelled out in the
+    `ConformalMondrianTreeRegressor` / `ConformalMondrianForestRegressor`
+    docstrings and at the top of `_tree_knot_solver.py` and
+    `_forest_solver.py`.
 
 ---
 

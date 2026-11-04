@@ -1,13 +1,28 @@
 r"""Numba-accelerated exact knot solver for a single Mondrian tree conformal predictor.
 
 This is the single-tree analogue of :mod:`online_cp.mondrian._forest_solver`.
+
+Terminology note. A *Mondrian tree* is only an **unsupervised partitioner** —
+a bag function of the feature values, with no statistical guarantee of its
+own. It supplies the **nonconformity measure** (the residual from the leaf
+mean). The **conformal p-value** is what provides validity: it ranks the test
+point against the **whole** augmented bag of training scores (points outside
+the test leaf as well as inside it), with denominator ``n + 1``. The leaf is
+used only to define the NCM, *not* as a comparison category, so the predictor
+is **marginally valid** (unconditional), not a "Mondrian conformal predictor"
+in the ALRW2 §4.6.2 sense (which would restrict the p-value to a taxonomy
+category and be categorywise-exact / leaf-conditional). This module computes
+that full-bag p-value; it does not alter the partition.
+
 A Mondrian-tree regressor's smoothed conformal p-value
 
     p(y) = (#{i : alpha_i(y) > alpha_n(y)} + tau * #{ties} + tau) / (n + 1)
 
 is a piecewise-linear function of y whose slope changes only at a finite set
 of "knots".  The interval {y : p(y) > epsilon} is recovered by an exact
-left-to-right sweep over those knots.
+left-to-right sweep over those knots.  (The ``+ tau`` term is the test point's
+self-comparison; ``n + 1`` counts the test point as part of the comparison
+bag. The count ``#{i : ...}`` runs over **all** ``n`` training points.)
 
 The pure-Python reference implementation lives in
 :meth:`online_cp.regressors.ConformalMondrianTreeRegressor._build_knot_events`
@@ -64,7 +79,7 @@ except ImportError:  # pragma: no cover - numba is a hard dep in practice
 _WARNED = False
 
 
-__all__ = ["tree_knot_solver"]
+__all__ = ["tree_knot_solver", "tree_knot_solver_flat"]
 
 _TIE_TOL = 1e-9
 

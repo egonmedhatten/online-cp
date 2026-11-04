@@ -1,5 +1,17 @@
 r"""Numba-accelerated exact sweepline solver for Mondrian forest conformal prediction.
 
+Terminology note. Each *Mondrian tree* in the forest is only an unsupervised
+partitioner; it supplies the **nonconformity measure** (residual from the leaf
+mean) and carries no statistical guarantee. The **conformal p-value** is what
+provides validity: the per-tree NCMs are averaged and the test point is ranked
+against **all** of the n training points (a single full-bag comparison bag,
+denominator n + 1). The trees build the NCM, they are not comparison
+categories, so the predictor is **marginally valid** (unconditional) — not a
+"Mondrian conformal predictor" in the ALRW2 §4.6.2 sense (which would restrict
+the p-value to a taxonomy category and be leaf-conditional). This solver
+computes that full-bag p-value and the set {y : p(y) > epsilon}; it does not
+alter the partitions.
+
 This solver achieves true O(Mn log(Mn)) complexity and strict mathematical correctness.
 It guarantees no state-drift by:
 1. Finding every exact zero-crossing of D_i(y), including roots on the infinite tails.

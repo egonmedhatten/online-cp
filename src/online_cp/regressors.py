@@ -1300,17 +1300,50 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             d_i[i] = np.inf
             self._kth_distances[i] = np.partition(d_i, k_actual - 1)[k_actual - 1]
 
+    def _loo_prediction(self, i: int) -> float:
+        """Leave-one-out k-NN prediction for point ``i`` of the current bag.
+
+        Aggregates the labels of the k nearest neighbours of point ``i`` (excluding
+        ``i`` itself), using the canonical lexsort tie-breaking (distance primary,
+        label secondary) so the result is invariant to insertion order.
+        """
+        n = self.D.shape[0]
+        k_actual = min(self.k, n - 1)
+        drow = self.D[i].copy()
+        drow[i] = np.inf
+        agg_func = np.mean if self.aggregation == "mean" else np.median
+        idx = np.lexsort((self.y, drow))[:k_actual]
+        return float(agg_func(self.y[idx]))
+
+    def _kth_distance(self, i: int) -> float:
+        """k-th nearest-neighbour distance of point ``i`` (excluding itself).
+
+        Returns the 0.0 sentinel when the bag has fewer than k+1 points (i.e.
+        point ``i`` has no k-th neighbour yet), matching :meth:`_update_kth_distances`.
+        """
+        n = self.D.shape[0]
+        k_actual = min(self.k, n - 1)
+        if k_actual == 0:
+            return 0.0
+        drow = self.D[i].copy()
+        drow[i] = np.inf
+        return float(np.partition(drow, k_actual - 1)[k_actual - 1])
+
     def learn_one(self, x: NDArray[np.floating[Any]], y: float, precomputed: dict[str, Any] | None = None) -> None:
         """Incrementally add one observation.
 
-        Parameters
-        ----------
-        x : array-like, shape (d,)
-            New object.
-        y : float
-            New label.
-        precomputed : dict, optional
-            If provided, should contain 'D' (the already-updated distance matrix).
+        The conformal caches (leave-one-out residuals ``_a_const`` and per-point
+        k-th distances ``_kth_distances``) are maintained *incrementally*: adding
+        a new point changes the leave-one-out prediction of an existing point
+        ``i`` only if the new point enters ``i``'s k-nearest-neighbour set -- the
+        book's "semi-neighbour" condition (ALRW2 §2.4/§7.5).  The set of
+        semi-neighbours is detected *exactly* (in O(n^2) via a single vectorised
+        comparison over the distance matrix, no reliance on cached values) and
+        only those points -- plus the new point -- have their caches recomputed.
+        This avoids the O(n^2 log n) full rebuild of leave-one-out predictions
+        that the naive implementation performed at every step, while remaining
+        bit-identical to rebuilding from scratch (and hence invariant to the
+        order in which points are inserted).
         """
         x = np.asarray(x).ravel()
 
@@ -1337,12 +1370,33 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         if eviction is None:
             return
 
-        # Append the new example (it occupies the last position).
+        # Distances from the new point to the current bag (needed to detect
+        # semi-neighbours and to extend D). If the caller already computed the
+        # augmented matrix (via predict(return_update=True)), reuse it -- its
+        # last column is exactly the distance row d.
         if precomputed is not None and "D" in precomputed:
-            self.D = precomputed["D"]
+            D_new = precomputed["D"]
+            d = D_new[:-1, -1]
         else:
             d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
-            self.D = self._update_distance_matrix(self.D, d)
+            D_new = self._update_distance_matrix(self.D, d)
+
+        # Detect the semi-neighbours *before* the new point is appended, using the
+        # old (n, n) distance matrix.  Point i's k-nearest-neighbour set changes
+        # iff the new point is among the k closest to i in the new bag, i.e. iff
+        # strictly fewer than k *old* points are closer to i than the new point.
+        # ``rank_below[i]`` counts old points j with D[i, j] < d[i]; the
+        # comparison includes the self cell j = i (where D[i, i] = 0 < d[i] holds
+        # iff d[i] > 0), so we subtract that one spurious count.  This is exact
+        # (no reliance on cached, potentially stale k-th distances) and is a
+        # single vectorised O(n^2) comparison over D -- far cheaper than the
+        # per-row partition a full leave-one-out rebuild would need.
+        rank_below = (self.D < d[:, None]).sum(axis=1)
+        rank_below -= (d > 0.0).astype(rank_below.dtype)
+        semi = np.flatnonzero(rank_below < self.k)
+
+        # Append the new example (it occupies the last position).
+        self.D = D_new
         self.X = np.vstack([self.X, x.reshape(1, -1)])
         self.y = np.append(self.y, y)
 
@@ -1354,12 +1408,21 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.D = _evict_distance_matrix(self.D, i)
             self.X = np.delete(self.X, i, axis=0)
             self.y = np.delete(self.y, i, axis=0)
+            # An eviction changes the bag composition, not just its size, so the
+            # cached residuals no longer track it -- a full rebuild is required.
+            self._update_residuals()
+            self._update_kth_distances()
+            return
 
-        # Refresh cached residuals and k-th distances from the (possibly pruned)
-        # matrices. These are rebuilt from scratch each step, so they automatically
-        # track the pruned state.
-        self._update_residuals()
-        self._update_kth_distances()
+        # Refresh the caches for the semi-neighbours (whose k-NN set changed) and
+        # the new point; every other point's leave-one-out prediction and k-th
+        # distance is provably unchanged by this insertion.
+        new_pos = self.y.shape[0] - 1
+        for i in semi:
+            self._kth_distances[i] = self._kth_distance(i)
+            self._a_const[i] = self.y[i] - self._loo_prediction(i)
+        self._a_const = np.append(self._a_const, self.y[new_pos] - self._loo_prediction(new_pos))
+        self._kth_distances = np.append(self._kth_distances, self._kth_distance(new_pos))
 
     def predict(
         self,
@@ -1428,9 +1491,12 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 return result, {"D": None}
             return result
 
-        # Augment distance matrix with test point
+        # Distances from the test point to the training bag (O(n * d)); the
+        # augmented (n+1) x (n+1) matrix is built *lazily* only when the caller
+        # asks for it (return_update=True), so a plain streaming predict does not
+        # pay for a full n^2 copy that would be discarded.
         d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
-        D_aug = self._update_distance_matrix(self.D, d)
+        D_aug = self._update_distance_matrix(self.D, d) if return_update else None
 
         # Compute affine scores a_i, b_i for all training points (ALRW2 §2.4).
         #
@@ -1443,15 +1509,30 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         agg_func = np.mean if self.aggregation == "mean" else np.median
 
         # b_i: -1/k if x_n in NN_k(x_i) else 0
-        # Use cached k-th nearest distances for efficient reverse-neighbour detection.
-        # x_n is a reverse neighbour iff d(x_i, x_n) <= k-th nearest distance of x_i.
-        b = np.zeros(n, dtype=float)
-        for i in range(n):
-            # d(x_i, x_n)
-            d_test_i = d[i]
-            # Use cached k-th nearest distance (already excludes self)
-            if d_test_i <= self._kth_distances[i]:
-                b[i] = -1.0 / self.k
+        # Reverse-neighbour detection (ALRW2 Sec. 2.4): x_n is among the k
+        # nearest neighbours of x_i iff d(x_i, x_n) is within the k smallest of
+        # the distances from x_i to the *other* training points. We use the
+        # cached per-point k-th nearest distance (already excluding x_i
+        # itself), computed over min(k, n-1) neighbours (see _kth_distance /
+        # _update_kth_distances):
+        #
+        #   x_n in NN_k(x_i)  <=>  d(x_i, x_n) <= kth_nearest_dist(x_i)
+        #
+        # This comparison is valid as long as the bag holds at least k *other*
+        # points, i.e. n >= k + 1. In the warm-up regime (n < k + 1) there are
+        # fewer than k other points, so the k-nearest set of x_i (drawn from the
+        # n-1 other training points) already contains *all* of them, and once
+        # the bag is augmented with the test point x_n it necessarily displaces
+        # at least one of them. Hence x_n is a reverse neighbour of *every*
+        # training point in this regime and b_i = -1/k for all i. (For the
+        # common two-sided bounds this only affects a degenerate interval, but
+        # it is required for the one-sided bounds and for the general affine
+        # score identity, so it is handled explicitly.) The comparison itself
+        # is fully vectorised, so this is O(n) with no Python loop.
+        if n < self.k + 1:
+            b = np.full(n, -1.0 / self.k, dtype=float)
+        else:
+            b = np.where(d <= self._kth_distances, -1.0 / self.k, 0.0)
 
         # Test point: a_n = -mean(k nearest training labels), b_n = 1
         # Use lexsort for canonical tie-breaking.

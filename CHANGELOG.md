@@ -105,6 +105,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     classifier alignment, save/load round-trip).
 
 ### Fixed
+  - **`ConformalNearestNeighboursRegressor.predict` mis-detected reverse
+    neighbours during the warm-up phase (bag size n < k).** The reverse-
+    neighbour test `d(x_i, x_n) <= kth_nearest_dist(x_i)` is only valid when the
+    bag holds at least k *other* points. When n < k there are fewer than k other
+    points, so the test point is among the k nearest neighbours of *every*
+    training point and the slope is b_i = -1/k for all i; the old code
+    under-detected this and produced an incorrect one-sided lower bound
+    (e.g. -2.49 vs the correct -2.06). The check is now written explicitly for
+    the n < k regime and is fully vectorised (O(n), no Python loop), so it is
+    also faster in the normal regime. Two-sided intervals were unaffected
+    (degenerate), but the one-sided bounds and the general affine-score identity
+    are now correct for all n. Regression guard:
+    `TestWarmUpReverseNeighbourDetection` (n in 1..4, both/upper/lower bounds,
+    multiple eps).
   - **`VariationalLegendreJumper` exposed betting density was stale (one step
     behind the belief), breaking protection-function / e-value consistency.**
     The VLJ is a two-phase plug-in martingale: `update()` places the bet using
@@ -171,6 +185,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a run with a stale cache left by the previous run.
 
 ### Improved
+  - **`ConformalNearestNeighboursRegressor.learn_one` is now incremental
+    (semi-neighbour update) instead of a full O(n^2 log n) rebuild.** Adding a
+    new point changes the leave-one-out prediction of an existing point only if
+    the new point enters that point's k-nearest set (the "semi-neighbour"
+    condition, ALRW2 Sec. 2.4 / Sec. 7.5). The set of semi-neighbours is
+    detected exactly in a single vectorised O(n^2) comparison over the distance
+    matrix (no reliance on potentially stale cached values), and only those
+    points plus the new point have their conformal caches
+    (leave-one-out residuals `_a_const`, per-point k-th distances
+    `_kth_distances`) recomputed. The result is bit-identical to rebuilding
+    from scratch (hence invariant to insertion order). Measured per-step speedup
+    over the previous full-rebuild: ~25x at n=500 (0.5 ms vs 12.3 ms), ~15x at
+    n=1000-2000, and ~17x at n=4000 (76 ms vs 1344 ms). The conformal
+    caches are now also maintained incrementally under `learn_one`.
   - **Mondrian tree `predict` now uses a flat per-point kernel
     (`tree_knot_solver_flat`).** `ConformalMondrianTreeRegressor.predict` builds
     the knot-solver inputs (per-point `leaf_idx`, `y`, `base_ncm`) in a single

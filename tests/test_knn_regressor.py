@@ -263,3 +263,173 @@ class TestConformalNearestNeighboursRegressor:
         Gamma = cp.predict(X[30], epsilon=0.1, bounds="upper")
         assert Gamma.lower == -np.inf
         assert Gamma.upper < np.inf
+
+
+class TestIncrementalLearnOneMatchesScratchRebuild:
+    """The incremental (semi-neighbour) ``learn_one`` must be bit-identical to a
+    full from-scratch rebuild of the conformal caches at every stream step.
+
+    This is the correctness guarantee that lets the O(n^2 log n) per-step rebuild
+    be replaced by the O(n + |S| * n log n) semi-neighbour update (ALRW2 §2.4/§7.5)
+    without changing the predicted intervals.
+    """
+
+    @staticmethod
+    def _scratch_rebuild(cp):
+        """Rebuild the conformal caches from scratch on the current bag."""
+        cp._update_residuals()
+        cp._update_kth_distances()
+
+    def test_stream_intervals_identical(self, nonlinear_dataset):
+        X, y = nonlinear_dataset
+        n_init = 30
+        n_stream = 60
+        k = 5
+        epsilon = 0.1
+
+        # Incremental estimator (the production code path).
+        inc = ConformalNearestNeighboursRegressor(k=k, rnd_state=0, epsilon=epsilon)
+        inc.learn_initial_training_set(X[:n_init], y[:n_init])
+
+        # Scratch estimator: identical object, but we force a full rebuild of the
+        # caches at every step so that its state always matches a from-scratch fit.
+        scr = ConformalNearestNeighboursRegressor(k=k, rnd_state=0, epsilon=epsilon)
+        scr.learn_initial_training_set(X[:n_init], y[:n_init])
+
+        for idx in range(n_stream):
+            obj, lab = X[n_init + idx], y[n_init + idx]
+            # Predict before updating -- both must agree at this step.
+            g_inc = inc.predict(obj, epsilon=epsilon)
+            g_scr = scr.predict(obj, epsilon=epsilon)
+            assert np.isclose(g_inc.lower, g_scr.lower, equal_nan=True)
+            assert np.isclose(g_inc.upper, g_scr.upper, equal_nan=True)
+            # Update the scratch estimator the naive way (full rebuild), then
+            # compare the caches directly.
+            scr.learn_one(obj, lab)
+            self._scratch_rebuild(scr)
+            inc.learn_one(obj, lab)
+
+            assert np.allclose(inc._a_const, scr._a_const, rtol=1e-12, atol=1e-12, equal_nan=True)
+            assert np.allclose(inc._kth_distances, scr._kth_distances, rtol=1e-12, atol=1e-12, equal_nan=True)
+
+    def test_stream_end_state_matches_batch(self, nonlinear_dataset):
+        """After streaming, the incremental estimator must agree with a fresh
+        estimator that was built on the full (initial + streamed) bag in one shot."""
+        X, y = nonlinear_dataset
+        n_init = 30
+        n_stream = 60
+        k = 3
+        epsilon = 0.1
+
+        inc = ConformalNearestNeighboursRegressor(k=k, rnd_state=0, epsilon=epsilon)
+        inc.learn_initial_training_set(X[:n_init], y[:n_init])
+        for idx in range(n_stream):
+            obj, lab = X[n_init + idx], y[n_init + idx]
+            inc.predict(obj, epsilon=epsilon)
+            inc.learn_one(obj, lab)
+
+        full = X[:n_init + n_stream]
+        full_y = y[:n_init + n_stream]
+        batch = ConformalNearestNeighboursRegressor(k=k, rnd_state=0, epsilon=epsilon)
+        batch.learn_initial_training_set(full, full_y)
+
+        assert np.allclose(inc._a_const, batch._a_const, rtol=1e-12, atol=1e-12, equal_nan=True)
+        assert np.allclose(inc._kth_distances, batch._kth_distances, rtol=1e-12, atol=1e-12, equal_nan=True)
+
+
+
+class TestWarmUpReverseNeighbourDetection:
+    """When the training bag holds fewer than k points (n < k), the test point
+    x_n is a reverse neighbour of *every* training point: there are not k other
+    points to fill x_i's k-nearest set, so augmenting the bag with x_n
+    necessarily displaces at least one neighbour of x_i. Hence the affine
+    slope b_i is -1/k for all i in this regime, not just for those satisfying
+    d(x_i, x_n) <= kth_nearest_dist(x_i).
+
+    Regression guard for the n < k reverse-neighbour branch in predict(). The
+    bug it catches produced an incorrect one-sided lower bound during the
+    warm-up phase (before the bag reached k+1 points).
+    """
+
+    @staticmethod
+    def _reference_interval(X, y, x_test, k, epsilon, bounds):
+        """Naive ALRW2 Sec. 2.4 reference (includes the test point in the k-NN
+        check of x_i, so it is correct for all n including n < k)."""
+        from scipy.spatial.distance import cdist
+
+        n = len(y)
+        d = cdist(x_test.reshape(1, -1), X).ravel()
+        k_t = min(k, n)
+        kidx = np.lexsort((y, d))[:k_t]
+        a_n = -y[kidx].mean()
+        b_n = 1.0
+        a = np.empty(n)
+        b = np.empty(n)
+        for i in range(n):
+            d_i = cdist(X[i].reshape(1, -1), X).ravel()
+            d_i[i] = np.inf
+            others = np.append(d_i, d[i])
+            kk = min(k, n)
+            kth = np.partition(others, kk - 1)[kk - 1]
+            if d[i] <= kth:
+                b[i] = -1.0 / k
+                yfull = np.append(y, 0.0)
+                idx = np.lexsort((yfull, others))[:kk]
+                a[i] = y[i] - yfull[idx].mean()
+            else:
+                b[i] = 0.0
+                di = d_i.copy()
+                di[i] = np.inf
+                idx = np.lexsort((y, di))[:kk]
+                a[i] = y[i] - y[idx].mean()
+        t = (a - a_n) / (b_n - b)
+        t_sorted = np.sort(t)
+        N = n + 1
+
+        def gu(eps):
+            idx = int(np.ceil((1 - eps) * N))
+            if idx < 1:
+                return -np.inf
+            if idx > n:
+                return np.inf
+            return float(t_sorted[idx - 1])
+
+        def gl(eps):
+            idx = int(np.floor(eps * N))
+            if idx < 1:
+                return -np.inf
+            if idx > n:
+                return np.inf
+            return float(t_sorted[idx - 1])
+
+        if bounds == "both":
+            return gl(epsilon / 2), gu(epsilon / 2)
+        if bounds == "upper":
+            return -np.inf, gu(epsilon)
+        return gl(epsilon), np.inf
+
+    @pytest.mark.parametrize("n_init", [1, 2, 3, 4])
+    @pytest.mark.parametrize("bounds", ["both", "upper", "lower"])
+    def test_intervals_match_reference_for_n_lt_k(self, n_init, bounds):
+        """For n < k the production intervals must match the reference exactly,
+        including the one-sided bounds."""
+        k = 5
+        rng = np.random.default_rng(123 + n_init)
+        for trial in range(30):
+            d = 2
+            eps = float(rng.choice([0.01, 0.05, 0.1, 0.2, 0.3]))
+            X = rng.normal(size=(n_init, d))
+            y = X[:, 0] + rng.normal(size=n_init) * 0.1
+            x_test = rng.normal(size=d)
+            cp = ConformalNearestNeighboursRegressor(k=k, rnd_state=0, epsilon=eps)
+            cp.learn_initial_training_set(X, y)
+            g = cp.predict(x_test, epsilon=eps, bounds=bounds)
+            lo, hi = self._reference_interval(X, y, x_test, k, eps, bounds)
+            assert np.isclose(g.lower, lo, atol=1e-9, equal_nan=True), (
+                f"n={n_init}, trial={trial}, bounds={bounds}, eps={eps}: "
+                f"lower {g.lower} != {lo}"
+            )
+            assert np.isclose(g.upper, hi, atol=1e-9, equal_nan=True), (
+                f"n={n_init}, trial={trial}, bounds={bounds}, eps={eps}: "
+                f"upper {g.upper} != {hi}"
+            )

@@ -1046,6 +1046,14 @@ class VariationalLegendreJumper(ConformalTestMartingale):
            test martingale.
         4. **Store the mean-field posterior** (including the Jensen-coupled
            normalizer) as the next step's belief.
+        5. **Commit the next step's consensus**: the exposed betting density
+           ``b_n`` (and hence the protection function ``B_n`` used for
+           downstream e-values) must match the bet that the next
+           ``update()`` will place, which is the consensus derived from the
+           prior that follows from the just-stored posterior. We re-derive
+           that consensus here and cache it in ``self._eps_bar`` so that the
+           exposed density is consistent with the future bet instead of
+           lagging the belief by one step.
 
         For |K| <= 2 the Gaunt coupling vanishes (orthogonality), and the
         algorithm is exactly the product of independent SLJ sub-jumpers.
@@ -1096,6 +1104,25 @@ class VariationalLegendreJumper(ConformalTestMartingale):
             )
         self._log_C = log_C_stored
         self._log_C_k = logsumexp(self._log_C, axis=1)
+
+        # --- Phase E: commit the NEXT step's consensus -----------------------
+        # The plug-in bet placed above used eps_bar = _consensus(prior_n),
+        # which is F_{n-1}-measurable and integrates to 1, so S_n remains a
+        # valid test martingale. However, the exposed betting density b_n
+        # (and hence the protection function B_n used for downstream
+        # e-values) must match the bet that the NEXT update() will place,
+        # and that next bet is the consensus derived from the prior that
+        # follows from the just-stored posterior. We therefore re-derive the
+        # next step's consensus here (transition on the posterior -> solve
+        # the mean-field fixed point) and store it in self._eps_bar, so that
+        # b_n / B_n remain consistent with the actual future bet instead of
+        # lagging the belief by one step.
+        term1 = self._log_1_minus_J + self._log_C
+        term2 = self._log_J_div_g + self._log_C_k[:, np.newaxis]
+        log_C_next = np.logaddexp(term1, term2)
+        log_C_next_norm = logsumexp(log_C_next, axis=1)
+        log_q_next = log_C_next - log_C_next_norm[:, np.newaxis]
+        self._eps_bar = self._consensus_gauss_seidel(log_q_next)
 
         # --- Update martingale ---
         self.logM = self._log_S

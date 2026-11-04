@@ -437,6 +437,68 @@ class TestVLJBehaviour:
             assert vlj.logM < 20.0, f"seed={seed}: logM={vlj.logM} too large under null"
 
 
+class TestExposedBettingDensityConsistency:
+    """The exposed betting density b_n must equal the bet actually placed at
+    the next step. This is the invariant that makes the protection function
+    B_n (and any downstream use of the exposed density, e.g. conformal
+    e-values) consistent with the martingale trajectory.
+
+    Formally, for a martingale M, the increment M_{n+1}/M_n must equal
+    b_n(p_{n+1}) where b_n is the density exposed after update(p_n). If this
+    fails, any code that evaluates the exposed density at a hypothetical
+    p-value will produce a value that does not match the true martingale
+    increment, invalidating downstream guarantees.
+    """
+
+    @pytest.mark.parametrize(
+        "orders,J,cls_name",
+        [
+            ([1], 0.1, "vlj_k1"),
+            ([1, 2], 0.1, "vlj_k12"),
+            ([1, 2, 3], 0.1, "vlj_k123"),
+        ],
+    )
+    def test_vlj_b_n_matches_actual_bet(self, orders, J, cls_name):
+        """VLJ: max |M_{n+1}/M_n - b_n(p_{n+1})| < 1e-9 over random streams."""
+        rng = np.random.default_rng(42)
+        p_values = rng.uniform(0.02, 0.98, size=40)
+        m = VariationalLegendreJumper(orders=orders, J=J)
+        worst = 0.0
+        for i in range(len(p_values) - 1):
+            m.update(float(p_values[i]))
+            M_n = m.M
+            bn = m.b_n
+            p_next = float(p_values[i + 1])
+            m.update(p_next)
+            M_np1 = m.M
+            worst = max(worst, abs(M_np1 / M_n - bn(p_next)))
+        assert worst < 1e-9, f"{cls_name}: worst mismatch {worst:.3e} >= 1e-9"
+
+    def test_other_jumpers_b_n_matches_actual_bet(self):
+        """Regression guard: SLJ/PLJ/ITPLJ/OFTRL already satisfy the invariant
+        at machine precision; this test guards against future regressions in
+        any of them."""
+        rng = np.random.default_rng(42)
+        p_values = rng.uniform(0.02, 0.98, size=30)
+        instances = {
+            "SLJ k=2": SimpleLegendreJumper(order=2, J=0.1),
+            "PLJ[1,2,3]": ProductLegendreJumper(orders=[1, 2, 3], J=0.1),
+            "ITPLJ[1,2,3]": IndependentTransitionProductLegendreJumper(orders=[1, 2, 3], J=0.1),
+            "OFTRL[1,2,3]": OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2, 3], eta=0.25),
+        }
+        for name, m in instances.items():
+            worst = 0.0
+            for i in range(len(p_values) - 1):
+                m.update(float(p_values[i]))
+                M_n = m.M
+                bn = m.b_n
+                p_next = float(p_values[i + 1])
+                m.update(p_next)
+                M_np1 = m.M
+                worst = max(worst, abs(M_np1 / M_n - bn(p_next)))
+            assert worst < 1e-9, f"{name}: worst mismatch {worst:.3e} >= 1e-9"
+
+
 # ---------------------------------------------------------------------------
 # IndependentTransitionProductLegendreJumper (ITPLJ) tests
 # ---------------------------------------------------------------------------

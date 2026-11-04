@@ -105,6 +105,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     classifier alignment, save/load round-trip).
 
 ### Fixed
+  - **`VariationalLegendreJumper` exposed betting density was stale (one step
+    behind the belief), breaking protection-function / e-value consistency.**
+    The VLJ is a two-phase plug-in martingale: `update()` places the bet using
+    the consensus $\bar\epsilon$ derived from the *prior* (correct —
+    $\mathcal{F}_{n-1}$-measurable, so the bet integrates to 1 and $S_n$ is a
+    valid test martingale), but it cached `self._eps_bar` as that *prior*
+    consensus while overwriting the belief with the *posterior*. At the next
+    step the actual bet is recomputed from a fresh prior (built from that
+    posterior), so the cached `self._eps_bar` — and therefore the exposed
+    density `b_n` and protection function `B_n` — lagged the belief by one
+    step and promised a bet (up to ~7% off) different from the one actually
+    placed. Any downstream use of the exposed density (protection function,
+    conformal e-values, evaluating the bet at a hypothetical p-value) was
+    therefore inconsistent with the martingale trajectory. Fix: a new
+    "Phase E" at the end of `update()` re-derives the *next* step's consensus
+    (posterior → independent transition → Gauss-Seidel, reusing the exact
+    Phase-A/Phase-B machinery) and stores it in `self._eps_bar`, so the
+    exposed `b_n`/`B_n` always match the bet the next `update()` will place.
+    The wealth trajectory $S_n$ was unaffected (it was always a valid
+    martingale); only the exposed density is corrected. Regression guard
+    `TestExposedBettingDensityConsistency` pins the invariant
+    $S_{n+1}/S_n = b_n(p_{n+1})$ at $10^{-9}$ for the VLJ ($|K| \le 3$) and all
+    other Legendre jumpers.
   - **Mondrian tree knot solver: p-value double-count and zero-width-cell
     overestimate (both broke the exact `{y : p(y) > ε}` set).** Two genuine
     bugs, surfaced by the new `1-tree forest == tree` equivalence pin, are now

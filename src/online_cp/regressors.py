@@ -63,7 +63,7 @@ except ImportError:
 
 from online_cp.mondrian._forest_solver import forest_sweepline_solver
 from online_cp.mondrian._inspection import _MondrianRegressorInspection
-from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+from online_cp.mondrian._tree_knot_solver import tree_knot_solver_flat
 from online_cp.mondrian.tree import (
     MondrianTree,
     _build_tree_summary_reg,
@@ -3767,6 +3767,39 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     # predict  (exact knot-point solver)
     # ------------------------------------------------------------------
 
+    def _summarize_tree_flat(self, tree, leaf_star, n_train):
+        """Flat per-point representation for the single-tree knot solver.
+
+        Mirrors the forest's per-tree summarization (one collect-leaves pass
+        plus a per-leaf mean), producing three flat arrays that the Numba
+        knot solver consumes in a single call.  Only the entries where
+        leaf_idx[i] == -1 (points inside the test leaf) are read from y;
+        base_ncm is read for every training point outside the test leaf.
+
+        Returns (leaf_idx, y, base_ncm, A) where A is the number of training
+        points in the test leaf.
+        """
+        leaf_star_idx = leaf_star.indices[leaf_star.indices < n_train]
+        A = int(leaf_star_idx.shape[0])
+
+        y_all = np.asarray(self.y[:n_train], dtype=np.float64)
+        leaf_idx = np.zeros(n_train, dtype=np.int64)
+        base_ncm = np.zeros(n_train, dtype=np.float64)
+
+        lid = 0
+        for leaf in _collect_leaves(tree):
+            tr = leaf.indices[leaf.indices < n_train]
+            if tr.size == 0:
+                continue
+            if leaf is leaf_star:
+                leaf_idx[tr] = -1
+            else:
+                leaf_idx[tr] = lid
+                lid += 1
+                mu = self.y[tr].mean()
+                base_ncm[tr] = np.abs(self.y[tr] - mu)
+        return leaf_idx, y_all, base_ncm, A
+
     def predict(
         self,
         x: NDArray,
@@ -3841,25 +3874,22 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
             return result
 
-        # ---- Collect outside-leaf scores ---------------------------------
-        # The candidate-independent outside-leaf scores are computed once here
-        # and reused by the knot solver.
-        ext_sorted = self._outside_ncms_sorted(tree, leaf_star, n, None)
+        # ---- Flat per-point representation (single tree traversal) ------
+        # Mirrors the forest's per-tree summarization: one collect-leaves +
+        # per-leaf mean, then a single Numba knot-solver call.
+        leaf_idx, y_all, base_ncm, A_flat = self._summarize_tree_flat(tree, leaf_star, n)
 
-        # Inside-leaf y-values
-        y_star = self.y[leaf_star_train_idx]
-
-        # ---- Exact O(k log k) knot solver (Numba-accelerated) -------------
-        # Replaces the pure-Python _build_knot_events + _pvalue_from_sweep.
-        # The solver is bit-identical to the Python reference (verified by
-        # tests/test_mondrian_tree.py::test_tree_knot_solver_matches_python).
-        # Build result with correct topology
+        # ---- Exact O(k log k) knot solver (Numba-accelerated, flat) -------
+        # The flat solver is bit-identical to the ext_sorted-based
+        # tree_knot_solver (verified by
+        # tests/test_mondrian_tree.py::test_flat_knot_solver_matches_ext_sorted).
         eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
         predictions = {}
 
         for eps_val in eps_arr:
-            lo, hi, valid_knots = tree_knot_solver(
-                A, B, ext_sorted, y_star, n, float(eps_val), tau
+            lo, hi, valid_knots = tree_knot_solver_flat(
+                leaf_idx, y_all, base_ncm,
+                A_flat, B, n, float(eps_val), tau,
             )
             predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
 

@@ -104,6 +104,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reservoir/window, bit-identity vs. unpruned, marginal coverage, label-aware
     classifier alignment, save/load round-trip).
 
+### Fixed
+  - **Mondrian tree knot solver: p-value double-count and zero-width-cell
+    overestimate (both broke the exact `{y : p(y) > ε}` set).** Two genuine
+    bugs, surfaced by the new `1-tree forest == tree` equivalence pin, are now
+    fixed in `_tree_knot_solver.py`:
+    1. **`A == 1` permanent-tie double-count.** When the test leaf holds a
+       single point, that point's V-shape score is *identical* to the test
+       score for every `y` (it is permanently tied). The knot p-value
+       (`_evaluate_pvalue_at_point_compiled`) counted this tie **twice** — once
+       in `eq` (the inside-point loop always detects it) and again via the
+       `+ permanent_ties` term — pushing the p-value **above 1** for `τ ≥ 1`,
+       which is impossible. The `permanent_ties` term is now removed from the
+       *knot* formula only; the sweep's *cell* formula keeps it, because its
+       running `greater_count` never includes tied points, so
+       `τ·(1 + permanent_ties)` there is the correct count of the self
+       comparison plus the permanent inside tie.
+    2. **Zero-width cell overestimate.** When several knot events land on the
+       same `y` (duplicate `y_j`, or an inside knot coinciding with an
+       outside-score knot), the cells between them are empty. The cell p-value
+       formula `(greater_count + τ·(1+perm))/(n+1)` is only valid for
+       non-degenerate open intervals; at a zero-width cell it overestimates `p`
+       (the count reflects the state *after* the previous knot, not a point in
+       the empty interval), so the sweep could mark a degenerate cell valid and
+       return a singleton/interval that `{y : p(y) > ε}` does not contain. The
+       sweep now **skips** degenerate cells; the shared knot's validity is still
+       evaluated by `_evaluate_pvalue_at_point_compiled`, which counts all ties
+       correctly.
+    Both fixes are pinned by `test_tree_knot_solver_A1_permanent_tie_and_zero_width_knots`
+    and by the `1-tree forest == tree` bit-identity pin
+    (`test_tree_equals_single_tree_forest_intervals_bit_identical`), which now
+    holds on **2268/2268** random tree/lifetime/ε/τ cases (previously 9
+    mismatched).
+  - **Recurring Numba segfault under repeated test runs.** `@njit(cache=True)`
+    invalidates cache entries by comparing the source `(mtime, size)` stamp,
+    which has *second* granularity. Rapid successive edits within the same
+    wall-clock second can leave a *stale* `.nbc` that Numba believes is fresh;
+    loading it (rather than recompiling) segfaults mid-test on this platform.
+    A session-scoped, autouse fixture in `tests/conftest.py`
+    (`_fresh_numba_cache`) now clears the package's `.nbc`/`.nbi` files before
+    the first test, so every run recompiles from current source with no manual
+    `__pycache__` purge required. Verified across back-to-back runs, including
+    a run with a stale cache left by the previous run.
+
+### Improved
+  - **Mondrian tree `predict` now uses a flat per-point kernel
+    (`tree_knot_solver_flat`).** `ConformalMondrianTreeRegressor.predict` builds
+    the knot-solver inputs (per-point `leaf_idx`, `y`, `base_ncm`) in a single
+    tree traversal via `_summarize_tree_flat` and calls the Numba
+    `_flat_knot_solver_compiled` kernel, which sorts the outside-leaf scores
+    in-kernel instead of Python. The algebra is bit-identical to the
+    `ext_sorted`-based `tree_knot_solver` (the knot build + sweep are shared),
+    so coverage is unchanged; the kernel avoids the Python-side sort and the
+    `ext` materialisation, making the single-tree path no slower than the
+    1-tree forest. Pinned by
+    `test_tree_knot_solver_pure_python_fallback_matches_numba` and the
+    flat-vs-`ext_sorted` identity check.
+  - **Numba-absent fallback now warns once.** When `numba` is unavailable the
+    `njit` identity fallback emits a one-time `UserWarning` so the silent
+    pure-Python O(k log k) degradation is never mistaken for a correctness
+    issue.
+
 ---
 
 ## [0.4.0] — 2026-10-22

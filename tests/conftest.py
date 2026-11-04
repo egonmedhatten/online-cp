@@ -1,5 +1,67 @@
+import pathlib
+
 import numpy as np
 import pytest
+
+
+def _numba_cache_dirs() -> list[pathlib.Path]:
+    """Return the ``__pycache__`` directories that hold Numba's on-disk
+    ``.nbc``/``.nbi`` cache files for the ``online_cp`` package.
+
+    The package is laid out under ``<repo>/src/online_cp`` (see
+    ``[tool.pytest.ini_options] pythonpath`` in ``pyproject.toml``).
+    """
+    # This file lives at <repo>/tests/conftest.py, so the repo root is two
+    # levels up.
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    src_online_cp = repo_root / "src" / "online_cp"
+    if not src_online_cp.is_dir():
+        return []
+    dirs = [p.parent for p in src_online_cp.rglob("*.nbc")]
+    dirs = [p.parent for p in src_online_cp.rglob("*.nbi")]
+    # Deduplicate while preserving order.
+    seen: set[pathlib.Path] = set()
+    out: list[pathlib.Path] = []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fresh_numba_cache():
+    """Clear Numba's on-disk ``.nbc``/``.nbi`` cache before the test session.
+
+    Numba's ``@njit(cache=True)`` invalidates entries by comparing the source
+    file's ``(mtime, size)`` stamp. That stamp has **second** granularity, so
+    rapid successive edits that land within the same wall-clock second can
+    produce a *stale* cache entry that Numba believes is fresh, loading a
+    ``.nbc`` that no longer matches the source. On this platform that
+    manifests as a hard segfault mid-test rather than a clean recompile.
+
+    Deleting the cache files once per session guarantees every run recompiles
+    from the current source. The one-time recompile cost (~1 s for the two
+    Mondrian kernels) is negligible against the ~15 s test runtime, and it
+    removes the need to manually purge ``__pycache__`` between edits.
+
+    The fixture is ``session``-scoped and ``autouse`` so it runs exactly once
+    before the first test, regardless of which test files are selected.
+    """
+    cleared: list[str] = []
+    for d in _numba_cache_dirs():
+        for suffix in (".nbc", ".nbi"):
+            for f in d.glob(f"*{suffix}"):
+                try:
+                    f.unlink()
+                    cleared.append(str(f))
+                except OSError:
+                    pass
+    # Expose the result for debugging (not asserted on).
+    if cleared:
+        # A single short line is enough; the full list is noisy.
+        print(f"[conftest] cleared {len(cleared)} stale Numba cache file(s)")
+    yield
 
 
 @pytest.fixture

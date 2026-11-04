@@ -38,11 +38,30 @@ from numpy.typing import NDArray
 try:
     from numba import njit
 except ImportError:  # pragma: no cover - numba is a hard dep in practice
+    import warnings as _warnings
+
     def njit(*args, **kwargs):
-        """Identity fallback when Numba is unavailable."""
+        """Identity fallback when Numba is unavailable.
+
+        Warns once so the silent perf degradation (pure-Python O(k log k)
+        knot sweep instead of the compiled one) is never mistaken for a
+        typing bug or an experimental-design issue.
+        """
+        global _WARNED
+        if not _WARNED:
+            _WARNED = True
+            _warnings.warn(
+                "numba is not installed; the exact Mondrian-tree knot solver is "
+                "running in pure Python (O(k log k) sweep). Install the 'fast' "
+                "extra (online-cp[fast]) to enable the Numba-accelerated path.",
+                stacklevel=2,
+            )
         if args and callable(args[0]):
             return args[0]
         return lambda function: function
+
+
+_WARNED = False
 
 
 __all__ = ["tree_knot_solver"]
@@ -179,7 +198,17 @@ def _evaluate_pvalue_at_point_compiled(
             if abs(inside_ncm - ncm_test) <= _TIE_TOL:
                 eq += 1
 
-    return (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1.0)
+    # ``permanent_ties`` is intentionally NOT added here. When A == 1 the
+    # single inside point is permanently tied with the test point (its score
+    # always equals the test score), and that tie is already counted in
+    # ``eq`` by the loop above (it falls into the ``eq`` branch on every
+    # call). Adding ``permanent_ties`` would double-count the tie and push
+    # the p-value above 1 for tau >= 1. The sweep's cell formula
+    # (``_pvalue_from_sweep_compiled``) still uses ``permanent_ties``
+    # because its running ``greater_count`` never includes tied points, so
+    # the ``tau*(1+permanent_ties)`` term there is the *correct* count of
+    # the self-comparison plus the permanent inside tie (no double-count).
+    return (gt + tau * (eq + 1.0)) / (n_train + 1.0)
 
 
 @njit(cache=True)
@@ -243,15 +272,30 @@ def _pvalue_from_sweep_compiled(
             flag = knots_flag[i]
             has_knot = True
         else:
+            knot_val = 0.0
+            flag = 0
             has_knot = False  # rightmost end-cell
 
         # p-value for this cell (open interval), using the running count.
-        p_val = (greater_count + tau * (1 + permanent_ties)) / (n_train + 1.0)
-
-        if p_val > epsilon:
-            if first_valid_idx == -1:
-                first_valid_idx = i
-            last_valid_idx = i
+        # A cell is the open interval (knots[i-1], knots[i]) for i >= 1,
+        # (-inf, knots[0]) for i = 0, and (knots[nk-1], inf) for i = nk.
+        # When the cell is zero-width (knots[i-1] == knots[i]), it is empty
+        # and its p-value is undefined; we must NOT use the running-count
+        # formula (which overestimates p because the count reflects the
+        # state *after* the previous knot, not a point actually in the
+        # interval). Such degenerate cells are skipped; the validity of the
+        # shared knot is handled separately by the knot check below.
+        if i == 0 or i == nk:
+            # End cells are never zero-width (they extend to infinity).
+            is_degenerate = False
+        else:
+            is_degenerate = abs(knots_val[i] - knots_val[i - 1]) <= 1e-11
+        if not is_degenerate:
+            p_val = (greater_count + tau * (1 + permanent_ties)) / (n_train + 1.0)
+            if p_val > epsilon:
+                if first_valid_idx == -1:
+                    first_valid_idx = i
+                last_valid_idx = i
 
         # Check validity of the knot itself (only interior knots, i.e. when
         # both a previous knot and the current knot exist).
@@ -350,6 +394,102 @@ def tree_knot_solver(
         int(permanent_ties),
         float(epsilon),
         float(tau),
+    )
+    valid_knots = [float(v) for v in vk] if vk.shape[0] > 0 else []
+    return float(lo), float(hi), valid_knots
+
+
+@njit(cache=True)
+def _flat_knot_solver_compiled(
+    leaf_idx: NDArray[np.int64],
+    y: NDArray[np.float64],
+    base_ncm: NDArray[np.float64],
+    A: int,
+    B: float,
+    n_train: int,
+    tau: float,
+    epsilon: float,
+) -> tuple:
+    """Flat-representation exact O(k log k) knot solver for a single tree.
+
+    Driven by the per-point flat arrays produced by a single tree traversal:
+
+    * ``leaf_idx[i] >= 0``  -> point i is in a *training* leaf; the knot solver
+      needs only its ``base_ncm[i]`` (constant score) -- y-value not required.
+    * ``leaf_idx[i] == -1`` -> point i is in the *test* leaf (leaf_star).
+
+    The algebra is bit-identical to
+    ``_build_knot_events_compiled`` + ``_pvalue_from_sweep_compiled``; the only
+    difference is that outside-leaf scores are obtained from ``base_ncm`` and
+    sorted in-kernel (``np.argsort``) instead of being passed pre-sorted.  This
+    avoids the Python-side sort of ``ext`` in :func:`tree_knot_solver` when the
+    flat arrays are already available (the forest path).
+    """
+    # Build ext_sorted and y_star from the flat arrays.
+    # Inside points: leaf_idx == -1.  Outside: leaf_idx >= 0.
+    n_inside = 0
+    for i in range(leaf_idx.shape[0]):
+        if leaf_idx[i] == -1:
+            n_inside += 1
+    assert n_inside == A, (
+        f"flat solver: n_inside={n_inside} != A={A} -- leaf_idx inconsistent"
+    )
+    ext = np.empty(n_train - A, dtype=np.float64)
+    ys = np.empty(A, dtype=np.float64)
+    ei = 0
+    yi = 0
+    for i in range(leaf_idx.shape[0]):
+        if leaf_idx[i] == -1:
+            ys[yi] = y[i]
+            yi += 1
+        else:
+            ext[ei] = base_ncm[i]
+            ei += 1
+    ext_sorted_idx = np.argsort(ext)
+    ext_sorted_vals = ext[ext_sorted_idx]
+
+    knots_val, knots_flag, permanent_ties = _build_knot_events_compiled(
+        A, B, ext_sorted_vals, ys
+    )
+    lo, hi, vk = _pvalue_from_sweep_compiled(
+        knots_val,
+        knots_flag,
+        A,
+        B,
+        ext_sorted_vals,
+        ys,
+        n_train,
+        permanent_ties,
+        epsilon,
+        tau,
+    )
+    return lo, hi, vk
+
+
+def tree_knot_solver_flat(
+    leaf_idx: NDArray[np.floating[Any]],
+    y: NDArray[np.floating[Any]],
+    base_ncm: NDArray[np.floating[Any]],
+    A: int,
+    B: float,
+    n_train: int,
+    epsilon: float,
+    tau: float,
+) -> tuple[float, float, list[float]]:
+    """Flat-representation exact O(k log k) knot solver (public API).
+
+    See :func:`_flat_knot_solver_compiled` for the contract. Returns
+    ``(lo, hi, valid_knots)`` with the same semantics as
+    :func:`tree_knot_solver`.
+
+    Note the argument order: ``epsilon`` comes *before* ``tau`` to match the
+    calling convention in :meth:`ConformalMondrianTreeRegressor.predict`.
+    """
+    li = np.ascontiguousarray(leaf_idx, dtype=np.int64)
+    yy = np.ascontiguousarray(y, dtype=np.float64)
+    bn = np.ascontiguousarray(base_ncm, dtype=np.float64)
+    lo, hi, vk = _flat_knot_solver_compiled(
+        li, yy, bn, int(A), float(B), int(n_train), float(tau), float(epsilon)
     )
     valid_knots = [float(v) for v in vk] if vk.shape[0] > 0 else []
     return float(lo), float(hi), valid_knots

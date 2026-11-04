@@ -17,11 +17,31 @@ from numpy.typing import NDArray
 
 try:
     from numba import njit
-except ImportError:
+except ImportError:  # pragma: no cover - numba is a hard dep in practice
+    import warnings as _warnings
+
     def njit(*args, **kwargs):
+        """Identity fallback when Numba is unavailable.
+
+        Warns once so the silent perf degradation (pure-Python sweepline
+        instead of the compiled one) is never mistaken for a typing bug or
+        an experimental-design issue.
+        """
+        global _WARNED
+        if not _WARNED:
+            _WARNED = True
+            _warnings.warn(
+                "numba is not installed; the exact Mondrian-forest sweepline "
+                "solver is running in pure Python. Install the 'fast' extra "
+                "(online-cp[fast]) to enable the Numba-accelerated path.",
+                stacklevel=2,
+            )
         if args and callable(args[0]):
             return args[0]
         return lambda function: function
+
+
+_WARNED = False
 
 
 __all__ = ["forest_sweepline_solver"]

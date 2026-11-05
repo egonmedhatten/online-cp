@@ -181,6 +181,104 @@ class TestStreamingEval:
         assert "IntervalWidth" in metric_dict
 
 
+class TestTrace:
+    """Tests for the ``trace=True`` option on the progressive_val family.
+
+    ``trace=True`` records the raw per-step (y, Gamma) data on the returned
+    metric, in label-arrival order, so it can be inspected or plotted
+    directly (e.g. ``plot_intervals(metric)``) without re-running the stream.
+    """
+
+    def test_trace_records_y_and_gamma(self, ridge_model):
+        """trace=True sets trace_y / trace_gamma aligned with metric.values."""
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        result = progressive_val(model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric, trace=True)
+        assert result is metric
+        assert len(metric.trace_y) == len(metric.values) == 30
+        assert len(metric.trace_gamma) == 30
+        # trace_y matches the true labels (arrival order == stream order here).
+        assert np.allclose(np.array(metric.trace_y), y_test[:30])
+
+    def test_trace_gamma_is_the_prediction_set(self, ridge_model):
+        """Each traced Gamma is the conformal prediction set for that step."""
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, metric=metric, trace=True)
+        for i, Gamma in enumerate(metric.trace_gamma):
+            # A fresh prediction from the *same* (already-trained) model state
+            # is order-dependent, so instead verify the invariants that must
+            # hold: continuous, single interval, and y either in or out.
+            assert Gamma.is_continuous
+            lo, hi = Gamma.intervals[0]
+            assert lo <= hi
+            covered = lo <= y_test[i] <= hi
+            assert covered == (y_test[i] in Gamma)
+
+    def test_trace_default_off(self, ridge_model):
+        """trace=False (default) creates no trace_* attributes (no bloat)."""
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, metric=metric)
+        assert not hasattr(metric, "trace_y")
+        assert not hasattr(metric, "trace_gamma")
+        # And the metric still works as before.
+        assert len(metric.values) == 20
+
+    def test_trace_composite_metric(self, ridge_model):
+        """trace=True works with a Metrics composite and both members update."""
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate() + IntervalWidth()
+        progressive_val(model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric, trace=True)
+        # Both scalar members recorded 30 steps.
+        assert len(metric["ErrorRate"].values) == 30
+        assert len(metric["IntervalWidth"].values) == 30
+        # The shared trace is also 30 long.
+        assert len(metric.trace_y) == 30
+        assert len(metric.trace_gamma) == 30
+
+    def test_trace_lazy_teacher_skips(self, linear_dataset):
+        """Lazy-teacher steps (y=None) are excluded from the trace."""
+        X, y = linear_dataset
+        model = ConformalRidgeRegressor(a=1.0)
+        model.learn_initial_training_set(X[:50], y[:50])
+        stream = [(X[i], y[i] if i % 2 == 0 else None) for i in range(50, 70)]
+        metric = ErrorRate()
+        progressive_val(model, stream, epsilon=0.1, metric=metric, trace=True)
+        # Only the 10 even-index labels are evaluated.
+        assert len(metric.trace_y) == len(metric.values) == 10
+        assert len(metric.trace_gamma) == 10
+
+    def test_trace_with_delay(self, linear_dataset):
+        """Under delay>0 the trace is still fully resolved and length-correct."""
+        X, y = linear_dataset
+        model = ConformalRidgeRegressor(a=1.0)
+        model.learn_initial_training_set(X[:50], y[:50])
+        metric = ErrorRate()
+        progressive_val(model, X[50:80], y[50:80], epsilon=0.1, metric=metric, trace=True, delay=3)
+        assert len(metric.trace_y) == len(metric.values) == 30
+
+    def test_iter_progressive_val_trace(self, ridge_model):
+        """iter_progressive_val(trace=True) carries trace data in each snapshot."""
+        model, X_test, y_test = ridge_model
+        snapshots = list(iter_progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, step=5, trace=True))
+        assert len(snapshots) == 4
+        for snap in snapshots:
+            assert "trace_y" in snap
+            assert "trace_gamma" in snap
+        # Each snapshot covers a distinct chunk; total = 20.
+        total = sum(len(s["trace_y"]) for s in snapshots)
+        assert total == 20
+
+    def test_iter_trace_default_off(self, ridge_model):
+        """iter_progressive_val default (trace=False) snapshots have no trace keys."""
+        model, X_test, y_test = ridge_model
+        snapshots = list(iter_progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, step=5))
+        for snap in snapshots:
+            assert "trace_y" not in snap
+            assert "trace_gamma" not in snap
+
+
 class TestVennEval:
     """Tests for progressive_val_venn and iter_progressive_val_venn."""
 
@@ -257,6 +355,24 @@ class TestVennEval:
         assert len(snaps) == n // 5 + 1
         assert snaps[-1]["step"] == n
 
+    def test_trace_venn(self, venn_model):
+        """progressive_val_venn(trace=True) records (y, VennPrediction) per step."""
+        from online_cp.venn import VennPrediction
+
+        model, X_test, y_test = venn_model
+        metric = BrierScore()
+        progressive_val_venn(model, X_test, y_test, metric=metric, trace=True)
+        assert len(metric.trace_y) == metric._n == len(X_test)
+        assert len(metric.trace_gamma) == len(X_test)
+        assert all(isinstance(g, VennPrediction) for g in metric.trace_gamma)
+
+    def test_iter_trace_venn(self, venn_model):
+        """iter_progressive_val_venn(trace=True) carries trace data in snapshots."""
+        model, X_test, y_test = venn_model
+        snapshots = list(iter_progressive_val_venn(model, X_test, y_test, step=5, trace=True))
+        total = sum(len(s["trace_gamma"]) for s in snapshots)
+        assert total == len(X_test)
+
 
 class TestPlotting:
     """Smoke tests for plotting functions."""
@@ -307,6 +423,136 @@ class TestPlotting:
         ax = plot_set_sizes(metric)
         assert ax is not None
         assert len(ax.lines) >= 1
+
+    def test_plot_coverage_accepts_composite(self, ridge_model):
+        """plot_coverage picks the ErrorRate member out of a Metrics composite."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_coverage
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate() + IntervalWidth()
+        progressive_val(model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric)
+        ax = plot_coverage(metric, nominal=0.9)
+        assert ax is not None
+        assert len(ax.lines) >= 1
+
+    def test_plot_set_sizes_accepts_composite(self, ridge_model):
+        """plot_set_sizes picks IntervalWidth out of a Metrics composite."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_set_sizes
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate() + IntervalWidth()
+        progressive_val(model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric)
+        ax = plot_set_sizes(metric)
+        assert ax is not None
+        assert len(ax.lines) >= 1
+
+    def test_plot_intervals_from_traced_metric(self, ridge_model):
+        """plot_intervals(metric) works when metric was run with trace=True."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_intervals
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate() + IntervalWidth()
+        progressive_val(model, X_test[:30], y_test[:30], epsilon=0.1, metric=metric, trace=True)
+        ax = plot_intervals(metric)
+        assert ax is not None
+
+    def test_plot_intervals_metric_and_explicit_conflict(self, ridge_model):
+        """Passing both a traced metric and intervals raises ValueError."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_intervals
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        progressive_val(model, X_test[:10], y_test[:10], epsilon=0.1, metric=metric, trace=True)
+        with pytest.raises(ValueError, match="do not also pass"):
+            plot_intervals(metric, y_test[:10])
+
+    def _legend_labels(self, ax):
+        """Return the list of legend text entries on *ax*."""
+        return [t.get_text() for t in ax.get_legend().get_texts()]
+
+    def test_plot_intervals_default_label(self, ridge_model):
+        """label=None keeps the 'Prediction interval' default in the legend."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_intervals
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, metric=metric, trace=True)
+        ax = plot_intervals(metric)
+        assert "Prediction interval" in self._legend_labels(ax)
+
+    def test_plot_intervals_custom_label(self, ridge_model):
+        """label= overrides the default legend label for the interval band."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_intervals
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, metric=metric, trace=True)
+        ax = plot_intervals(metric, label="My Model")
+        labels = self._legend_labels(ax)
+        assert "My Model" in labels
+        assert "Prediction interval" not in labels
+
+    def test_plot_intervals_overlay_two_models(self, ridge_model):
+        """Overlaying two models on one ax draws y_true only once, with distinct colours."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_intervals
+
+        model, X_test, y_test = ridge_model
+        m1 = ErrorRate()
+        progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, metric=m1, trace=True)
+        # A second (independent) run for a second model.
+        model2, X_test2, y_test2 = ridge_model
+        m2 = ErrorRate()
+        progressive_val(model2, X_test2[:20], y_test2[:20], epsilon=0.1, metric=m2, trace=True)
+
+        ax = plot_intervals(m1, label="Model A", interval_kwargs={"color": "steelblue"})
+        plot_intervals(m2, label="Model B", ax=ax, show_points=False, interval_kwargs={"color": "orange"})
+
+        labels = self._legend_labels(ax)
+        assert "Model A" in labels
+        assert "Model B" in labels
+        # y_true appears in the legend exactly once (its label is r"$y_{true}$").
+        n_true = sum(1 for lab in labels if "y_{true}" in lab)
+        assert n_true == 1
+        # Two interval bands + one true-value scatter = 3 collections.
+        assert len(ax.collections) == 3
+        # The two bands have the requested colours.
+        colors = {tuple(np.round(c.get_facecolor()[0], 3)) for c in ax.collections[:2]}
+        assert len(colors) == 2  # two distinct colours
+
+    def test_plot_intervals_show_points_false_no_scatter(self, ridge_model):
+        """show_points=False omits the true-value scatter entirely."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from online_cp.plotting import plot_intervals
+
+        model, X_test, y_test = ridge_model
+        metric = ErrorRate()
+        progressive_val(model, X_test[:20], y_test[:20], epsilon=0.1, metric=metric, trace=True)
+        ax = plot_intervals(metric, show_points=False)
+        # Only the interval band, no scatter.
+        assert len(ax.collections) == 1
 
     def test_plot_martingale(self, uniform_p_values):
         import matplotlib

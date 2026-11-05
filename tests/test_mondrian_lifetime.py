@@ -19,7 +19,10 @@ from online_cp.mondrian.tree import (
     _resolve_feature_weights,
     _resolve_lifetime,
 )
-from online_cp.regressors import ConformalMondrianTreeRegressor
+from online_cp.regressors import (
+    ConformalMondrianForestRegressor,
+    ConformalMondrianTreeRegressor,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -244,16 +247,77 @@ def test_rng_state_not_touched_for_float():
 
 
 # ===========================================================================
+# 6b. adaptive lifetime — the minimax rate of Mourtada et al. (2020)
+# ===========================================================================
+
+def test_adaptive_lifetime_exact_value():
+    """'adaptive' resolves to the closed-form minimax rate n^(1/(d+2))."""
+    rng = np.random.default_rng(42)
+    d = 4
+    X = np.random.default_rng(1).standard_normal((37, d))
+    X_aug = np.vstack([X, X[0]])  # bag size 38
+    lt = _resolve_lifetime(X_aug, X_aug[-1], "adaptive", rng, None)
+    assert lt == pytest.approx(38 ** (1.0 / (d + 2)), rel=1e-12)
+
+
+def test_adaptive_lifetime_rng_not_touched():
+    """'adaptive' is closed-form: the RNG must not be advanced."""
+    rng = np.random.default_rng(42)
+    X = np.random.default_rng(1).standard_normal((20, 3))
+    X_aug = np.vstack([X, X[0]])
+    state_before = rng.bit_generator.state
+    _ = _resolve_lifetime(X_aug, X_aug[-1], "adaptive", rng, None)
+    state_after = rng.bit_generator.state
+    assert state_before["state"]["state"] == state_after["state"]["state"]
+
+
+def test_adaptive_lifetime_end_to_end_clf(iris_data):
+    """adaptive works end-to-end in the classifier and is label-blind (X only).
+
+    The partition is a function of X only, so two identically-seeded instances
+    must produce the identical prediction set at every epsilon level.
+    """
+    X, y, x_test = iris_data
+    clf = ConformalMondrianTreeClassifier(lifetime="adaptive", rnd_state=0)
+    clf.learn_initial_training_set(X, y)
+    clf2 = ConformalMondrianTreeClassifier(lifetime="adaptive", rnd_state=0)
+    clf2.learn_initial_training_set(X, y)
+    for eps in (0.05, 0.3, 0.9):
+        ps = clf.predict(x_test, epsilon=eps)
+        ps2 = clf2.predict(x_test, epsilon=eps)
+        assert ps.is_empty == ps2.is_empty
+
+
+def test_adaptive_lifetime_end_to_end_forest(regression_data):
+    """adaptive works through the forest path (lifetime resolved once, before
+    the parallel worker fan-out, so worker trees share the spatial law)."""
+    X, y, x_test = regression_data
+    reg = ConformalMondrianForestRegressor(n_trees=3, lifetime="adaptive", rnd_state=0)
+    ps = reg.predict(x_test, epsilon=0.1)
+    # Finite, non-degenerate interval
+    assert float(np.min(ps.lower)) < float(np.max(ps.upper))
+    reg2 = ConformalMondrianForestRegressor(n_trees=3, lifetime="adaptive", rnd_state=0)
+    ps2 = reg2.predict(x_test, epsilon=0.1)
+    assert float(np.min(ps.lower)) == pytest.approx(float(np.min(ps2.lower)))
+    assert float(np.max(ps.upper)) == pytest.approx(float(np.max(ps2.upper)))
+
+
+def test_adaptive_rejects_unknown_string():
+    with pytest.raises(ValueError, match="adaptive"):
+        ConformalMondrianTreeRegressor(lifetime="unknown")
+
+
+# ===========================================================================
 # 7. Input validation
 # ===========================================================================
 
 def test_invalid_lifetime_raises_clf():
-    with pytest.raises(ValueError, match="sqrt_n"):
+    with pytest.raises(ValueError, match="adaptive"):
         ConformalMondrianTreeClassifier(lifetime="unknown")
 
 
 def test_invalid_lifetime_raises_reg():
-    with pytest.raises(ValueError, match="sqrt_n"):
+    with pytest.raises(ValueError, match="adaptive"):
         ConformalMondrianTreeRegressor(lifetime="unknown")
 
 

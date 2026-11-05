@@ -727,6 +727,9 @@ def _select_cps_category(root: _MondrianNode, x: NDArray, n: int) -> _MondrianNo
     return root
 
 
+
+
+
 def _subtree_training_indices(node: _MondrianNode, n: int) -> NDArray:
     """All training indices (``< n``) in the subtree rooted at ``node``.
 
@@ -1000,13 +1003,22 @@ def _resolve_lifetime(
     if isinstance(lifetime_spec, (int, float)):
         return float(lifetime_spec)
 
-    if lifetime_spec not in ("sqrt_n", "density"):
+    if lifetime_spec not in ("sqrt_n", "density", "adaptive"):
         raise ValueError(
             f"Unknown lifetime string {lifetime_spec!r}. "
-            "Recognised values: 'sqrt_n', 'density'."
+            "Recognised values: 'sqrt_n', 'density', 'adaptive'."
         )
 
     n_total = X_aug.shape[0]
+
+    # 'adaptive': the minimax-optimal rate of Mourtada et al. (2020),
+    # λ* ≍ n^{1/(d+2)}. This is a closed-form function of the feature geometry
+    # (sample size and ambient dimension) only — no master tree is grown and the
+    # RNG is never advanced — so it is a deterministic, label-blind truncation.
+    if lifetime_spec == "adaptive":
+        d = X_aug.shape[1]
+        return float(n_total ** (1.0 / (d + 2)))
+
     indices_all = np.arange(n_total)
 
     # 1. Snapshot the RNG state before growing the master tree.
@@ -1241,6 +1253,7 @@ def _build_tree_summary(
     n: int,
     lifetime: float,
     max_depth: int | None = None,
+    min_samples_leaf: int = 1,
 ) -> tuple[NDArray, NDArray, NDArray]:
     """Build one Mondrian tree and return lightweight numpy summaries.
 
@@ -1276,7 +1289,10 @@ def _build_tree_summary(
     """
     n_total = len(X_aug)
     rng = np.random.default_rng(seed)
-    tree = _sample_mondrian_tree(rng, X_aug, np.arange(n_total), 0.0, lifetime, max_depth=max_depth)
+    tree = _sample_mondrian_tree(
+        rng, X_aug, np.arange(n_total), 0.0, lifetime,
+        max_depth=max_depth, min_samples_leaf=min_samples_leaf,
+    )
     return _summarize_tree(tree, y_train, label_to_idx, K, n)
 
 
@@ -1322,6 +1338,7 @@ def _build_tree_summary_reg(
     n: int,
     lifetime: float,
     max_depth: int | None = None,
+    min_samples_leaf: int = 1,
 ) -> tuple[NDArray, NDArray, NDArray]:
     """Build one Mondrian tree and return regression leaf statistics.
 
@@ -1337,6 +1354,10 @@ def _build_tree_summary_reg(
         Number of training points (test point is at index n).
     lifetime : float
         Mondrian depth budget.
+    max_depth : int or None
+        Hard depth cap (``None`` = no cap).
+    min_samples_leaf : int
+        Minimum number of points allowed in each leaf (spatial truncation).
 
     Returns
     -------
@@ -1350,7 +1371,10 @@ def _build_tree_summary_reg(
     """
     n_total = n + 1
     rng = np.random.default_rng(seed)
-    tree = _sample_mondrian_tree(rng, X_aug, np.arange(n_total), 0.0, lifetime, max_depth=max_depth)
+    tree = _sample_mondrian_tree(
+        rng, X_aug, np.arange(n_total), 0.0, lifetime,
+        max_depth=max_depth, min_samples_leaf=min_samples_leaf,
+    )
     return _summarize_tree_reg(tree, y_train, n, X_aug[n])
 
 

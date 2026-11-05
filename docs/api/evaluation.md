@@ -34,6 +34,34 @@ than a logarithmic fraction of trials.
 
 ---
 
+## Tracing the raw stream
+
+The four functions accept a `trace` flag (default `False`). When enabled, the
+returned metric additionally carries the **raw per-step data** — not just the
+aggregated metric — so you can inspect or plot it directly:
+
+```python
+from online_cp import ConformalRidgeRegressor, plot_intervals
+from online_cp.metrics import ErrorRate, IntervalWidth
+from online_cp.evaluate import progressive_val
+
+metric = ErrorRate() + IntervalWidth()
+progressive_val(model, X, y, epsilon=0.1, metric=metric, trace=True)
+
+# metric.trace_y      -> list of true labels (arrival order)
+# metric.trace_gamma  -> list of prediction sets (intervals / label sets)
+# len(metric.trace_y) == len(metric.values)
+
+plot_intervals(metric)              # from the traced metric, or
+plot_intervals(metric.trace_y, metric.trace_gamma)  # explicitly
+```
+
+For the `iter_progressive_val` / `iter_progressive_val_venn` generators, each
+yielded snapshot carries `trace_y` / `trace_gamma` for the steps that resolved
+since the previous snapshot, so you can plot incrementally.
+
+---
+
 ::: online_cp.evaluate.progressive_val
 
 ::: online_cp.evaluate.iter_progressive_val

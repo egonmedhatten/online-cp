@@ -20,6 +20,8 @@
 
 ::: online_cp.martingale.ProductLegendreJumper
 
+::: online_cp.martingale.IndependentTransitionProductLegendreJumper
+
 ::: online_cp.martingale.VariationalLegendreJumper
 
 ::: online_cp.martingale.CompositeLegendreJumper

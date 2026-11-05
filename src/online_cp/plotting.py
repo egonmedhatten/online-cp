@@ -14,11 +14,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from online_cp.metrics import ErrorRate, IntervalWidth, Metric, Metrics, SetSize
+
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
     from online_cp.martingale import ConformalTestMartingale, CUSUMWrapper, ShiryaevRobertsWrapper, VilleWrapper
-    from online_cp.metrics import Metric
 
 __all__ = [
     "plot_coverage",
@@ -43,14 +44,63 @@ def _get_ax(ax):
     return ax
 
 
-def plot_coverage(metric: Metric, *, nominal: float | None = None, ax: Axes | None = None, **kwargs: Any) -> Axes:
+def _resolve_metric(metric: Metric | Metrics, candidates: Sequence[type]) -> Metric:
+    """Resolve a member metric from a composite.
+
+    *metric* is either a bare :class:`Metric` (returned as-is) or a
+    :class:`Metrics` composite, in which case the first member whose class is
+    one of *candidates* (matched by subclass) is returned.  This lets the
+    plotting helpers accept the whole ``Metrics`` object that
+    ``progressive_val`` returns, so callers no longer have to index
+    ``metric["ErrorRate"]`` themselves.
+
+    Parameters
+    ----------
+    metric : Metric or Metrics
+        A single metric, or a composite of metrics.
+    candidates : sequence of Metric subclasses
+        The classes to look for, in priority order.
+
+    Raises
+    ------
+    TypeError
+        If *metric* is not a :class:`Metric` / :class:`Metrics`.
+    KeyError
+        If no member of the composite matches any of *candidates*.
+    """
+    if isinstance(metric, Metric):
+        return metric
+    if isinstance(metric, Metrics):
+        # Try each candidate in priority order, by subclass (not exact class).
+        for cand in candidates:
+            for m in metric:
+                if isinstance(m, cand):
+                    return m
+        names = ", ".join(sorted(c.__name__ for c in candidates))
+        available = ", ".join(m.name for m in metric)
+        raise KeyError(
+            f"No metric of type ({names}) found in composite. Available: ({available})."
+        )
+    raise TypeError(f"Expected a Metric or Metrics, got {type(metric).__name__}.")
+
+
+def plot_coverage(
+    metric: Metric | Metrics,
+    *,
+    nominal: float | None = None,
+    ax: Axes | None = None,
+    **kwargs: Any,
+) -> Axes:
     """Plot the running coverage (1 - error rate) over time.
 
     Parameters
     ----------
-    metric : Metric
-        A metric object with a ``.values`` attribute (list of per-step scores).
-        Typically an ``ErrorRate`` metric.
+    metric : Metric or Metrics
+        An ``ErrorRate`` metric, or a :class:`Metrics` composite that contains
+        one.  When a composite is passed the first ``ErrorRate`` member is
+        selected automatically, so the object returned by
+        ``progressive_val(..., metric=ErrorRate() + IntervalWidth())`` can be
+        passed directly.
     nominal : float, optional
         Nominal coverage level (e.g. 0.9). Draws a horizontal reference line.
     ax : matplotlib.axes.Axes, optional
@@ -62,6 +112,7 @@ def plot_coverage(metric: Metric, *, nominal: float | None = None, ax: Axes | No
     -------
     ax : matplotlib.axes.Axes
     """
+    metric = _resolve_metric(metric, (ErrorRate,))
     ax = _get_ax(ax)
     values = np.array(metric.values)
     # Coverage = 1 - cumulative error rate
@@ -358,33 +409,83 @@ def _find_alarm_times_sr(sr_values, threshold):
 
 
 def plot_intervals(
-    y_true: NDArray[np.floating[Any]] | Sequence[float],
-    intervals: Sequence[Any],
+    y_true: NDArray[np.floating[Any]] | Sequence[float] | Metric | Metrics,
+    intervals: Sequence[Any] | None = None,
     *,
+    label: str | None = None,
     ax: Axes | None = None,
+    show_points: bool = True,
     point_kwargs: dict[str, Any] | None = None,
     interval_kwargs: dict[str, Any] | None = None,
 ) -> Axes:
     """Plot prediction intervals with true values overlaid.
 
+    Two call forms are supported:
+
+    1. **Explicit** — ``plot_intervals(y_true, intervals)`` where *y_true* is
+       an array of true values and *intervals* is a per-step sequence of
+       prediction intervals.
+    2. **From a traced metric** — ``plot_intervals(metric)`` where *metric* is
+       the object returned by ``progressive_val(..., trace=True)``.  The true
+       labels and intervals are read from ``metric.trace_y`` /
+       ``metric.trace_gamma``, so the round-trip is
+       ``progressive_val(..., trace=True)`` → ``plot_intervals(metric)``.
+
+    Overlaying multiple models
+    --------------------------
+    To compare several models on the same axes, call repeatedly with a shared
+    ``ax`` and a distinct ``label`` and ``color`` (via ``interval_kwargs``),
+    and turn off the true-value scatter for every call after the first via
+    ``show_points=False`` so ``y_true`` is drawn only once:
+
+    .. code-block:: python
+
+        ax = plot_intervals(metric_a, label="Model A",
+                            interval_kwargs={"color": "steelblue"})
+        plot_intervals(metric_b, label="Model B", ax=ax, show_points=False,
+                       interval_kwargs={"color": "orange"})
+
     Parameters
     ----------
-    y_true : array-like
-        True response values.
-    intervals : list of tuples or objects with .lower/.upper attributes
+    y_true : array-like or Metric
+        True response values, or a metric produced by
+        ``progressive_val(..., trace=True)`` (in which case *intervals* is
+        ignored and the data comes from ``metric.trace_y`` /
+        ``metric.trace_gamma``).
+    intervals : list of tuples or objects with .lower/.upper attributes, optional
         Prediction intervals. Each element is either a (lower, upper) tuple
-        or an object with ``.lower`` and ``.upper`` attributes.
+        or an object with ``.lower`` and ``.upper`` attributes.  Required when
+        *y_true* is an array; optional (and ignored) when *y_true* is a
+        traced metric.
+    label : str, optional
+        Legend label for the interval band.  Defaults to
+        ``"Prediction interval"`` when ``None``.  Pass an empty string
+        (``""``) to suppress the legend entry for this band.
     ax : matplotlib.axes.Axes, optional
-        Axes to plot on.
+        Axes to plot on.  Pass the same ``ax`` to overlay multiple models.
+    show_points : bool, optional
+        Whether to draw the true-value scatter (default ``True``).  Set to
+        ``False`` when overlaying on an axis that already shows ``y_true``.
     point_kwargs : dict, optional
         Keyword arguments for the true-value scatter plot.
     interval_kwargs : dict, optional
-        Keyword arguments for the interval vertical lines.
+        Keyword arguments for the interval band.  Commonly used to set
+        ``color`` and ``alpha`` when overlaying multiple models.
 
     Returns
     -------
     ax : matplotlib.axes.Axes
     """
+    # Form 2: a traced metric passed as the single argument.
+    if hasattr(y_true, "trace_gamma") and hasattr(y_true, "trace_y"):
+        if intervals is not None:
+            raise ValueError(
+                "When passing a traced metric, do not also pass 'intervals' "
+                "(the intervals are read from metric.trace_gamma)."
+            )
+        intervals = y_true.trace_gamma
+        y_true = y_true.trace_y
+
     ax = _get_ax(ax)
     y_true = np.asarray(y_true)
     n = len(y_true)
@@ -403,17 +504,21 @@ def plot_intervals(
             lowers[i] = iv[0]
             uppers[i] = iv[1]
 
-    # Plot intervals
+    # Plot intervals.  ``label`` resolves to the default string when None; an
+    # explicit empty string suppresses the legend entry.
     ikw = {"color": "steelblue", "alpha": 0.3, "label": "Prediction interval"}
+    if label is not None:
+        ikw["label"] = label
     if interval_kwargs:
         ikw.update(interval_kwargs)
     ax.fill_between(steps, lowers, uppers, **ikw)
 
-    # Plot true values
-    pkw = {"color": "black", "s": 8, "zorder": 5, "label": r"$y_{true}$"}
-    if point_kwargs:
-        pkw.update(point_kwargs)
-    ax.scatter(steps, y_true, **pkw)
+    # Plot true values (unless suppressed for an overlay call).
+    if show_points:
+        pkw = {"color": "black", "s": 8, "zorder": 5, "label": r"$y_{true}$"}
+        if point_kwargs:
+            pkw.update(point_kwargs)
+        ax.scatter(steps, y_true, **pkw)
 
     ax.set_xlabel("Step")
     ax.set_ylabel("Value")
@@ -423,13 +528,17 @@ def plot_intervals(
     return ax
 
 
-def plot_set_sizes(metric: Metric, *, ax: Axes | None = None, **kwargs: Any) -> Axes:
+def plot_set_sizes(metric: Metric | Metrics, *, ax: Axes | None = None, **kwargs: Any) -> Axes:
     """Plot running average set size (or interval width) over time.
 
     Parameters
     ----------
-    metric : Metric
-        A metric with a ``.values`` attribute (e.g. SetSize or IntervalWidth).
+    metric : Metric or Metrics
+        A sharpness metric — ``SetSize`` (classification) or ``IntervalWidth``
+        (regression) — or a :class:`Metrics` composite that contains one.  When
+        a composite is passed the first matching member is selected
+        automatically (``IntervalWidth`` preferred over ``SetSize``), so the
+        object returned by ``progressive_val`` can be passed directly.
     ax : matplotlib.axes.Axes, optional
         Axes to plot on.
     **kwargs
@@ -439,6 +548,7 @@ def plot_set_sizes(metric: Metric, *, ax: Axes | None = None, **kwargs: Any) -> 
     -------
     ax : matplotlib.axes.Axes
     """
+    metric = _resolve_metric(metric, (IntervalWidth, SetSize))
     ax = _get_ax(ax)
     values = np.array(metric.values)
     running_mean = np.cumsum(values) / np.arange(1, len(values) + 1)

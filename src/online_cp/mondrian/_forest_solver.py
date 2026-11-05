@@ -1,5 +1,17 @@
 r"""Numba-accelerated exact sweepline solver for Mondrian forest conformal prediction.
 
+Terminology note. Each *Mondrian tree* in the forest is only an unsupervised
+partitioner; it supplies the **nonconformity measure** (residual from the leaf
+mean) and carries no statistical guarantee. The **conformal p-value** is what
+provides validity: the per-tree NCMs are averaged and the test point is ranked
+against **all** of the n training points (a single full-bag comparison bag,
+denominator n + 1). The trees build the NCM, they are not comparison
+categories, so the predictor is **marginally valid** (unconditional) — not a
+"Mondrian conformal predictor" in the ALRW2 §4.6.2 sense (which would restrict
+the p-value to a taxonomy category and be leaf-conditional). This solver
+computes that full-bag p-value and the set {y : p(y) > epsilon}; it does not
+alter the partitions.
+
 This solver achieves true O(Mn log(Mn)) complexity and strict mathematical correctness.
 It guarantees no state-drift by:
 1. Finding every exact zero-crossing of D_i(y), including roots on the infinite tails.
@@ -17,11 +29,31 @@ from numpy.typing import NDArray
 
 try:
     from numba import njit
-except ImportError:
+except ImportError:  # pragma: no cover - numba is a hard dep in practice
+    import warnings as _warnings
+
     def njit(*args, **kwargs):
+        """Identity fallback when Numba is unavailable.
+
+        Warns once so the silent perf degradation (pure-Python sweepline
+        instead of the compiled one) is never mistaken for a typing bug or
+        an experimental-design issue.
+        """
+        global _WARNED
+        if not _WARNED:
+            _WARNED = True
+            _warnings.warn(
+                "numba is not installed; the exact Mondrian-forest sweepline "
+                "solver is running in pure Python. Install the 'fast' extra "
+                "(online-cp[fast]) to enable the Numba-accelerated path.",
+                stacklevel=2,
+            )
         if args and callable(args[0]):
             return args[0]
         return lambda function: function
+
+
+_WARNED = False
 
 
 __all__ = ["forest_sweepline_solver"]

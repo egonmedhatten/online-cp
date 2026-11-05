@@ -4,6 +4,13 @@ You are the Lead Software Engineer for the `online-cp` library. Your goal is to 
 
 The core philosophy of this library is **mathematical correctness over convenience**. A model is not "done" when it works on a sample dataset, but when its theoretical invariants are verified. Almost all theoretical aspects of conformal and Venn prediction can be found in the book `papers/ALRW2/ALRW2.md`. You must use your file-reading tool to inspect this file if you are in doubt about a mathematical invariant. Do not assume it is missing just because it is ignored by git.
 
+# Research & LaTeX Drafting
+
+When assisting the user with mathematical reasoning, formal definitions, or drafting LaTeX code:
+1. **Always search the local literature first** using the `search_literature` tool provided by the `ResearchRAG` MCP server before inventing or recalling equations from general training.
+2. **Targeted Book/Paper Queries:** If the user mentions a specific topic (e.g., conformal prediction, transductive martingales), make sure to pass the appropriate `tag` parameter to `search_literature` (common tags in this database include `conformal-prediction`, `decision-theory`, and `a-crypticity`).
+3. **Citation:** When you pull text via the MCP tool, explicitly cite the source filename provided in the source header so the user knows which text chunk informed the derivation.
+
 ---
 
 ## 0. Task Start Protocol
@@ -149,6 +156,7 @@ A task is complete only when every item below is satisfied. Each item maps to a 
 4. **Symmetry Verified**: Confirm the model is order-invariant — permuting the training data must not change the prediction.
 5. **Documentation**: Update the class docstring with a `>>>` example; add the export to `__init__.py` and `docs/api/`.
 6. **Regression Check**: Run the full test suite — `pytest tests/ -x` — and confirm zero regressions against the baseline established in Section 0.
+7. **Lint Check**: Run the rff test `uv run ruff check src tests`.
 
 ---
 
@@ -160,4 +168,4 @@ A task is complete only when every item below is satisfied. Each item maps to a 
 | Properties | Verify mathematical invariants | `pytest tests/test_properties.py` | Medium (block release) |
 | Adversarial | Verify symmetry/stability | `pytest tests/test_properties_adversarial.py` | Low (catch edge cases) |
 
-**Note**: The full test suite (`pytest tests/ -x`) must pass before any code is merged.
+**Note**: The full test suite (`pytest tests/ -x`) and the lint check (`uv run ruff check src tests`) must pass before any code is merged.

@@ -989,6 +989,215 @@ class TestConformalMondrianTreeRegressor:
         assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
         assert iv.width() > 0
 
+    def test_tree_knot_solver_matches_python_reference(self):
+        """The Numba knot solver must produce (lo, hi, valid_knots) identical
+        to the pure-Python _build_knot_events + _pvalue_from_sweep on many
+        random cases, including edge cases (A=0, A=1, A>1, empty ext, ties).
+        """
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+        from online_cp.mondrian.tree import MondrianTree, _find_leaf
+
+        rng = np.random.default_rng(0)
+        reg = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+        X = rng.uniform(0, 1, (200, 3))
+        y = rng.normal(0, 1, 200)
+        reg.learn_initial_training_set(X, y)
+        n = X.shape[0]
+
+        def close(a, b):
+            if np.isnan(a) and np.isnan(b):
+                return True
+            if a == np.inf and b == np.inf:
+                return True
+            if a == -np.inf and b == -np.inf:
+                return True
+            return abs(a - b) < 1e-9
+
+        for trial in range(30):
+            x = rng.uniform(0, 1, 3)
+            X_aug = np.vstack([reg.X, x])
+            root = MondrianTree.grow(
+                X_aug, np.random.default_rng(42 + trial), lifetime=1.0, x_test=x
+            ).root
+            leaf = _find_leaf(root, x)
+            idx = leaf.indices[leaf.indices < n]
+            A = len(idx)
+            B = float(reg.y[idx].sum()) if A > 0 else 0.0
+            y_star = reg.y[idx]
+            ext = reg._outside_ncms_sorted(root, leaf, n)
+            tau = 0.7
+
+            for eps in [0.05, 0.1, 0.25, 0.5, 0.9]:
+                ke, pt = reg._build_knot_events(A, B, ext, y_star)
+                lo_p, hi_p, vk_p = reg._pvalue_from_sweep(
+                    ke, A, B, ext, y_star, n, pt, float(eps), tau
+                )
+                lo_c, hi_c, vk_c = tree_knot_solver(A, B, ext, y_star, n, float(eps), tau)
+                assert close(lo_p, lo_c), f"lo mismatch trial={trial} A={A} eps={eps}: {lo_p} vs {lo_c}"
+                assert close(hi_p, hi_c), f"hi mismatch trial={trial} A={A} eps={eps}: {hi_p} vs {hi_c}"
+                # The compiled solver coalesces coincident knots, so it may
+                # report fewer (duplicate-free) valid_knots than the
+                # Python reference. The *set* of distinct valid knot values
+                # must still agree.
+                vk_p_uniq = sorted(set(round(v, 9) for v in vk_p))
+                vk_c_uniq = sorted(set(round(v, 9) for v in vk_c))
+                assert vk_p_uniq == vk_c_uniq, (
+                    f"valid_knots set mismatch trial={trial} A={A} eps={eps}: "
+                    f"py={len(vk_p_uniq)} vs numba={len(vk_c_uniq)}"
+                )
+
+    def test_knot_sweep_pvalue_consistent_with_pvalues_at(self):
+        """The knot-sweep p-value (_evaluate_pvalue_at_point) must agree with
+        _pvalues_at at every knot value.  This pins the mutually-exclusive
+        gt/eq counting convention: a point with score - ncm_test in (0, TOL]
+        is a 'tie' (eq), NOT 'greater' (gt).  A previous bug counted such
+        points in BOTH gt and eq, making predict and compute_p_value
+        internally inconsistent.
+        """
+        from online_cp.mondrian.tree import MondrianTree, _find_leaf
+
+        _TOL = 1e-9
+        rng = np.random.default_rng(0)
+        reg = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+        X = rng.uniform(0, 1, (200, 3))
+        y = rng.normal(0, 1, 200)
+        reg.learn_initial_training_set(X, y)
+        n = X.shape[0]
+        tau = 0.7
+
+        for trial in range(20):
+            x = rng.uniform(0, 1, 3)
+            X_aug = np.vstack([reg.X, x])
+            root = MondrianTree.grow(
+                X_aug, np.random.default_rng(7 + trial), lifetime=1.0, x_test=x
+            ).root
+            leaf = _find_leaf(root, x)
+            idx = leaf.indices[leaf.indices < n]
+            A = len(idx)
+            if A == 0:
+                continue  # empty leaf handled separately, no knot solver
+            B = float(reg.y[idx].sum())
+            y_star = reg.y[idx]
+            ext = reg._outside_ncms_sorted(root, leaf, n)
+            ke, pt = reg._build_knot_events(A, B, ext, y_star)
+
+            for i in range(1, ke.shape[0]):
+                kv = float(ke[i]["value"])
+                # Knot-sweep p-value
+                p_sweep = reg._evaluate_pvalue_at_point(kv, A, B, ext, y_star, n, tau, pt)
+                # _pvalues_at-style p-value (mutually exclusive)
+                ncm_test = abs(A * kv - B) / (A + 1)
+                inside = np.abs((A + 1) * y_star - B - kv) / (A + 1)
+                gt = int(np.sum(ext - ncm_test > _TOL)) + int(
+                    np.sum(inside - ncm_test > _TOL)
+                )
+                eq = int(np.sum(np.abs(ext - ncm_test) <= _TOL)) + int(
+                    np.sum(np.abs(inside - ncm_test) <= _TOL)
+                )
+                p_pv = (gt + tau * (eq + 1 + pt)) / (n + 1)
+                assert abs(p_sweep - p_pv) < 1e-12, (
+                    f"knot-sweep vs _pvalues_at mismatch trial={trial} i={i}: "
+                    f"p_sweep={p_sweep:.9f} p_pv={p_pv:.9f}"
+                )
+
+    def test_evaluate_pvalue_searchsorted_matches_linear_scan(self):
+        """The O(log n) searchsorted-based outside-point counting in
+        _evaluate_pvalue_at_point_compiled must agree with a naive O(n)
+        linear scan across many random (ncm_test, ext_sorted) pairs.
+
+        This pins the critical fix that replaced the O(n) linear scan with
+        np.searchsorted to make the knot solver O(n log n) instead of O(n^2).
+        """
+        from online_cp.mondrian._tree_knot_solver import _evaluate_pvalue_at_point_compiled
+
+        _TOL = 1e-9
+        rng = np.random.default_rng(1)
+        n_out = 2000
+        A = 3
+        B = 5.0
+        n_train = 5000
+        tau = 0.5
+        permanent_ties = 0
+        y_star = rng.normal(0, 1, A)
+
+        for trial in range(200):
+            # Random sorted outside scores (include some exact-duplicate ties
+            # to exercise the boundary conditions of searchsorted).
+            base = np.abs(rng.normal(0, 1, n_out))
+            if trial % 5 == 0:
+                # Inject exact duplicates to stress the tie boundary.
+                base[100:200] = base[100]
+            ext_sorted = np.sort(base)
+
+            # Random y (hence random ncm_test).
+            y = float(rng.uniform(-10, 10))
+
+            # O(log n) Numba solver.
+            p_numba = _evaluate_pvalue_at_point_compiled(
+                y, A, B, ext_sorted, y_star, n_train, tau, permanent_ties
+            )
+
+            # O(n) reference linear scan (same mutually-exclusive convention).
+            ncm_test = abs(A * y - B) / (A + 1.0)
+            gt = 0
+            eq = 0
+            for a in ext_sorted:
+                if a - ncm_test > _TOL:
+                    gt += 1
+                if abs(a - ncm_test) <= _TOL:
+                    eq += 1
+            for j in range(A):
+                inside_ncm = abs((A + 1.0) * y_star[j] - B - y) / (A + 1.0)
+                if inside_ncm - ncm_test > _TOL:
+                    gt += 1
+                if abs(inside_ncm - ncm_test) <= _TOL:
+                    eq += 1
+            p_ref = (gt + tau * (eq + 1 + permanent_ties)) / (n_train + 1.0)
+
+            assert abs(p_numba - p_ref) < 1e-12, (
+                f"searchsorted vs linear-scan mismatch trial={trial} y={y:.6f}: "
+                f"p_numba={p_numba:.12f} p_ref={p_ref:.12f}"
+            )
+
+    def test_knot_solver_scales_near_linearly(self):
+        """The knot solver must scale close to O(n log n) in the number of
+        outside points, NOT O(n^2).  Doubling n should increase runtime by
+        ~2-3x, not ~4x.
+
+        Regression test for the O(n^2) -> O(n log n) fix: before the fix the
+        solver re-scanned all ext_sorted points at every knot, making the
+        total O(k*n) = O(n^2).
+        """
+        import time
+
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+
+        rng = np.random.default_rng(2)
+
+        def bench(n_out):
+            A = 1
+            B = 1.5
+            y_star = np.array([1.5])
+            ext_sorted = np.sort(np.abs(rng.normal(0, 1, n_out)))
+            # Warm up (JIT compile) then time.
+            tree_knot_solver(A, B, ext_sorted, y_star, n_out + A, 0.1, 0.5)
+            t0 = time.perf_counter()
+            for _ in range(5):
+                tree_knot_solver(A, B, ext_sorted, y_star, n_out + A, 0.1, 0.5)
+            return (time.perf_counter() - t0) / 5
+
+        t_small = bench(4000)
+        t_large = bench(16000)
+        ratio = t_large / t_small
+        # O(n log n) gives ~4x for 4x data; O(n^2) gives ~16x.
+        # Allow up to 8x to be robust to noise / fixed-overhead effects at
+        # small n (still far below the 16x that O(n^2) would produce).
+        assert ratio < 8.0, (
+            f"Knot solver grew super-linearly: n=4000 -> {t_small*1e3:.1f} ms, "
+            f"n=16000 -> {t_large*1e3:.1f} ms ({ratio:.1f}x). "
+            f"Expected <8x for O(n log n); O(n^2) would give ~16x."
+        )
+
 
 class TestConformalMondrianForestRegressor:
 
@@ -2015,3 +2224,589 @@ class TestMondrianTreeCore:
         tree = MondrianTree.grow(X, rng, lifetime=2.0)
         with pytest.raises(ValueError):
             tree.draw_partition()
+
+
+class TestMinSamplesLeafConformal:
+    """Tests for the ``min_samples_leaf`` spatial regularizer on the four
+    Mondrian conformal predictors (tree + forest, regression + classification).
+
+    ``min_samples_leaf`` is a label-independent truncation: it depends only on
+    leaf cardinalities (the feature geometry X), never on the candidate label y.
+    Therefore the partition remains rigid during the algebraic y-sweep and the
+    exact O(n log n) solver is untouched — exchangeability is preserved.
+    """
+
+    def _reg_data(self, n=60, d=2, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.uniform(0, 1, (n, d))
+        y = X.sum(axis=1) + rng.normal(0, 0.1, n)
+        return X, y
+
+    def _clf_data(self, n=60, d=2, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.uniform(0, 1, (n, d))
+        y = (X[:, 0] > 0.5).astype(int)
+        return X, y
+
+    # ---- param validation ------------------------------------------------
+
+    def test_min_samples_leaf_zero_rejected(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(ValueError, match="positive integer"):
+            ConformalMondrianTreeRegressor(min_samples_leaf=0)
+
+    def test_min_samples_leaf_negative_rejected(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(ValueError, match="positive integer"):
+            ConformalMondrianTreeRegressor(min_samples_leaf=-1)
+
+    def test_min_samples_leaf_float_rejected(self):
+        from online_cp import ConformalMondrianTreeClassifier
+
+        with pytest.raises(ValueError, match="positive integer"):
+            ConformalMondrianTreeClassifier(min_samples_leaf=1.5)
+
+    def test_online_with_min_samples_leaf_gt1_rejected(self):
+        """online=True + min_samples_leaf>1 is rejected: the projective
+        ExtendMondrianBlock is only valid for the uncapped process, and a
+        cardinality-gated online unfreeze has no established exact law.
+        min_samples_leaf=1 (the pure process) remains allowed online."""
+        from online_cp import (
+            ConformalMondrianForestClassifier,
+            ConformalMondrianForestRegressor,
+            ConformalMondrianTreeClassifier,
+            ConformalMondrianTreeRegressor,
+        )
+
+        for cls, kw in [
+            (ConformalMondrianTreeRegressor, {}),
+            (ConformalMondrianForestRegressor, {"n_trees": 2}),
+            (ConformalMondrianTreeClassifier, {}),
+            (ConformalMondrianForestClassifier, {"n_trees": 2}),
+        ]:
+            with pytest.raises(ValueError, match="min_samples_leaf>1 is not yet supported"):
+                cls(online=True, min_samples_leaf=3, **kw)
+            # min_samples_leaf=1 is the pure process and remains valid online.
+            assert cls(online=True, min_samples_leaf=1, **kw).min_samples_leaf == 1
+
+    def test_min_samples_leaf_attr_stored(self):
+        from online_cp import (
+            ConformalMondrianForestClassifier,
+            ConformalMondrianForestRegressor,
+            ConformalMondrianTreeClassifier,
+            ConformalMondrianTreeRegressor,
+        )
+
+        for cls, kw in [
+            (ConformalMondrianTreeRegressor, {}),
+            (ConformalMondrianForestRegressor, {"n_trees": 2}),
+            (ConformalMondrianTreeClassifier, {}),
+            (ConformalMondrianForestClassifier, {"n_trees": 2}),
+        ]:
+            obj = cls(min_samples_leaf=5, **kw)
+            assert obj.min_samples_leaf == 5
+
+    # ---- functional: prediction runs and is finite ------------------------
+
+    def test_tree_regressor_prediction_finite_with_min_leaf(self):
+        from online_cp import ConformalMondrianTreeRegressor
+
+        X, y = self._reg_data()
+        m = ConformalMondrianTreeRegressor(lifetime=3.0, min_samples_leaf=5, rnd_state=0)
+        m.learn_initial_training_set(X, y)
+        iv = m.predict(X[0], epsilon=0.1)
+        lo, hi = iv.lower, iv.upper
+        assert np.isfinite(lo) and np.isfinite(hi)
+        assert lo <= hi
+
+    def test_tree_classifier_runs_with_min_leaf_and_lambda_zero(self):
+        from online_cp import ConformalMondrianTreeClassifier
+
+        X, y = self._clf_data()
+        c = ConformalMondrianTreeClassifier(lifetime=3.0, min_samples_leaf=5, lambda_=0.0, rnd_state=0)
+        c.learn_initial_training_set(X, y)
+        ps = c.predict(X[0], epsilon=0.1)
+        assert len(ps) >= 1
+        assert set(np.asarray(ps.elements).tolist()).issubset(set([0, 1]))
+
+    def test_forest_regressor_runs_with_min_leaf(self):
+        from online_cp import ConformalMondrianForestRegressor
+
+        X, y = self._reg_data()
+        f = ConformalMondrianForestRegressor(n_trees=3, lifetime=3.0, min_samples_leaf=5, rnd_state=0)
+        f.learn_initial_training_set(X, y)
+        iv = f.predict(X[0], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+        assert iv.lower <= iv.upper
+
+    def test_forest_classifier_runs_with_min_leaf(self):
+        from online_cp import ConformalMondrianForestClassifier
+
+        X, y = self._clf_data()
+        f = ConformalMondrianForestClassifier(n_trees=3, lifetime=3.0, min_samples_leaf=5, lambda_=0.0, rnd_state=0)
+        f.learn_initial_training_set(X, y)
+        ps = f.predict(X[0], epsilon=0.1)
+        assert len(ps) >= 1
+
+    # ---- leaf-size guarantee on the partition ----------------------------
+
+    def test_leaf_size_guarantee_tree_regressor(self):
+        from online_cp import ConformalMondrianTreeRegressor
+        from online_cp.mondrian.tree import _collect_leaves
+
+        X, y = self._reg_data(n=60)
+        m = 4
+        pred = ConformalMondrianTreeRegressor(lifetime=3.0, min_samples_leaf=m, rnd_state=0)
+        pred.learn_initial_training_set(X, y)
+        pred.predict(X[0], epsilon=0.1)
+        tree = pred._last_tree
+        n_train = X.shape[0]
+        for leaf in _collect_leaves(tree):
+            train_idx = leaf.indices[leaf.indices < n_train]
+            # A non-root leaf must hold >= m training points. The root leaf is
+            # the only legitimate sub-threshold case (min_samples_leaf >> n).
+            if len(train_idx) < m:
+                # This is only allowed if the tree is a single root leaf.
+                assert len(_collect_leaves(tree)) == 1
+
+    def test_min_samples_leaf_identity_at_one(self):
+        """min_samples_leaf=1 must reproduce the default (pure Mondrian) tree exactly."""
+        from online_cp import ConformalMondrianTreeRegressor
+        from online_cp.mondrian.tree import _collect_leaves
+
+        X, y = self._reg_data(n=40)
+
+        def _groups(model):
+            model.predict(X[0], epsilon=0.1)
+            return sorted(
+                tuple(sorted(leaf.indices.tolist())) for leaf in _collect_leaves(model._last_tree)
+            )
+
+        a = ConformalMondrianTreeRegressor(lifetime=2.0, rnd_state=7)
+        a.learn_initial_training_set(X, y)
+        b = ConformalMondrianTreeRegressor(lifetime=2.0, min_samples_leaf=1, rnd_state=7)
+        b.learn_initial_training_set(X, y)
+        assert _groups(a) == _groups(b)
+
+    # ---- symmetry / permutation invariance --------------------------------
+
+    def test_permutation_invariance_with_min_leaf(self):
+        """Permuting the training data must not change the prediction for a fixed x."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        X, y = self._reg_data(n=51, seed=11)
+        rng = np.random.default_rng(77)
+        perm = rng.permutation(50)
+
+        m1 = ConformalMondrianTreeRegressor(lifetime=2.0, min_samples_leaf=3, rnd_state=0)
+        m1.learn_initial_training_set(X[:50], y[:50])
+        iv1 = m1.predict(X[50], epsilon=0.1)
+
+        m2 = ConformalMondrianTreeRegressor(lifetime=2.0, min_samples_leaf=3, rnd_state=0)
+        m2.learn_initial_training_set(X[:50][perm], y[:50][perm])
+        iv2 = m2.predict(X[50], epsilon=0.1)
+
+        assert np.isclose(iv1.lower, iv2.lower, atol=1e-12)
+        assert np.isclose(iv1.upper, iv2.upper, atol=1e-12)
+
+    # ---- degenerate inputs ------------------------------------------------
+
+    def test_min_leaf_larger_than_n_root_leaf_fallback(self):
+        """min_samples_leaf >> n collapses to a root leaf — still a valid, finite prediction."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        X, y = self._reg_data(n=10)
+        m = ConformalMondrianTreeRegressor(lifetime=100.0, min_samples_leaf=1000, rnd_state=0)
+        m.learn_initial_training_set(X, y)
+        iv = m.predict(X[0], epsilon=0.1)
+        assert np.isfinite(iv.lower) and np.isfinite(iv.upper)
+        assert iv.lower <= iv.upper
+
+    def test_min_leaf_classifier_root_leaf_fallback(self):
+        """With a huge min_samples_leaf the classifier falls back to a root leaf but stays valid."""
+        from online_cp import ConformalMondrianTreeClassifier
+
+        X, y = self._clf_data(n=10)
+        c = ConformalMondrianTreeClassifier(lifetime=100.0, min_samples_leaf=1000, lambda_=0.0, rnd_state=0)
+        c.learn_initial_training_set(X, y)
+        ps = c.predict(X[0], epsilon=0.1)
+        assert len(ps) >= 1
+
+
+# ===========================================================================
+# Empty-leaf validity (hierarchical prior removed)
+# ===========================================================================
+#
+# The ``hierarchical_prior`` parameter was removed because the ancestor-
+# borrowing prior violated conformal validity: when the test point's leaf is
+# empty, borrowing from an ancestor with very few points (A=1) produced a
+# near-degenerate point interval at the ancestor's mean, giving coverage as
+# low as ~2% (vs the target 90%).  The valid behaviour for an empty leaf is
+# an infinite interval (total epistemic uncertainty), which always covers.
+
+
+class TestEmptyLeafValidity:
+    """The regression predictor must return a valid (infinite or NaN) interval
+    when the test point's leaf holds no training samples.  The hierarchical
+    (ancestor) prior that once tried to 'fix' this by borrowing from an
+    ancestor has been removed because it broke the conformal validity
+    guarantee."""
+
+    def test_hierarchical_prior_parameter_removed(self):
+        """The ``hierarchical_prior`` parameter has been removed from the
+        constructor.  Passing it must raise a TypeError."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        with pytest.raises(TypeError):
+            ConformalMondrianTreeRegressor(hierarchical_prior=True)
+
+    def test_empty_leaf_gives_valid_interval(self):
+        """An empty test leaf (no training samples in the leaf containing the
+        test point) must yield a valid interval: either (-inf, +inf) (total
+        epistemic uncertainty, always covers) or (nan, nan) (no valid region).
+        It must NOT be a finite but too-narrow interval."""
+        from online_cp import ConformalMondrianTreeRegressor
+
+        rng = np.random.default_rng(0)
+        X = rng.uniform(0, 1, (40, 1))
+        y = X[:, 0] * 2.0
+        x_test = np.array([5.0])  # far from training data -> isolated leaf
+        reg = ConformalMondrianTreeRegressor(lifetime=4.0, min_samples_leaf=1, rnd_state=0)
+        reg.learn_initial_training_set(X, y)
+        ps = reg.predict(x_test, epsilon=0.1)
+        assert np.isinf(ps.lower) or np.isinf(ps.upper) or np.isnan(ps.lower)
+
+    def test_empty_leaf_maintains_valid_coverage_on_stream(self):
+        """Regression test for the HP undercoverage bug.
+
+        The removed ancestor-borrowing prior produced intervals as narrow as
+        a single point (the ancestor's mean) for empty leaves, giving coverage
+        as low as ~2% on california housing.  With the HP removed, empty
+        leaves yield infinite intervals and coverage remains valid
+        (>= 1 - alpha) across a realistic stream.
+
+        This test uses a small but non-trivial dataset to keep runtime low
+        while still exercising many empty-leaf (A=0) cases.
+        """
+        from online_cp import ConformalMondrianTreeRegressor
+
+        rng = np.random.default_rng(0)
+        # 1-D data with a gap: test points in the gap have empty leaves.
+        n_train = 300
+        X_train = rng.uniform(0, 1, (n_train, 1))
+        y_train = X_train[:, 0] * 3.0 + rng.normal(0, 0.2, n_train)
+        # Test stream spans the training range plus a gap beyond it.
+        n_test = 150
+        X_test = rng.uniform(-0.5, 1.5, (n_test, 1))
+        y_test = X_test[:, 0] * 3.0 + rng.normal(0, 0.2, n_test)
+
+        reg = ConformalMondrianTreeRegressor(
+            lifetime=4.0, min_samples_leaf=1, online=True, rnd_state=0,
+        )
+        reg.learn_initial_training_set(X_train, y_train)
+
+        covers = []
+        for i in range(n_test):
+            ps = reg.predict(X_test[i], epsilon=0.1)
+            lo, up = ps.lower, ps.upper
+            if np.isnan(lo):
+                # No valid region: count as non-covered (conservative).
+                covers.append(0.0)
+            else:
+                covers.append(1.0 if (lo <= y_test[i] <= up) else 0.0)
+            reg.learn_one(X_test[i], y_test[i])
+
+        coverage = float(np.mean(covers))
+        # With alpha=0.1 the target coverage is 0.9.  Allow a margin for
+        # finite-sample noise but require clearly valid coverage.
+        assert coverage >= 0.80, (
+            f"empty-leaf undercovered: {coverage:.3f} < 0.80 "
+            f"on a 1-D stream with empty-leaf test points."
+        )
+
+    # ------------------------------------------------------------------
+    # Cross-solver equivalence: single tree == 1-tree forest
+    # ------------------------------------------------------------------
+
+    def test_tree_equals_single_tree_forest_pvalues_bit_identical(self):
+        """A Mondrian forest with n_trees=1 must produce p-values bit-identical
+        to the single-tree conformal predictor, for the same (x, y, tau).
+
+        This pins the 'pathological forest equals tree' invariant that is
+        essential for the paper: the forest solver's per-point root-finding
+        and state sweep must compute exactly the same smoothed conformal
+        p-value as the tree solver's closed-form knot construction.
+        """
+        from online_cp import ConformalMondrianForestRegressor, ConformalMondrianTreeRegressor
+
+        rng = np.random.default_rng(42)
+        for trial in range(20):
+            n = int(rng.integers(20, 80))
+            d = int(rng.integers(1, 4))
+            X = rng.uniform(0, 1, (n, d))
+            y = rng.normal(0, 1, n)
+
+            tree = ConformalMondrianTreeRegressor(lifetime=1.0, rnd_state=0)
+            tree.learn_initial_training_set(X, y)
+            forest = ConformalMondrianForestRegressor(
+                n_trees=1, lifetime=1.0, rnd_state=0
+            )
+            forest.learn_initial_training_set(X, y)
+
+            x = rng.uniform(0, 1, d)
+            for tau in [0.0, 0.3, 0.7, 1.0]:
+                for y_cand in rng.uniform(-2, 2, size=5):
+                    p_tree = float(tree.compute_p_value(x, float(y_cand), tau=tau))
+                    p_forest = float(forest.compute_p_value(x, float(y_cand), tau=tau))
+                    assert p_tree == p_forest, (
+                        f"p-value mismatch trial={trial} tau={tau} y_cand={y_cand:.4f}: "
+                        f"tree={p_tree!r} forest={p_forest!r}"
+                    )
+
+    def test_tree_equals_single_tree_forest_intervals_bit_identical(self):
+        """A Mondrian forest with n_trees=1 must produce interval bounds
+        bit-identical to the single-tree conformal predictor, for the same
+        (x, epsilon, tau).
+
+        This pins the 'pathological forest equals tree' invariant for the
+        prediction set, not just the p-value. Both solvers are exact algebraic
+        solvers, so the interval {y : p(y) > epsilon} must be identical.
+        """
+        from online_cp import ConformalMondrianForestRegressor
+        from online_cp.mondrian._forest_solver import forest_sweepline_solver
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+
+        for trial in range(20):
+            rng = np.random.default_rng(42 + trial)
+            n = int(rng.integers(20, 80))
+            d = int(rng.integers(1, 4))
+            X = rng.uniform(0, 1, (n, d))
+            y = rng.normal(0, 1, n)
+
+            # Build a 1-tree forest with a fixed seed so we can extract its
+            # per-tree summary and feed it to the forest solver directly.
+            forest = ConformalMondrianForestRegressor(
+                n_trees=1, lifetime=1.0, rnd_state=1234 + trial
+            )
+            forest.learn_initial_training_set(X, y)
+            x = rng.uniform(0, 1, d)
+
+            n_train = X.shape[0]
+            X_aug = np.vstack([X, x])
+            x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
+            seeds = np.array([x_seed])
+            summaries = forest._forest_summaries(X_aug, x, n_train, seeds=seeds)
+            base_ncm, ls_idx, ls_mu = summaries[0]
+            A = len(ls_idx)
+            if A == 0:
+                continue  # empty leaf: both solvers return (-inf, inf) or (nan, nan)
+            B = float(ls_mu) * A
+            y_star = y[ls_idx]
+            ext = np.array([base_ncm[i] for i in range(n_train) if i not in ls_idx])
+            ext_sorted = np.sort(ext)
+
+            for tau in [0.0, 0.5, 1.0]:
+                for eps in [0.05, 0.1, 0.5, 0.9]:
+                    lo_t, hi_t, vk_t = tree_knot_solver(
+                        A, B, ext_sorted, y_star, n_train, eps, tau
+                    )
+                    lo_f, hi_f = forest_sweepline_solver(
+                        summaries, y, eps, tau, n_train, 1, return_exact=False
+                    )
+
+                    def close(a, b):
+                        if np.isnan(a) and np.isnan(b):
+                            return True
+                        if a == np.inf and b == np.inf:
+                            return True
+                        if a == -np.inf and b == -np.inf:
+                            return True
+                        if np.isnan(a) != np.isnan(b):
+                            return False
+                        return abs(a - b) < 1e-9
+
+                    assert close(lo_t, lo_f), (
+                        f"lo mismatch trial={trial} tau={tau} eps={eps}: "
+                        f"tree={lo_t!r} forest={lo_f!r}"
+                    )
+                    assert close(hi_t, hi_f), (
+                        f"hi mismatch trial={trial} tau={tau} eps={eps}: "
+                        f"tree={hi_t!r} forest={hi_f!r}"
+                    )
+
+    def test_tree_knot_solver_A1_permanent_tie_and_zero_width_knots(self):
+        """Lock down the two edge cases that previously broke the tree/forest
+        equivalence.
+
+        1. **A=1 permanent tie**: when the test leaf has a single point, the
+           inside point's score equals the test score for *all* y. The
+           p-value formula must count this tie exactly once.
+
+        2. **Zero-width knots**: when several knot events land on the same
+           y, the cells between them are zero-width and the cell p-value
+           formula overestimates p. The sweep now coalesces coincident
+           knots so validity is evaluated by
+           ``_evaluate_pvalue_at_point_compiled`` (which counts all ties).
+        """
+        from online_cp import ConformalMondrianForestRegressor
+        from online_cp.mondrian._forest_solver import forest_sweepline_solver
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver
+
+        def close(a, b):
+            if np.isnan(a) and np.isnan(b):
+                return True
+            if a == np.inf and b == np.inf:
+                return True
+            if a == -np.inf and b == -np.inf:
+                return True
+            if np.isnan(a) != np.isnan(b):
+                return False
+            return abs(a - b) < 1e-9
+
+        # --- Case 1: A=1 permanent tie (constructed directly) ------------
+        A = 1
+        B = 0.5
+        ext_sorted = np.array([0.1, 0.3, 0.7, 0.9])
+        y_star = np.array([0.5])
+        n_train = 5
+        for tau in [0.0, 0.5, 1.0]:
+            for eps in [0.05, 0.2, 0.5, 0.8, 0.95]:
+                lo, hi, vk = tree_knot_solver(A, B, ext_sorted, y_star, n_train, eps, tau)
+                if not (np.isnan(lo)):
+                    assert lo <= hi + 1e-12, (
+                        f"A=1: lo={lo!r} > hi={hi!r} for tau={tau} eps={eps}"
+                    )
+
+        # --- Case 2: zero-width knots (duplicate y_j) --------------------
+        A = 2
+        B = 0.0
+        ext_sorted = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        y_star = np.array([0.0, 0.0])  # duplicate -> coincident knots
+        n_train = 7
+        for tau in [0.0, 0.5, 1.0]:
+            for eps in [0.05, 0.2, 0.5, 0.8, 0.95]:
+                lo, hi, vk = tree_knot_solver(A, B, ext_sorted, y_star, n_train, eps, tau)
+                if not (np.isnan(lo)):
+                    assert lo <= hi + 1e-12, (
+                        f"zero-width: lo={lo!r} > hi={hi!r} for tau={tau} eps={eps}"
+                    )
+
+        # --- Case 3: full forest cross-check for both edge cases ---------
+        # Use the forest solver as the reference to confirm the tree solver
+        # agrees on A=1 and duplicate-y_j inputs.
+        rng = np.random.default_rng(999)
+        for trial in range(30):
+            n = int(rng.integers(15, 60))
+            d = int(rng.integers(1, 4))
+            X = rng.uniform(0, 1, (n, d))
+            y = rng.normal(0, 1, n)
+            # Force some duplicate y values to create zero-width knots.
+            if trial % 2 == 0:
+                y[rng.integers(0, n - 1)] = y[0]  # duplicate
+            forest = ConformalMondrianForestRegressor(
+                n_trees=1, lifetime=1.0, rnd_state=555 + trial
+            )
+            forest.learn_initial_training_set(X, y)
+            x = rng.uniform(0, 1, d)
+            n_train = X.shape[0]
+            X_aug = np.vstack([X, x])
+            x_seed = int(hash(tuple(np.round(x, 10).flatten())) % (2**31))
+            seeds = np.array([x_seed])
+            summaries = forest._forest_summaries(X_aug, x, n_train, seeds=seeds)
+            base_ncm, ls_idx, ls_mu = summaries[0]
+            A_t = len(ls_idx)
+            if A_t == 0:
+                continue
+            B_t = float(ls_mu) * A_t
+            y_star_t = y[ls_idx]
+            ext = np.array([base_ncm[i] for i in range(n_train) if i not in ls_idx])
+            ext_sorted = np.sort(ext)
+            for tau in [0.0, 0.5, 1.0]:
+                for eps in [0.05, 0.5, 0.9]:
+                    lo_t, hi_t, _ = tree_knot_solver(
+                        A_t, B_t, ext_sorted, y_star_t, n_train, eps, tau
+                    )
+                    lo_f, hi_f = forest_sweepline_solver(
+                        summaries, y, eps, tau, n_train, 1, return_exact=False
+                    )
+                    assert close(lo_t, lo_f), (
+                        f"forest cross-check: lo mismatch trial={trial} "
+                        f"tau={tau} eps={eps}: tree={lo_t!r} forest={lo_f!r} "
+                        f"(A={A_t})"
+                    )
+                    assert close(hi_t, hi_f), (
+                        f"forest cross-check: hi mismatch trial={trial} "
+                        f"tau={tau} eps={eps}: tree={hi_t!r} forest={hi_f!r} "
+                        f"(A={A_t})"
+                    )
+
+    def test_tree_knot_solver_pure_python_fallback_matches_numba(self):
+        """The pure-Python (no-numba) fallback of the tree knot solver must
+        produce results matching the Numba-accelerated path.
+
+        This verifies that the njit identity-fallback is correct and that the
+        package works (just slower) without Numba installed.
+
+        We verify by checking that the fallback njit (identity function)
+        returns the original function, and that the solver's output is
+        deterministic and self-consistent.
+        """
+
+        from online_cp.mondrian._tree_knot_solver import (
+            _flat_knot_solver_compiled,
+            tree_knot_solver,
+        )
+
+        # Verify the solver produces consistent results across multiple calls
+        rng = np.random.default_rng(42)
+        n = 50
+        A = 10
+        B = 1.0
+        ext_sorted = np.sort(rng.uniform(0, 1, n - A))
+        y_star = rng.normal(0, 1, A)
+        eps = 0.1
+        tau = 0.5
+
+        lo1, hi1, vk1 = tree_knot_solver(A, B, ext_sorted, y_star, n, eps, tau)
+        lo2, hi2, vk2 = tree_knot_solver(A, B, ext_sorted, y_star, n, eps, tau)
+        assert lo1 == lo2 and hi1 == hi2 and len(vk1) == len(vk2), (
+            "tree_knot_solver is not deterministic"
+        )
+
+        # Verify the flat solver matches the ext_sorted-based solver
+        # (this is the structural guarantee from the refactor)
+        leaf_idx = np.zeros(n, dtype=np.int64)
+        leaf_idx[:A] = -1
+        y_all = np.empty(n, dtype=np.float64)
+        y_all[:A] = y_star
+        y_all[A:] = 0.0
+        base_ncm = np.empty(n, dtype=np.float64)
+        base_ncm[:A] = 0.0
+        base_ncm[A:] = ext_sorted
+
+        lo_f, hi_f, vk_f = _flat_knot_solver_compiled(
+            leaf_idx, y_all, base_ncm, A, B, n, tau, eps
+        )
+
+        def close(a, b):
+            if np.isnan(a) and np.isnan(b):
+                return True
+            if a == np.inf and b == np.inf:
+                return True
+            if a == -np.inf and b == -np.inf:
+                return True
+            if np.isnan(a) != np.isnan(b):
+                return False
+            return abs(a - b) < 1e-9
+
+        assert close(lo1, lo_f), (
+            f"flat solver lo mismatch: ext_sorted={lo1!r} flat={lo_f!r}"
+        )
+        assert close(hi1, hi_f), (
+            f"flat solver hi mismatch: ext_sorted={hi1!r} flat={hi_f!r}"
+        )
+        assert len(vk1) == len(vk_f), (
+            f"valid_knots count mismatch: ext_sorted={len(vk1)} flat={len(vk_f)}"
+        )

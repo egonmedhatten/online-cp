@@ -71,6 +71,7 @@ from online_cp.mondrian.tree import (
     _build_tree_summary,
     _collect_leaves,
     _find_leaf,
+    _resolve_lifetime,
     _summarize_tree,
 )
 from online_cp.prediction_set import (
@@ -1755,7 +1756,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
     Parameters
     ----------
-    lifetime : float or {'sqrt_n', 'density'}
+    lifetime : float or {'sqrt_n', 'density', 'adaptive'}
         Depth budget L for the Mondrian tree. Splits occur at times sampled
         from Exp(sum of feature ranges). A split is created only if its
         cumulative time is below L; otherwise the node becomes a leaf.
@@ -1769,6 +1770,9 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         - ``'density'``: sweep all split events of a master tree and choose
           the τ that maximises the histogram log-likelihood
           Σ_leaf n_leaf · log(n_leaf / V_leaf). Adapts to feature density.
+        - ``'adaptive'``: the minimax-optimal rate of Mourtada et al. (2020),
+          λ* = n^{1/(d+2)}, where n is the bag size and d the feature
+          dimension. Closed-form; no master tree is grown.
 
         **Effect on prediction quality:**
         - Too small (e.g. 0.01): almost no splits → one big leaf → NCM is
@@ -1801,6 +1805,10 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
     max_depth : int or None
         Hard depth cap. Nodes at depth >= max_depth become leaves regardless
         of remaining lifetime. None = no cap.
+    min_samples_leaf : int
+        Minimum number of points allowed in each leaf (label-independent spatial
+        truncation that prevents test-point isolation into empty/pure leaves).
+        Default 1.
     feature_weights : {'variance'} or array-like of shape (d,) or None
         Unsupervised feature importance for split dimension sampling. Labels
         are never accessed.
@@ -1827,7 +1835,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
 
     _SAVE_PARAMS: tuple = (
         "lifetime", "lambda_", "label_space", "epsilon", "rnd_state",
-        "verbose", "max_depth", "feature_weights", "online",
+        "verbose", "max_depth", "min_samples_leaf", "feature_weights", "online",
     )
     _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space", "_online_tree")
 
@@ -1840,15 +1848,18 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         rnd_state: int | None = None,
         verbose: int = 0,
         max_depth: int | None = None,
+        min_samples_leaf: int = 1,
         feature_weights: str | NDArray | None = None,
         online: bool = False,
     ):
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
-        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density"):
+        if not isinstance(min_samples_leaf, int) or min_samples_leaf < 1:
+            raise ValueError("min_samples_leaf must be a positive integer")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density", "adaptive"):
             raise ValueError(
                 f"Unknown lifetime string {lifetime!r}. "
-                "Recognised values: 'sqrt_n', 'density'."
+                "Recognised values: 'sqrt_n', 'density', 'adaptive'."
             )
         if isinstance(feature_weights, str) and feature_weights not in ("variance",):
             raise ValueError(
@@ -1865,6 +1876,13 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
                 raise ValueError(
                     "online=True requires max_depth=None (the projective Mondrian regime)."
                 )
+            if min_samples_leaf > 1:
+                raise ValueError(
+                    "online=True with min_samples_leaf>1 is not yet supported: the "
+                    "projective Mondrian extension (ExtendMondrianBlock) is only "
+                    "valid for the uncapped process. Use min_samples_leaf=1 for "
+                    "online mode, or online=False (batch) for min_samples_leaf>1."
+                )
         super().__init__(epsilon=epsilon)
         self.lifetime = lifetime
         self.feature_weights = feature_weights
@@ -1873,6 +1891,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
         self.rnd_state = rnd_state
         self.verbose = verbose
         self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
         self.online = online
 
         self.X = None
@@ -2033,6 +2052,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
                 lifetime=self.lifetime,
                 x_test=x,
                 max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
                 feature_weights=self.feature_weights,
                 verbose=self.verbose,
             ).root
@@ -2171,6 +2191,7 @@ class ConformalMondrianTreeClassifier(_MondrianClassifierInspection, ConformalCl
                 lifetime=self.lifetime,
                 x_test=X_aug[n],
                 max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
                 feature_weights=self.feature_weights,
                 verbose=self.verbose,
             ).root
@@ -2277,9 +2298,10 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
     n_trees : int
         Number of Mondrian trees in the forest. Default: 10. Larger values
         reduce variance but increase computation per predict.
-    lifetime : float
+    lifetime : float or {'sqrt_n', 'density', 'adaptive'}
         Depth budget L for each tree (see `ConformalMondrianTreeClassifier`).
-        Default: 1.0.
+        Default: 1.0. String values auto-tune unsupervised; ``'adaptive'``
+        uses the minimax rate n^{1/(d+2)}.
     lambda_ : float
         Laplace smoothing parameter λ (see `ConformalMondrianTreeClassifier`).
         Default: 1.0.
@@ -2308,14 +2330,14 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
 
     _SAVE_PARAMS: tuple = (
         "n_trees", "lifetime", "lambda_", "label_space", "epsilon",
-        "rnd_state", "verbose", "n_jobs", "max_depth", "online",
+        "rnd_state", "verbose", "n_jobs", "max_depth", "min_samples_leaf", "online",
     )
     _SAVE_STATE: tuple = ("X", "y", "label_to_idx", "label_space", "_forest")
 
     def __init__(
         self,
         n_trees: int = 10,
-        lifetime: float = 1.0,
+        lifetime: float | str = 1.0,
         lambda_: float = 1.0,
         label_space: NDArray | None = None,
         epsilon: float = 0.1,
@@ -2323,10 +2345,18 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         verbose: int = 0,
         n_jobs: int = 1,
         max_depth: int | None = None,
+        min_samples_leaf: int = 1,
         online: bool = False,
     ):
         if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
             raise ValueError("max_depth must be a non-negative integer or None")
+        if not isinstance(min_samples_leaf, int) or min_samples_leaf < 1:
+            raise ValueError("min_samples_leaf must be a positive integer")
+        if isinstance(lifetime, str) and lifetime not in ("sqrt_n", "density", "adaptive"):
+            raise ValueError(
+                f"Unknown lifetime string {lifetime!r}. "
+                "Recognised values: 'sqrt_n', 'density', 'adaptive'."
+            )
         if online:
             if not isinstance(lifetime, (int, float)):
                 raise ValueError(
@@ -2337,6 +2367,13 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
                 raise ValueError(
                     "online=True requires max_depth=None (the projective Mondrian regime)."
                 )
+            if min_samples_leaf > 1:
+                raise ValueError(
+                    "online=True with min_samples_leaf>1 is not yet supported: the "
+                    "projective Mondrian extension (ExtendMondrianBlock) is only "
+                    "valid for the uncapped process. Use min_samples_leaf=1 for "
+                    "online mode, or online=False (batch) for min_samples_leaf>1."
+                )
         super().__init__(epsilon=epsilon)
         self.n_trees = n_trees
         self.lifetime = lifetime
@@ -2346,6 +2383,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         self.verbose = verbose
         self.n_jobs = n_jobs
         self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
         self.online = online
 
         self.X = None
@@ -2388,7 +2426,10 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         if self.online:
             seeds = self.rnd_gen.integers(0, 2**31, self.n_trees)
             self._forest = [
-                MondrianTree.grow(self.X, np.random.default_rng(int(s)), lifetime=self.lifetime)
+                MondrianTree.grow(
+                    self.X, np.random.default_rng(int(s)),
+                    lifetime=self.lifetime, min_samples_leaf=self.min_samples_leaf,
+                )
                 for s in seeds
             ]
 
@@ -2468,12 +2509,21 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         self._last_x = x.copy()
         self._pending_forest = None
         _rng0 = np.random.default_rng(int(seeds[0]))
-        _tree0 = MondrianTree.grow(X_aug, _rng0, lifetime=self.lifetime, max_depth=self.max_depth).root
+        # Resolve the (possibly string) lifetime to a concrete float ONCE, on the
+        # first tree's RNG (matching the historical behaviour where
+        # MondrianTree.grow resolved internally), before the parallel worker
+        # fan-out, so every worker tree shares the same spatial law.
+        lt_val = _resolve_lifetime(X_aug, np.asarray(x).ravel(), self.lifetime, _rng0, None)
+        _tree0 = MondrianTree.grow(
+            X_aug, _rng0, lifetime=lt_val,
+            max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf,
+        ).root
         _assign_counts(_tree0, self.y, self.label_to_idx, K, n_train=n)
         self._last_tree = _tree0
         return Parallel(n_jobs=self.n_jobs)(
             delayed(_build_tree_summary)(
-                int(seed), X_aug, self.y, self.label_to_idx, K, n, self.lifetime, self.max_depth
+                int(seed), X_aug, self.y, self.label_to_idx, K, n,
+                lt_val, self.max_depth, self.min_samples_leaf,
             )
             for seed in seeds
         )
@@ -2553,7 +2603,10 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
         X_aug = np.vstack([self.X, self._last_x])
         K = len(self.label_space)
         rng_i = np.random.default_rng(int(self._last_seeds[i]))
-        tree_i = MondrianTree.grow(X_aug, rng_i, lifetime=self.lifetime, max_depth=self.max_depth).root
+        tree_i = MondrianTree.grow(
+            X_aug, rng_i, lifetime=self.lifetime,
+            max_depth=self.max_depth, min_samples_leaf=self.min_samples_leaf,
+        ).root
         _assign_counts(tree_i, self.y, self.label_to_idx, K, n_train=n)
 
         view = ConformalMondrianTreeClassifier(
@@ -2562,6 +2615,7 @@ class ConformalMondrianForestClassifier(_MondrianClassifierInspection, Conformal
             label_space=self.label_space.copy(),
             epsilon=self.epsilon,
             max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
         )
         view.X = self.X
         view.y = self.y

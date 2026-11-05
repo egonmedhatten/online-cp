@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`trace` option on the `progressive_val` family** — `progressive_val`, `progressive_val_venn`, `iter_progressive_val` and `iter_progressive_val_venn` now accept `trace: bool = False`. When enabled, the returned metric additionally carries `metric.trace_y` (true labels) and `metric.trace_gamma` (the per-step prediction sets — `ConformalPredictionSet` for conformal predictors, `VennPrediction` for Venn), recorded in label-arrival order so `len(metric.trace_y) == len(metric.values)`. This is the missing piece for plotting intervals: after `progressive_val(model, X, y, epsilon=0.1, metric=ErrorRate(), trace=True)` you can visualise directly with `plot_intervals(metric)` (or pass `metric.trace_y, metric.trace_gamma` explicitly). Lazy-teacher steps (`y=None`) are excluded from the trace, and `trace=False` (the default) leaves no attributes behind, so existing callers are unaffected. For the `iter_*` variants each yielded snapshot carries `trace_y` / `trace_gamma` for the steps that resolved since the previous snapshot.
+- **Plotting helpers now accept a `Metrics` composite** — `plot_coverage`, `plot_set_sizes` and `plot_intervals` no longer require you to index out the specific member (e.g. `metrics["ErrorRate"]`). A whole `Metrics` object returned by `progressive_val` can be passed directly: `plot_coverage` selects the first `ErrorRate` member, `plot_set_sizes` the first `IntervalWidth` (preferred) or `SetSize`, and `plot_intervals(metric)` reads `metric.trace_y` / `metric.trace_gamma`. A bare `Metric` is still accepted exactly as before, and a helpful `KeyError` is raised when no matching member exists.
+- **`plot_intervals` gains `label` and `show_points`** for comparing several models on one axis. `label` (default `"Prediction interval"`) sets the legend entry for the interval band; `show_points=False` suppresses the true-value scatter so that, when overlaying multiple models with a shared `ax` and distinct `interval_kwargs={"color": ...}`, `y_true` is drawn only once. Example:
+  ```python
+  ax = plot_intervals(metric_a, label="Model A", interval_kwargs={"color": "steelblue"})
+  plot_intervals(metric_b, label="Model B", ax=ax, show_points=False,
+                 interval_kwargs={"color": "orange"})
+  ```
+
+- **`VariationalLegendreJumper` rewritten to the rigorous two-phase mean-field law** (Section 5.1). Each degree undergoes an independent Markov transition, the consensus `$\bar\epsilon$` is solved to a fixed point via Gauss-Seidel from the mean-field variational factors (Jensen-coupled normalizer), and the bet is the `Z`-normalised product evaluated at that consensus — a pointwise-valid plug-in density. For `|K| <= 2` the Gaunt coupling vanishes and the algorithm reduces exactly to the product of independent SLJs; for `|K| >= 3` the coupling engages and the VLJ diverges from the old heuristic, as the derivation requires. Per-step cost: `O(|K| * g * 2^{|K|})`.
+- **`IndependentTransitionProductLegendreJumper` (ITPLJ)** — the exact generative baseline for the VLJ. It keeps the full joint grid `g^{|K|}` and applies an independent per-degree transition (a product of marginals) instead of the PLJ's global Markov transition, then bets with the exact joint betting function `prod_k (1 + eps_k P_k(p)) / Z(eps)`. Every state's bet integrates to 1 under the null, so the ITPLJ is a strictly pointwise-valid martingale; its only limitation is the `O(g^{|K|})` state space (the jumping tax), which is why the VLJ approximates it with a mean-field factorization. The ITPLJ and the PLJ are distinct algorithms for any `J < 1` and `|K| >= 2` (they coincide only at `J = 1`).
+
 ### Improved
   - **Conformal Lasso: `predict` cost is now O(n + m) instead of O(n * m)**
     (speed target T2). The previous `_find_intervals_in_piece` materialised an
@@ -99,6 +112,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tests/test_mondrian.py::TestMondrianPrunedBase` (alignment invariant for
     reservoir/window, bit-identity vs. unpruned, marginal coverage, label-aware
     classifier alignment, save/load round-trip).
+
+### Fixed
+  - **`ConformalNearestNeighboursRegressor.predict` mis-detected reverse
+    neighbours during the warm-up phase (bag size n < k).** The reverse-
+    neighbour test `d(x_i, x_n) <= kth_nearest_dist(x_i)` is only valid when the
+    bag holds at least k *other* points. When n < k there are fewer than k other
+    points, so the test point is among the k nearest neighbours of *every*
+    training point and the slope is b_i = -1/k for all i; the old code
+    under-detected this and produced an incorrect one-sided lower bound
+    (e.g. -2.49 vs the correct -2.06). The check is now written explicitly for
+    the n < k regime and is fully vectorised (O(n), no Python loop), so it is
+    also faster in the normal regime. Two-sided intervals were unaffected
+    (degenerate), but the one-sided bounds and the general affine-score identity
+    are now correct for all n. Regression guard:
+    `TestWarmUpReverseNeighbourDetection` (n in 1..4, both/upper/lower bounds,
+    multiple eps).
+  - **`VariationalLegendreJumper` exposed betting density was stale (one step
+    behind the belief), breaking protection-function / e-value consistency.**
+    The VLJ is a two-phase plug-in martingale: `update()` places the bet using
+    the consensus $\bar\epsilon$ derived from the *prior* (correct —
+    $\mathcal{F}_{n-1}$-measurable, so the bet integrates to 1 and $S_n$ is a
+    valid test martingale), but it cached `self._eps_bar` as that *prior*
+    consensus while overwriting the belief with the *posterior*. At the next
+    step the actual bet is recomputed from a fresh prior (built from that
+    posterior), so the cached `self._eps_bar` — and therefore the exposed
+    density `b_n` and protection function `B_n` — lagged the belief by one
+    step and promised a bet (up to ~7% off) different from the one actually
+    placed. Any downstream use of the exposed density (protection function,
+    conformal e-values, evaluating the bet at a hypothetical p-value) was
+    therefore inconsistent with the martingale trajectory. Fix: a new
+    "Phase E" at the end of `update()` re-derives the *next* step's consensus
+    (posterior → independent transition → Gauss-Seidel, reusing the exact
+    Phase-A/Phase-B machinery) and stores it in `self._eps_bar`, so the
+    exposed `b_n`/`B_n` always match the bet the next `update()` will place.
+    The wealth trajectory $S_n$ was unaffected (it was always a valid
+    martingale); only the exposed density is corrected. Regression guard
+    `TestExposedBettingDensityConsistency` pins the invariant
+    $S_{n+1}/S_n = b_n(p_{n+1})$ at $10^{-9}$ for the VLJ ($|K| \le 3$) and all
+    other Legendre jumpers.
+  - **Mondrian tree knot solver: p-value double-count and zero-width-cell
+    overestimate (both broke the exact `{y : p(y) > ε}` set).** Two genuine
+    bugs, surfaced by the new `1-tree forest == tree` equivalence pin, are now
+    fixed in `_tree_knot_solver.py`:
+    1. **`A == 1` permanent-tie double-count.** When the test leaf holds a
+       single point, that point's V-shape score is *identical* to the test
+       score for every `y` (it is permanently tied). The knot p-value
+       (`_evaluate_pvalue_at_point_compiled`) counted this tie **twice** — once
+       in `eq` (the inside-point loop always detects it) and again via the
+       `+ permanent_ties` term — pushing the p-value **above 1** for `τ ≥ 1`,
+       which is impossible. The `permanent_ties` term is now removed from the
+       *knot* formula only; the sweep's *cell* formula keeps it, because its
+       running `greater_count` never includes tied points, so
+       `τ·(1 + permanent_ties)` there is the correct count of the self
+       comparison plus the permanent inside tie.
+    2. **Zero-width cell overestimate.** When several knot events land on the
+       same `y` (duplicate `y_j`, or an inside knot coinciding with an
+       outside-score knot), the cells between them are empty. The cell p-value
+       formula `(greater_count + τ·(1+perm))/(n+1)` is only valid for
+       non-degenerate open intervals; at a zero-width cell it overestimates `p`
+       (the count reflects the state *after* the previous knot, not a point in
+       the empty interval), so the sweep could mark a degenerate cell valid and
+       return a singleton/interval that `{y : p(y) > ε}` does not contain. The
+       sweep now **skips** degenerate cells; the shared knot's validity is still
+       evaluated by `_evaluate_pvalue_at_point_compiled`, which counts all ties
+       correctly.
+    Both fixes are pinned by `test_tree_knot_solver_A1_permanent_tie_and_zero_width_knots`
+    and by the `1-tree forest == tree` bit-identity pin
+    (`test_tree_equals_single_tree_forest_intervals_bit_identical`), which now
+    holds on **2268/2268** random tree/lifetime/ε/τ cases (previously 9
+    mismatched).
+  - **Recurring Numba segfault under repeated test runs.** `@njit(cache=True)`
+    invalidates cache entries by comparing the source `(mtime, size)` stamp,
+    which has *second* granularity. Rapid successive edits within the same
+    wall-clock second can leave a *stale* `.nbc` that Numba believes is fresh;
+    loading it (rather than recompiling) segfaults mid-test on this platform.
+    A session-scoped, autouse fixture in `tests/conftest.py`
+    (`_fresh_numba_cache`) now clears the package's `.nbc`/`.nbi` files before
+    the first test, so every run recompiles from current source with no manual
+    `__pycache__` purge required. Verified across back-to-back runs, including
+    a run with a stale cache left by the previous run.
+
+### Improved
+  - **`ConformalNearestNeighboursRegressor.learn_one` is now incremental
+    (semi-neighbour update) instead of a full O(n^2 log n) rebuild.** Adding a
+    new point changes the leave-one-out prediction of an existing point only if
+    the new point enters that point's k-nearest set (the "semi-neighbour"
+    condition, ALRW2 Sec. 2.4 / Sec. 7.5). The set of semi-neighbours is
+    detected exactly in a single vectorised O(n^2) comparison over the distance
+    matrix (no reliance on potentially stale cached values), and only those
+    points plus the new point have their conformal caches
+    (leave-one-out residuals `_a_const`, per-point k-th distances
+    `_kth_distances`) recomputed. The result is bit-identical to rebuilding
+    from scratch (hence invariant to insertion order). Measured per-step speedup
+    over the previous full-rebuild: ~25x at n=500 (0.5 ms vs 12.3 ms), ~15x at
+    n=1000-2000, and ~17x at n=4000 (76 ms vs 1344 ms). The conformal
+    caches are now also maintained incrementally under `learn_one`.
+  - **Mondrian tree `predict` now uses a flat per-point kernel
+    (`tree_knot_solver_flat`).** `ConformalMondrianTreeRegressor.predict` builds
+    the knot-solver inputs (per-point `leaf_idx`, `y`, `base_ncm`) in a single
+    tree traversal via `_summarize_tree_flat` and calls the Numba
+    `_flat_knot_solver_compiled` kernel, which sorts the outside-leaf scores
+    in-kernel instead of Python. The algebra is bit-identical to the
+    `ext_sorted`-based `tree_knot_solver` (the knot build + sweep are shared),
+    so coverage is unchanged; the kernel avoids the Python-side sort and the
+    `ext` materialisation, making the single-tree path no slower than the
+    1-tree forest. Pinned by
+    `test_tree_knot_solver_pure_python_fallback_matches_numba` and the
+    flat-vs-`ext_sorted` identity check.
+  - **Numba-absent fallback now warns once.** When `numba` is unavailable the
+    `njit` identity fallback emits a one-time `UserWarning` so the silent
+    pure-Python O(k log k) degradation is never mistaken for a correctness
+    issue.
+  - **Mondrian docstrings now state the tree-vs-conformal distinction and the
+    kind of validity.** The tree is only an unsupervised partitioner (a bag
+    function of the feature values); it supplies the nonconformity measure and
+    carries no statistical guarantee. The conformal p-value is what provides
+    validity, and it ranks the test point against the **whole** augmented bag
+    (denominator n+1) — the leaf is used only to build the NCM, not as a
+    comparison category. So both the single tree and the forest are
+    **marginally valid** (unconditional), *not* "Mondrian conformal predictors"
+    in the ALRW2 §4.6.2 sense (which restrict the p-value to a taxonomy
+    category and are leaf-conditional). This is now spelled out in the
+    `ConformalMondrianTreeRegressor` / `ConformalMondrianForestRegressor`
+    docstrings and at the top of `_tree_knot_solver.py` and
+    `_forest_solver.py`.
 
 ---
 

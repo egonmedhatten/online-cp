@@ -205,6 +205,31 @@ for snapshot in iter_progressive_val(model, stream, epsilon=0.1, step=50):
 progressive_val(model, X, y, learn=lambda i, x, y: i % 2 == 0)
 ```
 
+To keep the raw per-step data for plotting (not just the aggregated metric),
+pass `trace=True`. The returned metric then carries `trace_y` (true labels)
+and `trace_gamma` (the prediction sets) in arrival order:
+
+```python
+from online_cp import plot_intervals
+
+metric = ErrorRate() + IntervalWidth()
+progressive_val(model, X_test, y_test, epsilon=0.1, metric=metric, trace=True)
+plot_intervals(metric)   # or plot_intervals(metric.trace_y, metric.trace_gamma)
+```
+
+Compare several models on one axis with distinct labels/colours, drawing
+`y_true` only once via `show_points=False`:
+
+```python
+ax = plot_intervals(metric_a, label="Model A", interval_kwargs={"color": "steelblue"})
+plot_intervals(metric_b, label="Model B", ax=ax, show_points=False,
+               interval_kwargs={"color": "orange"})
+```
+
+The plotting helpers also accept a whole `Metrics` object directly —
+`plot_coverage(metric)` and `plot_set_sizes(metric)` pick the right member out,
+so you no longer need to index `metric["ErrorRate"]`.
+
 #### Weak & Lazy Teachers (delayed and sparse feedback)
 
 To model real-world label latency, pass a `delay` (in steps) to any

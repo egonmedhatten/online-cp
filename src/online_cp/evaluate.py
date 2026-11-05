@@ -188,6 +188,7 @@ def progressive_val(
     delay: int | Callable[[int, Any, Any], int] = 0,
     print_every: int = 0,
     progress: bool = False,
+    trace: bool = False,
 ) -> Metric | Metrics:
     """Run the progressive validation (test-then-train) protocol.
 
@@ -255,11 +256,29 @@ def progressive_val(
         labels that have arrived so far.  0 = no printing.
     progress : bool, optional
         Show a tqdm progress bar (requires ``pip install online-cp[progress]``).
+    trace : bool, optional
+        If True, also record the raw per-step data on the returned metric for
+        later inspection/plotting.  Two attributes are set (in label-arrival
+        order, i.e. the same order the metric is updated in):
+
+        - ``metric.trace_y`` — list of true labels (one per evaluated step,
+          so ``len(metric.trace_y) == len(metric.values)``).
+        - ``metric.trace_gamma`` — list of the prediction sets
+          (``ConformalPredictionSet`` objects: intervals for regressors,
+          label sets for classifiers).
+
+        Lazy-teacher steps (``y=None``) are excluded from the trace, matching
+        their exclusion from the metric.  When ``trace=False`` (the default)
+        nothing is recorded and no ``trace_*`` attributes are created.  Use
+        ``plot_intervals(metric)`` to visualise a traced run, or
+        ``plot_intervals(metric.trace_y, metric.trace_gamma)`` to pass the
+        arrays explicitly.
 
     Returns
     -------
     metric : Metric or Metrics
-        The same metric object, updated in place and fully resolved.
+        The same metric object, updated in place and fully resolved.  With
+        ``trace=True`` it additionally carries ``trace_y`` / ``trace_gamma``.
     """
     if metric is None:
         from online_cp.metrics import ErrorRate
@@ -274,9 +293,18 @@ def progressive_val(
     if epsilon is not None:
         predict_kw["epsilon"] = epsilon
 
+    # Optional raw-data trace (only populated when ``trace`` is True).  Records
+    # the true label and prediction set for every evaluated step, in the same
+    # arrival order the metric is updated in.
+    trace_y: list = []
+    trace_gamma: list = []
+
     def _apply_update_cp(metric, y, payload):
         Gamma, kw = payload
         metric.update(y=y, Gamma=Gamma, **kw)
+        if trace:
+            trace_y.append(y)
+            trace_gamma.append(Gamma)
 
     heap: list = []
     total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
@@ -300,6 +328,10 @@ def progressive_val(
     # Teardown: flush all labels still in-flight after the stream is exhausted.
     _drain(heap, float("inf"), metric, model, learn, _apply_update_cp)
 
+    if trace:
+        metric.trace_y = trace_y
+        metric.trace_gamma = trace_gamma
+
     return metric
 
 
@@ -314,6 +346,7 @@ def iter_progressive_val(
     delay: int | Callable[[int, Any, Any], int] = 0,
     step: int = 1,
     progress: bool = False,
+    trace: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """Iterate the progressive validation protocol, yielding checkpoints.
 
@@ -352,12 +385,19 @@ def iter_progressive_val(
         Yield every ``step`` samples.
     progress : bool, optional
         Show a tqdm progress bar.
+    trace : bool, optional
+        If True, each yielded snapshot additionally carries the raw data that
+        arrived since the previous snapshot, in arrival order: ``"trace_y"``
+        (list of true labels) and ``"trace_gamma"`` (list of prediction sets).
+        Handy for plotting intervals incrementally without re-running.
 
     Yields
     ------
     dict
         Contains ``"step"`` (int, 1-indexed prediction count), ``"t"``
-        (timestamp or index), and metric values.
+        (timestamp or index), and metric values.  With ``trace=True`` it also
+        contains ``"trace_y"`` and ``"trace_gamma"`` for the steps that
+        resolved since the previous snapshot.
     """
     if metric is None:
         from online_cp.metrics import ErrorRate
@@ -372,9 +412,16 @@ def iter_progressive_val(
     if epsilon is not None:
         predict_kw["epsilon"] = epsilon
 
+    # Raw steps that have resolved but not yet been yielded (trace=True only).
+    pending_y: list = []
+    pending_gamma: list = []
+
     def _apply_update_cp(metric, y, payload):
         Gamma, kw = payload
         metric.update(y=y, Gamma=Gamma, **kw)
+        if trace:
+            pending_y.append(y)
+            pending_gamma.append(Gamma)
 
     heap: list = []
     last_i = -1
@@ -402,6 +449,11 @@ def iter_progressive_val(
                 snapshot.update(metric.get())
             else:
                 snapshot = {"step": i + 1, "t": t_i, metric.name: metric.get()}
+            if trace:
+                snapshot["trace_y"] = list(pending_y)
+                snapshot["trace_gamma"] = list(pending_gamma)
+                pending_y.clear()
+                pending_gamma.clear()
             yield snapshot
 
     # Teardown: flush in-flight labels and emit a final snapshot if needed.
@@ -412,6 +464,11 @@ def iter_progressive_val(
             snapshot.update(metric.get())
         else:
             snapshot = {"step": last_i + 1, "t": last_t, metric.name: metric.get()}
+        if trace:
+            snapshot["trace_y"] = list(pending_y)
+            snapshot["trace_gamma"] = list(pending_gamma)
+            pending_y.clear()
+            pending_gamma.clear()
         yield snapshot
 
 
@@ -430,6 +487,7 @@ def progressive_val_venn(
     delay: int | Callable[[int, Any, Any], int] = 0,
     print_every: int = 0,
     progress: bool = False,
+    trace: bool = False,
 ) -> Metric | Metrics:
     """Run progressive validation for Venn predictors.
 
@@ -464,17 +522,30 @@ def progressive_val_venn(
         Print metric summary every N steps. 0 = no printing.
     progress : bool, optional
         Show a tqdm progress bar.
+    trace : bool, optional
+        If True, also record the raw per-step data on the returned metric for
+        later inspection.  ``metric.trace_y`` (true labels) and
+        ``metric.trace_gamma`` (``VennPrediction`` objects) are set in
+        label-arrival order; lazy-teacher steps are excluded.  See
+        :func:`progressive_val` for the full description.
 
     Returns
     -------
     metric : Metric or Metrics
-        The same metric object, updated in place and fully resolved.
+        The same metric object, updated in place and fully resolved.  With
+        ``trace=True`` it additionally carries ``trace_y`` / ``trace_gamma``.
     """
     if metric is None:
         metric = BrierScore()
 
+    trace_y: list = []
+    trace_gamma: list = []
+
     def _apply_update_venn(metric, y, payload):
         metric.update(y=y, Gamma=None, venn=payload)
+        if trace:
+            trace_y.append(y)
+            trace_gamma.append(payload)
 
     heap: list = []
     total = len(y) if y is not None and hasattr(y, "__len__") else (len(X) if hasattr(X, "__len__") else None)
@@ -498,6 +569,10 @@ def progressive_val_venn(
     # Teardown: flush all labels still in-flight after the stream is exhausted.
     _drain(heap, float("inf"), metric, model, learn, _apply_update_venn)
 
+    if trace:
+        metric.trace_y = trace_y
+        metric.trace_gamma = trace_gamma
+
     return metric
 
 
@@ -511,6 +586,7 @@ def iter_progressive_val_venn(
     delay: int | Callable[[int, Any, Any], int] = 0,
     step: int = 1,
     progress: bool = False,
+    trace: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """Iterate progressive validation for Venn predictors, yielding checkpoints.
 
@@ -542,17 +618,28 @@ def iter_progressive_val_venn(
         Yield every ``step`` samples.
     progress : bool, optional
         Show a tqdm progress bar.
+    trace : bool, optional
+        If True, each yielded snapshot additionally carries ``"trace_y"`` (true
+        labels) and ``"trace_gamma"`` (``VennPrediction`` objects) for the
+        steps that resolved since the previous snapshot.
 
     Yields
     ------
     dict
-        Contains ``"step"``, ``"t"``, and metric values.
+        Contains ``"step"``, ``"t"``, and metric values.  With ``trace=True``
+        it also contains ``"trace_y"`` and ``"trace_gamma"``.
     """
     if metric is None:
         metric = BrierScore()
 
+    pending_y: list = []
+    pending_gamma: list = []
+
     def _apply_update_venn(metric, y, payload):
         metric.update(y=y, Gamma=None, venn=payload)
+        if trace:
+            pending_y.append(y)
+            pending_gamma.append(payload)
 
     heap: list = []
     last_i = -1
@@ -580,6 +667,11 @@ def iter_progressive_val_venn(
                 snapshot.update(metric.get())
             else:
                 snapshot = {"step": i + 1, "t": t_i, metric.name: metric.get()}
+            if trace:
+                snapshot["trace_y"] = list(pending_y)
+                snapshot["trace_gamma"] = list(pending_gamma)
+                pending_y.clear()
+                pending_gamma.clear()
             yield snapshot
 
     # Teardown: flush in-flight labels and emit a final snapshot if needed.
@@ -590,4 +682,9 @@ def iter_progressive_val_venn(
             snapshot.update(metric.get())
         else:
             snapshot = {"step": last_i + 1, "t": last_t, metric.name: metric.get()}
+        if trace:
+            snapshot["trace_y"] = list(pending_y)
+            snapshot["trace_gamma"] = list(pending_gamma)
+            pending_y.clear()
+            pending_gamma.clear()
         yield snapshot

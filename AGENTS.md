@@ -156,6 +156,7 @@ A task is complete only when every item below is satisfied. Each item maps to a 
 4. **Symmetry Verified**: Confirm the model is order-invariant — permuting the training data must not change the prediction.
 5. **Documentation**: Update the class docstring with a `>>>` example; add the export to `__init__.py` and `docs/api/`.
 6. **Regression Check**: Run the full test suite — `pytest tests/ -x` — and confirm zero regressions against the baseline established in Section 0.
+7. **Lint Check**: Run the rff test `uv run ruff check src tests`.
 
 ---
 
@@ -167,4 +168,4 @@ A task is complete only when every item below is satisfied. Each item maps to a 
 | Properties | Verify mathematical invariants | `pytest tests/test_properties.py` | Medium (block release) |
 | Adversarial | Verify symmetry/stability | `pytest tests/test_properties_adversarial.py` | Low (catch edge cases) |
 
-**Note**: The full test suite (`pytest tests/ -x`) must pass before any code is merged.
+**Note**: The full test suite (`pytest tests/ -x`) and the lint check (`uv run ruff check src tests`) must pass before any code is merged.

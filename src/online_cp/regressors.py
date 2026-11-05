@@ -1040,12 +1040,23 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
     nonconformity measure |y - ŷ_kNN| where ŷ_kNN is the leave-one-out
     k-nearest neighbours prediction.
 
-    This implementation uses an optimized exact algorithm with:
-    - Cached k-th nearest neighbor distances for efficient reverse-neighbour detection
-    - O(n) prediction time (instead of O(n²) in the naive implementation)
+    This implementation uses an optimized exact algorithm (ALRW2 Sec. 7.5) with:
+    - Cached k-th nearest neighbour distances for efficient reverse-neighbour
+      detection in ``predict`` (``O(n)``).
+    - Incremental ``learn_one`` that detects semi-neighbours against the cached
+      k-th distances in ``O(n)`` and refreshes only the (few) points whose
+      k-nearest set changed.  The full ``n x n`` distance matrix is *not*
+      maintained in the non-pruned regime, so the steady-state per-step cost is
+      ``O(n d + n)`` rather than ``O(n^2)``.
+    - ``predict`` cost is ``O(n d + n log n)``: the ``O(n d)`` distance row plus
+      the ``O(n log n)`` sort of the ``n`` candidate (affine) values -- the same
+      dominant term as conformalised ridge regression (ALRW2 Sec. 2.5).
 
-    For very large datasets, consider using a k-d tree for O(n log n) complexity
-    (not yet implemented, but the exact path is highly optimized).
+    The one-off ``learn_initial_training_set`` cost is ``O(n^2 d)`` (building the
+    pairwise distances once); the streaming ``learn_one`` path is the
+    sub-quadratic one.  With stream-pruning active (``pruning='reservoir'`` or
+    ``'window'`` with ``budget=B``) the full matrix *is* maintained (``O(B^2)``
+    memory) and the per-step cost is bounded by ``O(B d + B)``.
 
     >>> import numpy as np
     >>> np.random.seed(42)
@@ -1135,7 +1146,15 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self.distance = "custom"
         self.X = None
         self.y = None
-        self.D = None
+        # The full (n x n) distance matrix is *optional* internal state.  It is
+        # maintained only when stream-pruning is active (the pruning eviction
+        # path needs the full matrix); otherwise ``learn_one`` detects
+        # semi-neighbours against the cached per-point k-th distances in O(n)
+        # (ALRW2 Sec. 7.5) and never pays for the O(n^2) matrix.  ``self.D`` is
+        # a property that reads ``self._D_cache`` and materialises it on demand
+        # when a full row is genuinely needed (reverse-neighbour a_i in
+        # predict / compute_p_value).
+        self._D_cache = None
         self.verbose = verbose
         self.rnd_state = rnd_state
         self._distance_func_arg = distance_func
@@ -1179,6 +1198,60 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         D_new[n, :n] = d
         D_new[n, n] = 0.0
         return D_new
+
+    def _row_distances(self, i: int) -> NDArray[np.floating[Any]]:
+        """Distances from training point ``i`` to every point in the bag.
+
+        Returns a length-``n`` array where entry ``j`` is ``d(x_i, x_j)`` and
+        entry ``i`` is ``0.0``.  Reads from the cached matrix when it is being
+        maintained (pruning active); otherwise computes the single row on
+        demand -- ``O(n d)`` with no ``O(n^2)`` matrix materialised.
+
+        The on-demand path calls ``distance_func(self.X, self.X[i:i+1])`` -- the
+        *same* argument order the rest of this class uses (``(matrix,
+        single_point)``) -- rather than the transposed ``(single_point, matrix)``
+        order.  The order matters for custom distance functions: e.g.
+        :func:`online_cp.kernels.kernel_induced_distance` is not symmetric in
+        its argument roles (it expects ``y`` to be a single point, so the
+        transposed call would fail).  The result is ``n`` distances (distances
+        are symmetric), which is exactly row ``i`` of the full matrix.
+        """
+        if self._D_cache is not None:
+            return self._D_cache[i]
+        n = self.X.shape[0]
+        if n == 1:
+            return np.zeros(1)
+        return self.distance_func(self.X, self.X[i : i + 1]).ravel()
+
+    def _ensure_D(self) -> None:
+        """Materialise the full distance matrix from ``X`` if it is absent.
+
+        No-op when the matrix is already maintained.  Used by the lazy paths in
+        :meth:`predict` / :meth:`compute_p_value` that need a full row in the
+        non-pruned regime.
+        """
+        if self._D_cache is None and self.X is not None and self.X.shape[0] > 0:
+            self._D_cache = self.distance_func(self.X)
+
+    @property
+    def D(self) -> NDArray[np.floating[Any]] | None:
+        """Full ``(n, n)`` distance matrix, materialised on demand.
+
+        In the non-pruned regime the matrix is not kept in memory (see the
+        ``_D_cache`` note in ``__init__``); accessing ``self.D`` materialises it
+        from ``X`` once and caches the result, so a plain streaming
+        ``learn_one`` loop that never reads ``self.D`` still runs at the
+        ``O(n)`` per-step bound (ALRW2 Sec. 7.5) rather than paying for the
+        ``O(n^2)`` matrix.  Tests and downstream code that need the full matrix
+        (e.g. the ``return_update`` contract, save/load) get it here.
+        """
+        if self._D_cache is None and self.X is not None and self.X.shape[0] > 0:
+            self._D_cache = self.distance_func(self.X)
+        return self._D_cache
+
+    @D.setter
+    def D(self, value) -> None:
+        self._D_cache = value
 
     def _knn_predictions(self, D, y):
         """
@@ -1234,7 +1307,11 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         """
         self.X = np.atleast_2d(X)
         self.y = np.asarray(y, dtype=float)
-        self.D = self.distance_func(self.X)
+        # The full distance matrix is only maintained when stream-pruning is
+        # active (its eviction path needs the whole matrix).  Otherwise it is
+        # left as None and rebuilt lazily -- see :meth:`_ensure_D` /
+        # :meth:`_row_distances` (ALRW2 Sec. 7.5).
+        self._D_cache = self.distance_func(self.X) if self._reservoir is not None else None
         # Reservoir pruning: seed the reservoir from a uniform random subset of
         # the initial bag (valid when the bag is a sample of the stream). When
         # n <= budget, keep everything (exact, no pruning occurs yet).
@@ -1248,7 +1325,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                     keep = np.arange(n - self.budget, n)
                 self.X = self.X[keep]
                 self.y = self.y[keep]
-                self.D = _evict_masked_distance(self.D, keep)
+                self._D_cache = _evict_masked_distance(self._D_cache, keep)
         # Cache constant parts of affine scores: a_i = y_i - ŷ_i (with y_n=0)
         self._update_residuals()
         # Cache k-th nearest distances for efficient reverse-neighbour detection
@@ -1261,15 +1338,18 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         leave-one-out k-NN prediction. This is the constant part of the affine
         score α_i(y) = a_i + b_i*y.
         """
-        if self.X is None or self.y is None or self.D is None:
+        if self.X is None or self.y is None:
             return
 
         n = self.X.shape[0]
         if n == 0:
             return
 
-        # Compute leave-one-out k-NN predictions on the original training set
-        y_hat_train = self._knn_predictions(self.D, self.y)
+        # Compute leave-one-out k-NN predictions on the original training set.
+        # When the full matrix is not maintained (non-pruned regime) we build it
+        # temporarily; this is the accepted O(n^2) cold-start cost.
+        D = self._D_cache if self._D_cache is not None else self.distance_func(self.X)
+        y_hat_train = self._knn_predictions(D, self.y)
 
         # Cache constant parts of affine scores (signed residuals, not absolute)
         self._a_const = self.y - y_hat_train
@@ -1281,7 +1361,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         training points (excluding self). This is used for efficient reverse-neighbour
         detection during prediction.
         """
-        if self.X is None or self.y is None or self.D is None:
+        if self.X is None or self.y is None:
             return
 
         n = self.X.shape[0]
@@ -1293,10 +1373,11 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             self._kth_distances = np.zeros(n)
             return
 
-        # For each training point, get k-th nearest distance (excluding self)
+        # For each training point, get k-th nearest distance (excluding self).
+        D = self._D_cache if self._D_cache is not None else self.distance_func(self.X)
         self._kth_distances = np.empty(n)
         for i in range(n):
-            d_i = self.D[i].copy()
+            d_i = D[i].copy()
             d_i[i] = np.inf
             self._kth_distances[i] = np.partition(d_i, k_actual - 1)[k_actual - 1]
 
@@ -1307,9 +1388,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         ``i`` itself), using the canonical lexsort tie-breaking (distance primary,
         label secondary) so the result is invariant to insertion order.
         """
-        n = self.D.shape[0]
+        n = self.X.shape[0]
         k_actual = min(self.k, n - 1)
-        drow = self.D[i].copy()
+        drow = self._row_distances(i).copy()
         drow[i] = np.inf
         agg_func = np.mean if self.aggregation == "mean" else np.median
         idx = np.lexsort((self.y, drow))[:k_actual]
@@ -1321,11 +1402,11 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         Returns the 0.0 sentinel when the bag has fewer than k+1 points (i.e.
         point ``i`` has no k-th neighbour yet), matching :meth:`_update_kth_distances`.
         """
-        n = self.D.shape[0]
+        n = self.X.shape[0]
         k_actual = min(self.k, n - 1)
         if k_actual == 0:
             return 0.0
-        drow = self.D[i].copy()
+        drow = self._row_distances(i).copy()
         drow[i] = np.inf
         return float(np.partition(drow, k_actual - 1)[k_actual - 1])
 
@@ -1333,17 +1414,20 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         """Incrementally add one observation.
 
         The conformal caches (leave-one-out residuals ``_a_const`` and per-point
-        k-th distances ``_kth_distances``) are maintained *incrementally*: adding
-        a new point changes the leave-one-out prediction of an existing point
-        ``i`` only if the new point enters ``i``'s k-nearest-neighbour set -- the
-        book's "semi-neighbour" condition (ALRW2 §2.4/§7.5).  The set of
-        semi-neighbours is detected *exactly* (in O(n^2) via a single vectorised
-        comparison over the distance matrix, no reliance on cached values) and
-        only those points -- plus the new point -- have their caches recomputed.
-        This avoids the O(n^2 log n) full rebuild of leave-one-out predictions
-        that the naive implementation performed at every step, while remaining
-        bit-identical to rebuilding from scratch (and hence invariant to the
-        order in which points are inserted).
+        k-th distances ``_kth_distances``) are maintained *incrementally*
+        (ALRW2 Sec. 7.5): adding a new point changes the leave-one-out
+        prediction of an existing point ``i`` only if the new point enters
+        ``i``'s k-nearest-neighbour set -- the book's "semi-neighbour"
+        condition.  The set of semi-neighbours is detected in ``O(n)`` by
+        comparing each point's distance to the new point against its cached
+        k-th nearest distance (with exact tie-resolution only on the rare
+        discrete-data tie events, and an explicit all-points rule during the
+        warm-up regime ``n < k + 1``).  Only those points -- plus the new
+        point -- have their caches recomputed.  In the non-pruned regime the
+        full ``n x n`` distance matrix is not maintained, so the steady-state
+        cost is ``O(n d + n)`` rather than the ``O(n^2)`` of a dense-matrix
+        scan.  The result is bit-identical to rebuilding from scratch (and
+        hence invariant to the order in which points are inserted).
         """
         x = np.asarray(x).ravel()
 
@@ -1359,7 +1443,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
             # First example ever: always keep (reservoir trivially holds it).
             self.X = x.reshape(1, -1)
             self.y = np.array([y], dtype=float)
-            self.D = self.distance_func(self.X)
+            # Only maintain the matrix when pruning is active (it needs the full
+            # matrix for eviction); otherwise leave it None and let the O(n)
+            # semi-neighbour path in `learn_one` handle updates (ALRW2 Sec. 7.5).
+            self._D_cache = np.zeros((1, 1)) if self._reservoir is not None else None
             # Cache residuals for efficient conformal prediction
             self._update_residuals()
             self._update_kth_distances()
@@ -1370,33 +1457,71 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         if eviction is None:
             return
 
-        # Distances from the new point to the current bag (needed to detect
-        # semi-neighbours and to extend D). If the caller already computed the
-        # augmented matrix (via predict(return_update=True)), reuse it -- its
-        # last column is exactly the distance row d.
+        # Distances from the new point to the current bag (O(n d)).
         if precomputed is not None and "D" in precomputed:
-            D_new = precomputed["D"]
-            d = D_new[:-1, -1]
+            D_pre = precomputed["D"]
+            d = D_pre[:-1, -1].copy()  # copy: do not mutate the caller's matrix
         else:
             d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
-            D_new = self._update_distance_matrix(self.D, d)
+            D_pre = None
 
-        # Detect the semi-neighbours *before* the new point is appended, using the
-        # old (n, n) distance matrix.  Point i's k-nearest-neighbour set changes
-        # iff the new point is among the k closest to i in the new bag, i.e. iff
+        # The augmented matrix is carried through only when it is already
+        # available (precomputed, pruning-active, or tie-resolution below);
+        # otherwise the non-pruned streaming path never materialises the O(n^2)
+        # matrix (ALRW2 Sec. 7.5).
+        D_aug = D_pre if D_pre is not None else (
+            self._update_distance_matrix(self._D_cache, d) if self._D_cache is not None else None
+        )
+
+        # Detect the semi-neighbours *before* the new point is appended.  Point i
+        # is a semi-neighbour iff the new point enters i's k-nearest set, i.e. iff
         # strictly fewer than k *old* points are closer to i than the new point.
-        # ``rank_below[i]`` counts old points j with D[i, j] < d[i]; the
-        # comparison includes the self cell j = i (where D[i, i] = 0 < d[i] holds
-        # iff d[i] > 0), so we subtract that one spurious count.  This is exact
-        # (no reliance on cached, potentially stale k-th distances) and is a
-        # single vectorised O(n^2) comparison over D -- far cheaper than the
-        # per-row partition a full leave-one-out rebuild would need.
-        rank_below = (self.D < d[:, None]).sum(axis=1)
-        rank_below -= (d > 0.0).astype(rank_below.dtype)
-        semi = np.flatnonzero(rank_below < self.k)
+        #
+        # Warm-up regime (n < k + 1, before the append): every existing point
+        # has fewer than k other neighbours, so the new point necessarily enters
+        # each point's k-nearest set -- every point is a semi-neighbour.  The
+        # cached k-th distances in this regime are the 0.0 sentinel (no k-th
+        # neighbour yet), so the `d < kth` test below would miss them; handle the
+        # regime explicitly.
+        n = self.y.shape[0]
+        if n < self.k + 1:
+            semi = np.arange(n)
+        else:
+            # Primary path (ALRW2 Sec. 7.5, O(n)): the cached k-th nearest
+            # distance of i is the k-th smallest of the n-1 old distances.  If
+            # d[i] < kth[i] then the new point is strictly closer than at least k
+            # old points, so strictly fewer than k old points are closer to i than
+            # the new point -- i is a semi-neighbour.  If d[i] > kth[i] then at
+            # least k old points are closer (the k-nearest are all < d[i]) -- not
+            # a semi-neighbour.  Both comparisons are exact, so no tie
+            # resolution is needed in the common (continuous-data) regime and
+            # the step stays O(n).
+            kth = self._kth_distances
+            semi = np.flatnonzero(d < kth)
+
+            # Tie resolution.  Under continuous data d[i] == kth[i] has
+            # probability zero; on discrete / rounded data ties occur and the
+            # cached k-th distance alone cannot decide whether the new point is
+            # *inside* i's k-nearest set.  We resolve ties exactly with the
+            # canonical rank count (strictly fewer than k old points closer than
+            # the new point), which requires the full old rows.  We keep the
+            # exact semi-neighbour set -- refreshing a superset would recompute a
+            # non-semi-neighbour's cache and break order-invariance on the
+            # tie-rich data that the property tests probe.  The full matrix is
+            # materialised only in the tie regime (and is already present when
+            # pruning is active).
+            if np.any(d == kth):
+                self._ensure_D()
+                D_old = self._D_cache
+                D_aug = self._update_distance_matrix(D_old, d)
+                tie = np.flatnonzero(d == kth)
+                rank_below = (D_old[tie] < d[tie, None]).sum(axis=1) - (d[tie] > 0.0)
+                resolved = np.flatnonzero(rank_below < self.k)
+                semi = np.union1d(semi, tie[resolved])
 
         # Append the new example (it occupies the last position).
-        self.D = D_new
+        if D_aug is not None:
+            self._D_cache = D_aug
         self.X = np.vstack([self.X, x.reshape(1, -1)])
         self.y = np.append(self.y, y)
 
@@ -1405,7 +1530,7 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # kept. After the eviction, the bag is back at size `budget`.
         if eviction >= 0:
             i = eviction
-            self.D = _evict_distance_matrix(self.D, i)
+            self._D_cache = _evict_distance_matrix(self._D_cache, i)
             self.X = np.delete(self.X, i, axis=0)
             self.y = np.delete(self.y, i, axis=0)
             # An eviction changes the bag composition, not just its size, so the
@@ -1440,9 +1565,13 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         This implements the conformal predictor from ALRW2 §2.4 using the
         deleted nonconformity scores with affine representation α_i(y) = a_i + b_i * y.
 
-        This implementation uses an optimized exact algorithm with:
-        - Cached k-th nearest neighbor distances for efficient reverse-neighbour detection
-        - O(n) prediction time per call (after O(n²) preprocessing in training)
+        This implementation uses an optimized exact algorithm (ALRW2 Sec. 2.4 /
+        Sec. 7.5) with:
+        - Cached k-th nearest neighbour distances for O(n) reverse-neighbour
+          detection.
+        - O(n d + n log n) prediction time per call: the O(n d) distance row
+          plus the O(n log n) sort of the n candidate affine values -- the same
+          dominant term as conformalised ridge regression (ALRW2 Sec. 2.5).
 
         Parameters
         ----------
@@ -1496,7 +1625,14 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         # asks for it (return_update=True), so a plain streaming predict does not
         # pay for a full n^2 copy that would be discarded.
         d = self.distance_func(self.X, x.reshape(1, -1)).ravel()
-        D_aug = self._update_distance_matrix(self.D, d) if return_update else None
+        if return_update:
+            # The augmented matrix the caller will feed to learn_one must be
+            # complete; materialise the full base matrix first if it is not being
+            # maintained (non-pruned regime).
+            self._ensure_D()
+            D_aug = self._update_distance_matrix(self._D_cache, d)
+        else:
+            D_aug = None
 
         # Compute affine scores a_i, b_i for all training points (ALRW2 §2.4).
         #
@@ -1554,7 +1690,9 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
                 # x_n is a reverse neighbour: the k-NN prediction of x_i in the
                 # augmented set includes the test point, whose label is set to 0
                 # for the constant term a_i (the y-dependence is captured by b_i).
-                d_i = self.D[i].copy()
+                # The full row of distances from x_i is needed; read it from the
+                # maintained matrix or compute it on demand (O(n d)).
+                d_i = self._row_distances(i).copy()
                 d_i[i] = np.inf
                 # Use partition to find k nearest (excluding self) among training + test
                 d_full = np.append(d_i, d[i])
@@ -1702,8 +1840,10 @@ class ConformalNearestNeighboursRegressor(ConformalRegressor):
         if smoothed and tau is None:
             tau = self.rnd_gen.uniform(0, 1)
 
-        # Training residuals (leave-one-out k-NN)
-        y_hat_train = self._knn_predictions(self.D, self.y)
+        # Training residuals (leave-one-out k-NN).  Requires the full distance
+        # matrix; materialise it on demand in the non-pruned regime.
+        self._ensure_D()
+        y_hat_train = self._knn_predictions(self._D_cache, self.y)
         alpha_train = np.abs(self.y - y_hat_train)
 
         # Test point k-NN prediction.

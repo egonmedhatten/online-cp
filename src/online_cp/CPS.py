@@ -585,7 +585,104 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
 
         self.X = None
         self.y = None
-        self.D = None
+        self._D_cache = None
+
+        # --- Test-free per-point neighbour cache (Section 7.5 speedup) ---
+        # _knn_idx[i]  : indices of point i's k nearest neighbours, selected
+        #                canonically by (distance, global-index) so the k-NN set
+        #                is order-invariant (a bag-function of X) and matches the
+        #                dense-matrix reference (argpartition + argsort).
+        # _knn_y[i]    : the y-values of those k neighbours (the multiset that
+        #                the §7.5 conformity histogram Alpha[i] = #{j: y_i <=
+        #                y_j, j in kNN(i)} counts over).
+        # _kth_dist[i] : the (k+1)-th smallest distance from point i to the rest
+        #                of the bag — the value threshold that detects which
+        #                points are *semi-neighbours* of the test point.
+        # _count[i]    : number of available neighbours of point i (n-1 when
+        #                unpruned; used for the warm-up regime n < k+1).
+        self._knn_idx = None
+        self._knn_y = None
+        self._kth_dist = None
+        self._count = None
+
+    @property
+    def D(self):
+        """n x n pairwise distance matrix, cached lazily (Section 7.5 speedup).
+
+        Built on first access (typically during ``predict_cpd``) from the stored
+        training objects; kept valid across streaming ``learn_one`` calls because
+        it is only read to refresh the semi-neighbour k-NN sets there.
+        """
+        if self._D_cache is None:
+            if self.X is None:
+                self._D_cache = np.empty((0, 0))
+            else:
+                self._D_cache = self.distance_func(self.X)
+        return self._D_cache
+
+    @D.setter
+    def D(self, value):
+        """Set the distance-matrix cache (used by :meth:`_set_state` on load)."""
+        self._D_cache = value
+
+    def _ensure_cache(self):
+        """Build the per-point neighbour cache if it has not been populated yet.
+
+        The cache is derived state (not persisted) and is (re)built lazily after
+        a :meth:`load` (where only the distance matrix is restored) or before
+        the first prediction on a fresh model.
+        """
+        if self.X is not None and self.X.shape[0] > 0:
+            if self._knn_idx is None or self._knn_idx.shape[0] != self.X.shape[0]:
+                self._build_per_point_cache()
+
+    def _build_per_point_cache(self):
+        """Populate the per-point neighbour cache from the current distance matrix.
+
+        For every training point i store its k nearest-neighbour indices / y-values
+        (selected canonically on ties) and the (k+1)-th neighbour distance. This
+        is the test-free cache the :meth:`predict_cpd` and :meth:`_refresh_cache`
+        paths read; it costs ``O(n^2)`` to build from scratch but is amortised
+        across steps.
+        """
+        D = self._D_cache if self._D_cache is not None else self.D
+        n = D.shape[0]
+        if n == 0:
+            self._knn_idx = None
+            return
+        k = self.k
+        y = self.y.astype(float)
+
+        # Mask the diagonal (self-distance) so it never enters the k-NN set.
+        D_work = np.where(np.eye(n, dtype=bool), np.inf, D)
+        # (k+1)-th smallest distance = the semi-neighbour boundary: the test point
+        # enters point i's (k+1)-nearest set iff its distance to i is at most this.
+        # When there are fewer than k+1 available neighbours the boundary is +inf
+        # (the test point is always a semi-neighbour in the warm-up regime).
+        if n - 1 >= k + 1:
+            # np.partition(D_work, k, axis=1) puts the (k+1)-th smallest (0-indexed
+            # position k) at column k of each row.
+            kth_dist = np.partition(D_work, k, axis=1)[:, k]
+        else:
+            kth_dist = np.full(n, np.inf)
+        count = np.full(n, n - 1, dtype=int)
+
+        # k-NN selection, canonical on ties: distance primary, stored-index
+        # secondary. np.lexsort((indices, distances)) is equivalent to a stable
+        # argsort by distance and matches the dense-matrix reference (argpartition
+        # + argsort) exactly, while being order-invariant (a bag-function of X):
+        # the selected k-NN set depends only on the distance multiset, not on the
+        # y-values (which are irrelevant to which points are nearest).
+        idx_rows = np.arange(n)
+        knn_idx = np.empty((n, min(k, n - 1)), dtype=int)
+        for i in range(n):
+            knn_idx[i] = np.lexsort((idx_rows, D_work[i]))[: min(k, n - 1)]
+        knn_y = y[knn_idx]
+
+        self._knn_idx = knn_idx
+        self._knn_y = knn_y
+        self._kth_dist = kth_dist
+        self._count = count
 
     def _standard_distance_func(self, X, y=None):
         """
@@ -617,6 +714,9 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         self.X = X
         self.D = self.distance_func(X)
         self.y = y
+        # Section 7.5: the initial bag is set from scratch, so rebuild the
+        # per-point neighbour cache from the current distance matrix.
+        self._build_per_point_cache()
 
     @staticmethod
     def update_distance_matrix(D, d):
@@ -657,14 +757,130 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
             # Learn object x
             if self.X is None:
                 self.X = x.reshape(1, -1)
-                self.D = self.distance_func(self.X)
+                self._D_cache = self.distance_func(self.X)
             else:
                 d = self.distance_func(self.X, x)
-                self.D = self.update_distance_matrix(self.D, d)
+                self._D_cache = self.update_distance_matrix(self._D_cache, d)
                 self.X = np.append(self.X, x.reshape(1, -1), axis=0)
         else:
             self.X = precomputed["X"]
             self.D = precomputed["D"]
+
+        # Section 7.5: refresh the per-point score cache for the new example
+        # (semi-neighbour refresh; rebuilds from scratch if the cache is empty
+        # or was just set from a precomputed distance matrix).
+        self._refresh_cache()
+
+    def _refresh_cache(self):
+        """Populate/refresh the per-point neighbour cache after a state change.
+
+        Three cases:
+
+        - **empty / unknown size** (e.g. after a :meth:`load`, a precomputed
+          update, or ``learn_initial_training_set`` on a fresh object): build
+          from scratch.
+        - **size grew by exactly one** (a normal streaming ``learn_one``): do an
+          *incremental append* — grow the cache arrays by one row, compute the
+          new example's k-NN set from its distance row, and refresh only the
+          *semi-neighbours* of the new example (the points whose k-NN set the new
+          example can enter). This is ``O(S n)`` (``O(S k)`` when warm) rather
+          than the ``O(n^2)`` of a full rebuild.
+        - **size matches** (the cache was already refreshed for the current bag,
+          e.g. a ``predict_cpd`` that refreshed in place): no-op.
+
+        A point i is a *semi-neighbour* of the new example iff the new example's
+        distance to i is at most i's cached (k+1)-th neighbour distance — i.e. the
+        new example enters (or ties at) i's (k+1)-nearest-neighbour set. Only for
+        those points can the new example enter the k-NN set, so only their k-NN
+        sets / k-th distances are recomputed; for all others the cached values are
+        unchanged.
+
+        Warm-up width handling: when the bag has grown from ``n-1`` to ``n``
+        points, the per-point k-NN width increases from ``min(k, n-2)`` to
+        ``min(k, n-1)``. Any point whose cached set is shorter than the new width
+        (i.e. was in warm-up) is recomputed from its distance row so its set is
+        extended correctly; such points are exactly the semi-neighbours in the
+        warm-up regime (``count < k+1``).
+
+        .. note::
+            This is the §7.5 neighbour-list cache (ALRW2 Sec. 7.5); it is the
+            CPS analogue of the near-identical ``_build_per_point_cache`` /
+            ``_refresh_cache`` pair on
+            :class:`~online_cp.venn.NearestNeighboursVennPredictor`. The two
+            differ in two *deliberate* ways — do not "synchronise" them away:
+            (a) the CPS tie-breaks on ``(global-index, distance)`` (matching its
+            ``argpartition`` + ``argsort`` reference) while the Venn tie-breaks
+            on ``(label, distance)``; and (b) the CPS stores the **(k+1)-th**
+            neighbour distance while the Venn stores the **k-th**. Keep the two
+            in lock-step on the shared incremental-append skeleton but leave the
+            tie-break key and the partition rank model-specific.
+        """
+        if self.X is None or self.X.shape[0] == 0:
+            self._knn_idx = None
+            return
+        n = self.X.shape[0]
+        if self._knn_idx is None:
+            self._build_per_point_cache()
+            return
+        old_n = self._knn_idx.shape[0]
+        if old_n != n - 1:
+            # Size did not grow by exactly one (load / precomputed / init):
+            # rebuild from scratch.
+            self._build_per_point_cache()
+            return
+
+        D = self._D_cache
+        k = self.k
+        y = self.y.astype(float)
+        # The new example is at position n-1 (0-indexed) in the grown bag. Its
+        # distances to the existing n-1 points (positions 0..n-2) are D[n-1, :n-1].
+        d_new = D[-1, :-1]
+
+        nw = min(k, n - 1)  # k-NN width for the current bag (n-1 other points)
+
+        # Grow the index/label caches by one row (the new example is at position
+        # n-1). The old cache has `old_w` columns (possibly < nw in warm-up); pad
+        # the right with placeholder entries that are recomputed for the
+        # semi-neighbours (and the new row) below.
+        old_w = self._knn_idx.shape[1]
+        knn_idx = np.zeros((n, nw), dtype=int)
+        knn_y = np.zeros((n, nw))
+        knn_idx[:n - 1, :old_w] = self._knn_idx
+        knn_y[:n - 1, :old_w] = self._knn_y
+        kth_dist = np.append(self._kth_dist.copy(),
+                             np.partition(d_new, k)[k] if d_new.size >= (k + 1) else np.inf)
+        count = np.append(self._count.copy(), d_new.size)
+
+        # Semi-neighbour mask over the existing n-1 points (positions 0..n-2).
+        # The new example's distances to them are d_new (length n-1). count < k+1
+        # means the (k+1)-th distance is inf (warm-up) — those points' sets must be
+        # re-extended to the new width nw.
+        semi = (count[:-1] < (k + 1)) | (d_new <= kth_dist[:-1])
+
+        global_idx = np.arange(n)  # global point indices (0..n-1)
+        for j in np.flatnonzero(semi):
+            ii = int(j)
+            dists = np.delete(D[ii, :], ii)  # all distances from ii, self excluded
+            # Position p in `dists` corresponds to global index global_idx[p]
+            # (with ii removed). Use the global index as the secondary key so the
+            # tie-break matches the dense-matrix reference (stable argsort by
+            # distance == lexsort by (distance, global-index)).
+            pos_idx = np.delete(global_idx, ii)
+            order = np.lexsort((pos_idx, dists))
+            knn_idx[ii] = pos_idx[order[:nw]]
+            knn_y[ii] = y[pos_idx[order[:nw]]]
+            kth_dist[ii] = np.partition(dists, k)[k] if dists.size >= (k + 1) else np.inf
+
+        # The new example's own k-NN set, from its distance row (n-1 candidates).
+        # d_new[p] is the distance to global training point p (p in 0..n-2).
+        order = np.lexsort((np.arange(d_new.size), d_new))
+        knn_idx[-1] = order[:nw]
+        knn_y[-1] = y[order[:nw]]
+
+        self._knn_idx = knn_idx
+        self._knn_y = knn_y
+        self._kth_dist = kth_dist
+        self._count = count
 
     def predict_cpd(self, x, return_update=False):
         """
@@ -689,17 +905,57 @@ class NearestNeighboursPredictionMachine(ConformalPredictiveSystem):
         D = self.update_distance_matrix(self.D, d)
         y = np.append(self.y, -np.inf)  # Initialise label as -inf
 
-        # Find all neighbours and semi-neighbours
-        # Use argpartition for O(n) selection of k+1 smallest, then sort them
-        # for deterministic tie-breaking consistent with full argsort.
-        top_k1 = np.argpartition(D, self.k + 1, axis=0)[: self.k + 1]
-        for col in range(D.shape[1]):
-            idx = top_k1[:, col]
-            order = np.argsort(D[idx, col])
-            top_k1[:, col] = idx[order]
-        k_nearest = top_k1[1:]  # skip self (distance=0, always first after sort)
-
+        # Find all neighbours and semi-neighbours (Section 7.5).
+        #
+        # Instead of recomputing argpartition(D, k+1, axis=0) over the whole
+        # (n+1) x (n+1) matrix, read each training point's test-free k-NN set
+        # from the per-point cache and recompute the augmented (k+1)-NN set only
+        # for the *semi-neighbours* -- the points whose (k+1)-nearest set the
+        # test point actually enters (d[i] <= the cached (k+1)-th distance).
+        # Every other point keeps its cached test-free set (plus the test point,
+        # which is a neighbour whenever there are fewer than k+1 candidates).
+        # This costs O(n d + n + S n) (S = number of semi-neighbours) rather than
+        # O(n^2), and the k-NN selection uses the same canonical (distance, y)
+        # tie-break (np.lexsort) as the dense path, so it is bit-identical and
+        # order-invariant.
         n = self.X.shape[0]
+        self._ensure_cache()
+        k = self.k
+        d_flat = d.ravel()
+        kk = min(k + 1, n)  # available (k+1)-NN slots per point
+
+        knn1 = np.empty((n + 1, k + 1), dtype=int)
+        semi = (self._count < (k + 1)) | (d_flat <= self._kth_dist)
+        for i in np.flatnonzero(~semi):
+            # Cached test-free k-NN set (k slots, or fewer when n-1 < k).
+            nk = min(k, n - 1)
+            knn1[i, :nk] = self._knn_idx[i, :nk]
+            if kk > k:
+                # The (k+1)-th slot: the test point is a neighbour of every
+                # point it cannot displace (it lies beyond i's k-NN set).
+                knn1[i, k:kk] = n
+        # Tie-break key: (distance, global-index) == stable argsort by distance,
+        # matching the dense-matrix reference (argpartition + argsort). Positions
+        # in the augmented row correspond to global indices 0..n (test point = n).
+        pos_keys = np.arange(n + 1)
+        for i in np.flatnonzero(semi):
+            # D[i, :] is the augmented row: distances from training point i to
+            # all n+1 points (training points plus the test point at col n).
+            # Mask the diagonal (self-distance) so it never enters the k-NN set,
+            # matching the test-free cache (which excludes self).
+            dists = D[i, :].copy()
+            dists[i] = np.inf
+            order = np.lexsort((pos_keys, dists))  # canonical (distance, index)
+            knn1[i] = order[:kk]
+        # Test point's own (k+1)-NN set, from its distance row (col n). Position p
+        # in d_flat corresponds to global training index p (0..n-1).
+        order = np.lexsort((np.arange(n), d_flat))
+        knn1[-1] = order[:kk]
+
+        # k-NN sets (first k slots) for every point, as a (k, n+1) matrix so that
+        # k_nearest.T[i] is point i's k nearest neighbours (row n is the test
+        # point). Matches the reference top_k1[1:] shape.
+        k_nearest = knn1[:, :k].T
 
         full_neighbours = set()
         single_neighbours = set()

@@ -1203,3 +1203,277 @@ class TestMulticlassVennAbersPredictor:
         assert point.shape == (3,)
         assert np.all(point >= 0)
         np.testing.assert_allclose(point.sum(), 1.0, atol=1e-12)
+
+
+def _from_scratch_taxonomy(D, labels, k, binary):
+    """Reference per-point k-NN taxonomy (the pre-§7.5 from-scratch algorithm).
+
+    For each example *i*, the taxonomy is the count of 1s among its *k* nearest
+    neighbours (binary voting) or the count of same-class k-NN (multiclass),
+    selected by the canonical (distance, label) tie-break.
+    """
+    n = len(labels)
+    tax = np.empty(n, dtype=int)
+    D_work = D.copy()
+    np.fill_diagonal(D_work, np.inf)
+    for i in range(n):
+        if k >= n - 1:
+            nn = np.arange(n)
+            nn = nn[nn != i]
+        else:
+            nn = np.lexsort((labels, D_work[i]))[:k]
+        tax[i] = int(np.sum(labels[nn])) if binary else int(np.sum(labels[nn] == labels[i]))
+    return tax
+
+
+def _from_scratch_venn_probs(X, y, k, x, label_space=None):
+    """Reference multiprobability prediction built from the from-scratch taxonomy.
+
+    Mirrors :class:`VennPredictor._venn_predict_from_taxonomy` so the §7.5 cached
+    :meth:`NearestNeighboursVennPredictor.predict` can be checked bit-for-bit.
+    Distances are computed with ``cdist`` (the model's distance backend) so the
+    reference is bit-identical — ``np.linalg.norm`` differs from ``cdist`` by
+    ~1e-15 and would flip near-ties in the lexsort selection.
+    """
+    from scipy.spatial.distance import cdist
+
+    n = len(y)
+    ls_inferred = np.unique(y) if label_space is None else np.asarray(sorted(label_space), dtype=int)
+    is_binary = len(ls_inferred) <= 2 and (len(ls_inferred) <= 1 or (int(ls_inferred[0]) == 0 and int(ls_inferred[1]) == 1))
+    d = cdist(X, x.reshape(1, -1), metric="euclidean").ravel()
+    D_aug = np.zeros((n + 1, n + 1))
+    D_aug[:n, :n] = cdist(X, X, metric="euclidean")
+    D_aug[:n, n] = d
+    D_aug[n, :n] = d
+    k_eff = min(k, n)
+    if is_binary:
+        results = []
+        for v in (0, 1):
+            la = np.append(y, v)
+            tax = _from_scratch_taxonomy(D_aug, la, k_eff, True)
+            tau = tax[n]
+            mask = tax == tau
+            matching = la[mask]
+            results.append(float(np.sum(matching) / len(matching)))
+        return np.array(results)
+    nl = len(ls_inferred)
+    probs = np.empty((nl, nl))
+    for i, v in enumerate(ls_inferred):
+        la = np.append(y, v)
+        tax = _from_scratch_taxonomy(D_aug, la, k_eff, False)
+        tau = tax[n]
+        mask = tax == tau
+        matching = la[mask]
+        for j, y_prime in enumerate(ls_inferred):
+            probs[i, j] = float(np.sum(matching == y_prime) / len(matching))
+    return probs
+
+
+class TestSection75VennSpeedup:
+    """§7.5 per-hypothesis speedup for the k-NN Venn predictor.
+
+    ``NearestNeighboursVennPredictor.predict`` used to build the full (n+1)×(n+1)
+    distance matrix and re-run a ``lexsort`` over every point for *each*
+    hypothesised label (``O(|Y| n^2 log n)`` per prediction). The §7.5 cache
+    stores each training point's test-free k-NN set (and the k-th neighbour
+    distance) and refreshes only the *semi-neighbours* of the test point per
+    hypothesis (``O(n + |Y| S k)``). These tests pin the invariants:
+    bit-identity with the from-scratch reference (random / ties / duplicates),
+    order-invariance, cache validity after streaming updates and save/load, and
+    the warm-up regime.
+    """
+
+    @pytest.fixture
+    def random_binary(self):
+        rng = np.random.default_rng(0)
+        N = 100
+        X = rng.normal(size=(N, 4))
+        y = (X @ rng.normal(size=4) > 0).astype(int)
+        return X, y
+
+    @pytest.fixture
+    def random_multiclass(self):
+        rng = np.random.default_rng(1)
+        N = 100
+        X = rng.normal(size=(N, 4))
+        y = np.array([0, 1, 2] * 34)[:N]
+        return X, y
+
+    @pytest.fixture
+    def tie_data(self):
+        """Rounded grid -> many distance ties (stress the tie-break)."""
+        rng = np.random.default_rng(2)
+        X = np.round(rng.normal(size=(90, 3)), 1)
+        y = (X @ np.array([1.0, 2.0, 3.0]) > 0).astype(int)
+        return X, y
+
+    @pytest.fixture
+    def duplicate_data(self):
+        """Integer grid -> duplicate points (stress the self-reference masking)."""
+        rng = np.random.default_rng(3)
+        X = np.round(rng.normal(size=(80, 2)), 0)
+        y = (X[:, 0] + X[:, 1] > 0).astype(int)
+        return X, y
+
+    @staticmethod
+    def _probs_binary(pred):
+        return np.array([pred.probs[0, 1], pred.probs[1, 1]])
+
+    @pytest.mark.parametrize("k", [1, 3, 5])
+    def test_bit_identity_random_binary(self, random_binary, k):
+        """Cached predict is bit-identical to the from-scratch reference on
+        generic binary data, over a streaming loop."""
+        X, y = random_binary
+        n_init, n_test = 50, 30
+        v = NearestNeighboursVennPredictor(k=k)
+        v.learn_initial_training_set(X[:n_init], y[:n_init])
+        for t in range(n_test):
+            x_test = X[n_init + t]
+            ref = _from_scratch_venn_probs(v.X, v.y, k, x_test)
+            got = self._probs_binary(v.predict(x_test))
+            assert np.array_equal(got, ref), f"binary mismatch at t={t}"
+            v.learn_one(x_test, y[n_init + t])
+
+    @pytest.mark.parametrize("k", [2, 4])
+    def test_bit_identity_random_multiclass(self, random_multiclass, k):
+        """Cached predict is bit-identical to the from-scratch reference on
+        generic multiclass data (all hypothesised labels)."""
+        X, y = random_multiclass
+        n_init, n_test = 50, 20
+        v = NearestNeighboursVennPredictor(k=k, label_space=[0, 1, 2])
+        v.learn_initial_training_set(X[:n_init], y[:n_init])
+        for t in range(n_test):
+            x_test = X[n_init + t]
+            ref = _from_scratch_venn_probs(v.X, v.y, k, x_test, [0, 1, 2])
+            got = v.predict(x_test).probs
+            assert np.array_equal(got, ref), f"multiclass mismatch at t={t}"
+            v.learn_one(x_test, y[n_init + t])
+
+    def test_bit_identity_ties(self, tie_data):
+        """Bit-identical on tie-rich data (the (distance, label) tie-break must
+        match the canonical from-scratch selection)."""
+        X, y = tie_data
+        k, n_init, n_test = 2, 45, 25
+        v = NearestNeighboursVennPredictor(k=k)
+        v.learn_initial_training_set(X[:n_init], y[:n_init])
+        for t in range(n_test):
+            x_test = X[n_init + t]
+            ref = _from_scratch_venn_probs(v.X, v.y, k, x_test)
+            got = self._probs_binary(v.predict(x_test))
+            assert np.array_equal(got, ref), f"tie mismatch at t={t}"
+            v.learn_one(x_test, y[n_init + t])
+
+    def test_bit_identity_duplicates(self, duplicate_data):
+        """Bit-identical on duplicate-point data. The diagonal must be masked so
+        a point never includes itself in its own k-NN set (even when it duplicates
+        another point at distance 0)."""
+        X, y = duplicate_data
+        k, n_init, n_test = 3, 40, 25
+        v = NearestNeighboursVennPredictor(k=k)
+        v.learn_initial_training_set(X[:n_init], y[:n_init])
+        for t in range(n_test):
+            x_test = X[n_init + t]
+            ref = _from_scratch_venn_probs(v.X, v.y, k, x_test)
+            got = self._probs_binary(v.predict(x_test))
+            assert np.array_equal(got, ref), f"dup mismatch at t={t}"
+            v.learn_one(x_test, y[n_init + t])
+
+    def test_warmup_regime(self):
+        """n < k: every point is a semi-neighbour; predict must be bit-identical
+        to the from-scratch reference and remain a valid probability."""
+        rng = np.random.default_rng(4)
+        N = 30
+        X = rng.normal(size=(N, 2))
+        y = (X @ rng.normal(size=2) > 0).astype(int)
+        k, n_init, n_test = 5, 7, 5
+        v = NearestNeighboursVennPredictor(k=k)
+        v.learn_initial_training_set(X[:n_init], y[:n_init])
+        for t in range(n_test):
+            x_test = X[n_init + t]
+            ref = _from_scratch_venn_probs(v.X, v.y, k, x_test)
+            got = self._probs_binary(v.predict(x_test))
+            assert np.array_equal(got, ref), f"warmup mismatch at t={t}"
+            assert 0.0 <= got[0] <= 1.0 and 0.0 <= got[1] <= 1.0
+            v.learn_one(x_test, y[n_init + t])
+
+    def test_order_invariance(self):
+        """Permuting the training data must not change the prediction
+        (the §7.5 cache must preserve the bag-function semantics)."""
+        rng = np.random.default_rng(5)
+        N = 50
+        X = rng.normal(size=(N, 3))
+        y = (X @ rng.normal(size=3) > 0).astype(int)
+        vA = NearestNeighboursVennPredictor(k=4)
+        vA.learn_initial_training_set(X, y)
+        perm = rng.permutation(N)
+        vB = NearestNeighboursVennPredictor(k=4)
+        vB.learn_initial_training_set(X[perm], y[perm])
+        for t in range(0, N, 4):
+            x = X[(t + 11) % N]
+            assert np.allclose(vA.predict(x).probs, vB.predict(x).probs, atol=0), (
+                f"order invariance violated at t={t}"
+            )
+
+    def test_order_invariance_ties(self):
+        """Order-invariance holds even on fully tied (zero-distance) data, where
+        the (distance, label) tie-break must be a bag function of (X, y)."""
+        X = np.zeros((20, 2))
+        y = (np.arange(20) % 2)
+        perm = np.random.default_rng(6).permutation(20)
+        vA = NearestNeighboursVennPredictor(k=3, label_space=[0, 1])
+        vA.learn_initial_training_set(X, y)
+        vB = NearestNeighboursVennPredictor(k=3, label_space=[0, 1])
+        vB.learn_initial_training_set(X[perm], y[perm])
+        x = np.array([0.5, 0.5])
+        assert np.allclose(vA.predict(x).probs, vB.predict(x).probs, atol=0)
+
+    def test_streaming_matches_batch(self):
+        """A model built by streaming learn_one must predict identically to one
+        built by a single batch (the incremental _refresh_cache must be correct)."""
+        rng = np.random.default_rng(7)
+        N = 30
+        X = rng.normal(size=(N, 3))
+        y = (X @ rng.normal(size=3) > 0).astype(int)
+        v_batch = NearestNeighboursVennPredictor(k=4)
+        v_batch.learn_initial_training_set(X, y)
+        v_stream = NearestNeighboursVennPredictor(k=4)
+        for i in range(N):
+            v_stream.learn_one(X[i], y[i])
+        for t in range(N):
+            x = X[(t + 7) % N]
+            assert np.allclose(v_batch.predict(x).probs, v_stream.predict(x).probs, atol=0), (
+                f"streaming vs batch mismatch at t={t}"
+            )
+
+    def test_save_load_rebuilds_cache(self):
+        """After a save/load round-trip (which restores only D, X, y), the derived
+        cache is lazily rebuilt and predict is bit-identical to before saving."""
+        import tempfile
+
+        rng = np.random.default_rng(8)
+        N = 40
+        X = rng.normal(size=(N, 3))
+        y = (X @ rng.normal(size=3) > 0).astype(int)
+        v = NearestNeighboursVennPredictor(k=3)
+        v.learn_initial_training_set(X, y)
+        before = {t: self._probs_binary(v.predict(X[(t + 5) % N])) for t in range(0, N, 5)}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/venn.joblib"
+            v.save(path)
+            v2 = NearestNeighboursVennPredictor.load(path)
+            for t, ref in before.items():
+                got = self._probs_binary(v2.predict(X[(t + 5) % N]))
+                assert np.array_equal(got, ref), f"save/load mismatch at t={t}"
+
+    def test_empty_and_single_point(self):
+        """Degenerate inputs: empty bag gives the uniform fallback; a single
+        training point gives a valid prediction without cache errors."""
+        v = NearestNeighboursVennPredictor(k=3)
+        p = v.predict(np.array([1.0, 2.0, 3.0]))
+        assert p.probs.shape == (2, 2)
+
+        v2 = NearestNeighboursVennPredictor(k=2)
+        v2.learn_one(np.array([0.0, 0.0]), 0)
+        p2 = v2.predict(np.array([1.0, 0.0]))
+        assert 0.0 <= p2.p0 <= 1.0 and 0.0 <= p2.p1 <= 1.0

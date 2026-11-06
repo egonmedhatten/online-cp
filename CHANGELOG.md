@@ -208,6 +208,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     over the previous full-rebuild: ~25x at n=500 (0.5 ms vs 12.3 ms), ~15x at
     n=1000-2000, and ~17x at n=4000 (76 ms vs 1344 ms). The conformal
     caches are now also maintained incrementally under `learn_one`.
+  - **`ConformalNearestNeighboursClassifier.predict` is now incremental
+    (semi-neighbour refresh) instead of a per-label full-matrix recompute.**
+    The per-point score `alpha = same_d / diff_d` is *test-free* (it depends only
+    on the training bag), and the test point only changes a training point's
+    score when it enters that point's same-label or different-label k-nearest
+    set. The classifier now caches the per-point same/diff aggregates, k-th
+    distances, neighbour counts, and `alpha`; `predict` recomputes `alpha` only
+    for the (few) *semi-neighbours* per hypothesised label plus the test point —
+    `O(n·d + n + S·k)` instead of `O(n²)` per label (S = semi-neighbour count,
+    typically 5–16% of n). The semi-neighbour set is *per-hypothesis* (the test
+    point joins a same- or different-label set depending on the hypothesised
+    label); the single-point-per-label and warm-up (`count < k`) cases are
+    handled explicitly, and stream-pruning invalidates the cache. Measured
+    speedup on `predict`: ~14.8x at n=1000, ~16.1x at n=2000. Bit-identical to
+    the dense-matrix reference (verified by
+    `tests/test_classifiers.py::TestSection75ClassifierSpeedup`).
+  - **`NearestNeighboursPredictionMachine` (k-NN CPS) `predict_cpd` is now
+    incremental (semi-neighbour refresh) instead of a full-matrix
+    `argpartition`.** The per-point k-NN *index set* is test-free, and the test
+    point only changes a training point's (k+1)-NN set when it enters it
+    (`d[i] <= kth_dist[i]`, ALRW2 Sec. 7.5). The CPS now caches each point's
+    test-free k-NN index set + y-values and the (k+1)-th neighbour distance
+    threshold, and refreshes only the semi-neighbours in `learn_one` and
+    `predict_cpd` — `O(n·d + n + S·n)` instead of `O(n²)` per step. The
+    CPS-specific wrinkle is that the **conformity histogram**
+    `Alpha[i] = #{j: y_i <= y_j, j ∈ kNN(i)}` depends on *every* point's k-NN
+    y-values, so the cache stores the full k-NN index set (not an aggregated
+    score) and `Alpha` is recomputed from the refreshed sets. The k-NN *selection*
+    (the part this replaces) is measured 4.9x (n=200) / 6.3x (n=500) / 16.5x
+    (n=1000) faster. The canonical `(distance, global-index)` `np.lexsort`
+    matches the dense reference's `argpartition` + `argsort` exactly on
+    non-degenerate data and is order-invariant (a bag-function of X). This also
+    fixes a latent **self-reference bug** in the original `argpartition` + stable
+    `argsort` path: a point could include itself in its own k-NN set when it
+    duplicated another (multiple 0.0 distances); the cached path masks the
+    diagonal, so a point is never its own neighbour. Bit-identical to a
+    from-scratch §7.5 reference (verified by
+    `tests/test_cps.py::TestSection75CPSpeedup`, 11 tests, including
+    order-invariance and the duplicate-point case).
+  - **`NearestNeighboursVennPredictor.predict` is now incremental
+    (semi-neighbour refresh) instead of a per-hypothesis full-matrix recompute.**
+    It used to build the full `(n+1)×(n+1)` distance matrix and re-run a
+    `lexsort` over *every* point for *each* hypothesised label
+    (`O(|Y| · n² log n)` per prediction). The Venn now caches each point's
+    test-free k-NN index set + label set + k-th neighbour distance, and
+    `predict` refreshes only the (few) semi-neighbours per hypothesised label
+    (the test point, label `v`, is inserted into their k-NN set) plus the test
+    point — `O(n·d + n + |Y| · S · k)`. The Venn-specific wrinkle is that the
+    per-point **taxonomy** (count of 1s among the k-NN for binary, same-class
+    count for multiclass) is a *function* of the neighbour *sets*, so the cache
+    stores the full k-NN index set and the taxonomy is recomputed from the
+    refreshed sets per hypothesis. The canonical `(distance, label)`
+    `np.lexsort` tie-break (the Venn's pre-existing one) is preserved, so the
+    taxonomy stays a bag-function of `(X, y)` and the prediction is
+    order-invariant — including on fully-tied (zero-distance) data. Measured
+    `predict` speedup: ~89x at n=400, ~880x at n=800. Bit-identical to a
+    from-scratch reference (verified by
+    `tests/test_venn_abers.py::TestSection75VennSpeedup`, 13 tests).
+
+    > **Note on the overall streaming cost (classifier / CPS / Venn):** the §7.5
+    > neighbour-list win removes the per-hypothesis / per-step `O(n²)` k-NN
+    > *selection* term, but these three models still maintain the dense `n×n`
+    > distance matrix (`learn_one` matrix keep), so the full streaming per-step
+    > cost is not yet fully sub-quadratic (unlike the regressor, which holds the
+    > matrix lazily). Eliminating the matrix — keeping only the distance *rows*
+    > of the semi-neighbours — is the remaining Phase-2 target (see
+    > `design/speed.md` / `design/knn-phase2-note.md`).
   - **Mondrian tree `predict` now uses a flat per-point kernel
     (`tree_knot_solver_flat`).** `ConformalMondrianTreeRegressor.predict` builds
     the knot-solver inputs (per-point `leaf_idx`, `y`, `base_ncm`) in a single

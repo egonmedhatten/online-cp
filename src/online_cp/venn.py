@@ -385,6 +385,24 @@ class VennPredictor(SerializableMixin):
             return VennPrediction(uniform, self.label_space)
         return VennPrediction.binary(0.5, 0.5)
 
+    @property
+    def _is_binary_label_space(self) -> bool:
+        """Whether the (declared) label space is the canonical binary ``{0, 1}``.
+
+        True only when ``label_space`` is explicitly declared with at most two
+        entries that are exactly ``{0, 1}`` (or a single label). A label space of
+        two *other* values (e.g. ``{3, 7}``) is treated as multiclass so that the
+        per-hypothesis loop covers every label. Centralised here so the k-NN
+        taxonomy / OVR scoring paths and the generic prediction loop all agree
+        on which branch they take.
+        """
+        ls = self.label_space
+        return (
+            ls is not None
+            and len(ls) <= 2
+            and (len(ls) <= 1 or (int(ls[0]) == 0 and int(ls[1]) == 1))
+        )
+
     def _categories_for_hypothesis(self, taxonomy_data: Any, v: int) -> tuple:
         """Return (categories, labels_aug, test_idx) for hypothesis y_test = v.
 
@@ -424,11 +442,7 @@ class VennPredictor(SerializableMixin):
         -------
         VennPrediction
         """
-        _is_binary = (
-            self.label_space is not None
-            and len(self.label_space) <= 2
-            and (len(self.label_space) <= 1 or (int(self.label_space[0]) == 0 and int(self.label_space[1]) == 1))
-        )
+        _is_binary = self._is_binary_label_space
 
         if _is_binary:
             results = []
@@ -862,11 +876,7 @@ class VennAbersPredictor(VennPredictor):
         # Dispatch: binary vs multiclass
         # Binary path requires labels {0, 1}; other 2-class problems use multiclass OVR.
         # Single-class label_space also uses binary path (hypothesizes both 0 and 1).
-        _is_binary = (
-            self.label_space is not None
-            and len(self.label_space) <= 2
-            and (len(self.label_space) <= 1 or (self.label_space[0] == 0 and self.label_space[1] == 1))
-        )
+        _is_binary = self._is_binary_label_space
         if not _is_binary:
             if self.scorer == "ridge":
                 return self._predict_multiclass_ridge(x, return_update)
@@ -1377,6 +1387,29 @@ class NearestNeighboursVennPredictor(VennPredictor):
         self.y = None
         self.D = None  # distance matrix (n×n)
 
+        # --- Test-free per-point k-NN neighbour cache (Section 7.5 speedup) ---
+        # The taxonomy τᵢ of a training point depends on its k-nearest-neighbour
+        # *set*, which is test-free (it depends only on the training bag). The test
+        # point only changes a training point's k-NN set when it enters that
+        # point's (k+1)-nearest set (a *semi-neighbour*). Caching each point's
+        # test-free k-NN set + the (k+1)-th neighbour distance lets ``predict``
+        # refresh only the (few) semi-neighbours per hypothesised label instead of
+        # recomputing a lexsort over every point (O(n log n) each) — the same §7.5
+        # recipe as the k-NN CPS / classifier.
+        # _knn_idx[i]   : indices of point i's k nearest *training* neighbours
+        #                 (test-free; canonical (distance, label) tie-break).
+        # _knn_labels[i]: the labels of those k neighbours (so the binary
+        #                 taxonomy is sum(_knn_labels[i]) and the multiclass
+        #                 taxonomy is the count of _knn_labels[i] == y[i]).
+        # _kth_dist[i]  : the (k+1)-th smallest distance from point i to the rest
+        #                 of the training bag — the semi-neighbour threshold.
+        # _count[i]     : number of available training neighbours of point i
+        #                 (n-1 when unpruned; warm-up regime n < k+1).
+        self._knn_idx = None
+        self._knn_labels = None
+        self._kth_dist = None
+        self._count = None
+
     def _distance(self, X, Y=None):
         """Compute pairwise distances."""
         X = np.atleast_2d(X)
@@ -1402,6 +1435,9 @@ class NearestNeighboursVennPredictor(VennPredictor):
         self.X = X
         self.y = y
         self.D = self._distance(X)
+        # Section 7.5: the initial bag is set from scratch, so build the per-point
+        # k-NN neighbour cache.
+        self._build_per_point_cache()
 
     def learn_one(self, x, y):
         """Incrementally add one observation.
@@ -1437,6 +1473,172 @@ class NearestNeighboursVennPredictor(VennPredictor):
             self.D = D_new
             self.X = np.vstack([self.X, x.reshape(1, -1)])
             self.y = np.append(self.y, y)
+        # Section 7.5: refresh the per-point k-NN neighbour cache for the new
+        # example (semi-neighbour refresh; rebuilds from scratch if the cache is
+        # empty or its size no longer matches, e.g. after a load).
+        self._refresh_cache()
+
+    def _ensure_cache(self) -> None:
+        """Build the per-point k-NN neighbour cache if it is not populated.
+
+        The cache is derived state (not persisted) and is (re)built lazily after a
+        :meth:`load` (where only the distance matrix is restored) or before the
+        first prediction on a fresh model.
+        """
+        if self.X is not None and self.X.shape[0] > 0:
+            if self._knn_idx is None or self._knn_idx.shape[0] != self.X.shape[0]:
+                self._build_per_point_cache()
+
+    def _build_per_point_cache(self) -> None:
+        """Populate the per-point k-NN neighbour cache from the current bag.
+
+        For every training point *i* store its *k* nearest training neighbours
+        (test-free; the canonical (distance, label) tie-break that keeps the
+        taxonomy a bag-function of ``(X, y)``) and the (k+1)-th neighbour
+        distance (the semi-neighbour threshold). Costs ``O(n^2 log n)`` to build
+        from scratch but is amortised across streaming steps.
+        """
+        if self.X is None or self.X.shape[0] == 0:
+            self._knn_idx = None
+            return
+        D = self.D
+        n = D.shape[0]
+        k = self.k
+        y = self.y
+
+        # Mask the diagonal (self-distance) so it never enters the k-NN set.
+        D_work = D.copy()
+        np.fill_diagonal(D_work, np.inf)
+
+        # k-th smallest distance = the semi-neighbour threshold: when there are
+        # at least k training neighbours (n-1 >= k), the test point enters point
+        # i's k-NN set (displacing the farthest) iff its distance to i is at most
+        # this. Fewer than k available training neighbours -> warm-up, the test
+        # point is always in the set (handled via count, not via this threshold).
+        if n - 1 >= k:
+            # np.partition(D_work, k-1, axis=1) puts the k-th smallest
+            # (0-indexed position k-1) at column k-1 of each row.
+            kth_dist = np.partition(D_work, k - 1, axis=1)[:, k - 1]
+        else:
+            kth_dist = np.full(n, np.inf)
+        count = np.full(n, n - 1, dtype=int)
+
+        # k-NN width for the current bag (n-1 other points).
+        nw = min(k, n - 1)
+        knn_idx = np.empty((n, nw), dtype=int)
+        for i in range(n):
+            # (distance, label) tie-break: matches the original
+            # np.lexsort((labels, D_work[i]))[:k] selection exactly, so the
+            # taxonomy is bit-identical to the pre-§7.5 implementation.
+            knn_idx[i] = np.lexsort((y, D_work[i]))[:nw]
+        knn_labels = y[knn_idx]
+
+        self._knn_idx = knn_idx
+        self._knn_labels = knn_labels
+        self._kth_dist = kth_dist
+        self._count = count
+
+    def _refresh_cache(self) -> None:
+        """Populate/refresh the per-point k-NN neighbour cache after a state change.
+
+        Builds from scratch when the cache is empty or its size no longer matches
+        ``self.X`` (e.g. after a :meth:`load`); otherwise, when the bag grew by
+        exactly one (a normal streaming ``learn_one``), does an *incremental
+        append* — grow the cache by one row, compute the new example's k-NN set
+        from its distance row, and refresh only the *semi-neighbours* of the new
+        example (``O(S n log n)``, ``O(S k)`` when warm) instead of ``O(n^2 log
+        n)``.
+
+        A point *i* is a *semi-neighbour* of the new example iff the new example's
+        distance to *i* is at most *i*'s cached k-th neighbour distance (when
+        there are at least k training neighbours) — i.e. the new example enters
+        (or ties at) *i*'s k-NN set. In warm-up (fewer than k training neighbours)
+        the new example is always in *i*'s k-NN set, so *i* is a semi-neighbour.
+        Only those points' k-NN sets / k-th distances are recomputed; for all
+        others the cached values are unchanged.
+
+        .. note::
+            This is the §7.5 neighbour-list cache (ALRW2 Sec. 7.5); it is the
+            Venn analogue of the near-identical ``_build_per_point_cache`` /
+            ``_refresh_cache`` pair on
+            :class:`~online_cp.CPS.NearestNeighboursPredictionMachine` (k-NN CPS).
+            The two differ in two *deliberate* ways that encode each model's
+            distinct invariant — do not "synchronise" them away: (a) the Venn
+            tie-breaks on ``(label, distance)`` (a bag-function of ``(X, y)``)
+            while the CPS tie-breaks on ``(global-index, distance)`` (a
+            bag-function of ``X`` only, matching its ``argpartition`` + ``argsort``
+            reference); and (b) the Venn stores the **k-th** neighbour distance
+            (the test point enters a training point's *k*-NN set) while the CPS
+            stores the **(k+1)-th** (its ``predict_cpd`` works with (k+1)-NN
+            sets). Keep the two implementations in lock-step on the shared
+            incremental-append skeleton (grow-by-one-row, recompute the new row,
+            refresh only the semi-neighbours) but leave the tie-break key and the
+            partition rank model-specific.
+        """
+        if self.X is None or self.X.shape[0] == 0:
+            self._knn_idx = None
+            return
+        n = self.X.shape[0]
+        if self._knn_idx is None:
+            self._build_per_point_cache()
+            return
+        old_n = self._knn_idx.shape[0]
+        if old_n != n - 1:
+            # Size did not grow by exactly one (load / init): rebuild from scratch.
+            self._build_per_point_cache()
+            return
+
+        D = self.D
+        k = self.k
+        y = self.y
+        # The new example is at position n-1 (0-indexed) in the grown bag. Its
+        # distances to the existing n-1 points (positions 0..n-2) are D[n-1, :n-1].
+        d_new = D[-1, :-1]
+
+        nw = min(k, n - 1)  # k-NN width for the current bag (n-1 other points)
+
+        # Grow the caches by one row (the new example is at position n-1). The
+        # old cache has `old_w` columns (possibly < nw in warm-up); pad the right
+        # with placeholder entries that are recomputed for the semi-neighbours
+        # (and the new row) below.
+        old_w = self._knn_idx.shape[1]
+        knn_idx = np.zeros((n, nw), dtype=int)
+        knn_labels = np.zeros((n, nw), dtype=int)
+        knn_idx[:n - 1, :old_w] = self._knn_idx
+        knn_labels[:n - 1, :old_w] = self._knn_labels
+        kth_dist = np.append(
+            self._kth_dist.copy(),
+            np.partition(d_new, k - 1)[k - 1] if d_new.size >= k else np.inf,
+        )
+        count = np.append(self._count.copy(), d_new.size)
+
+        # Semi-neighbour mask over the existing n-1 points (positions 0..n-2).
+        # count < k means fewer than k training neighbours are available (warm-up)
+        # — those points' sets extend as the bag grows, so they must be refreshed.
+        # Otherwise the new example enters point i's k-NN set iff d_new[i] <= the
+        # cached k-th neighbour distance.
+        semi = (count[:-1] < k) | (d_new <= kth_dist[:-1])
+
+        for j in np.flatnonzero(semi):
+            ii = int(j)
+            dists = D[ii, :].copy()
+            dists[ii] = np.inf  # exclude self
+            # (distance, label) tie-break, matching _build_per_point_cache.
+            order = np.lexsort((y, dists))
+            knn_idx[ii] = order[:nw]
+            knn_labels[ii] = y[order[:nw]]
+            kth_dist[ii] = np.partition(dists, k - 1)[k - 1] if dists.size >= k else np.inf
+
+        # The new example's own k-NN set, from its distance row (n-1 candidates:
+        # the existing points at positions 0..n-2).
+        order = np.lexsort((y[:-1], d_new))
+        knn_idx[-1] = order[:nw]
+        knn_labels[-1] = y[order[:nw]]
+
+        self._knn_idx = knn_idx
+        self._knn_labels = knn_labels
+        self._kth_dist = kth_dist
+        self._count = count
 
     def predict_one(self, x):
         """Produce a Venn multiprobability prediction.
@@ -1483,31 +1685,57 @@ class NearestNeighboursVennPredictor(VennPredictor):
 
         n = len(self.y)
 
-        # Augment distance matrix with the test point
+        # Section 7.5 speedup: instead of building the full (n+1) x (n+1)
+        # distance matrix and re-running a lexsort over every point per hypothesis,
+        # (a) compute the test point's distances to the training bag, (b) identify
+        # its *semi-neighbours* (training points whose k-NN set the test point
+        # enters), and (c) let _categories_for_hypothesis refresh only those
+        # points' cached taxonomies per hypothesised label.
+        self._ensure_cache()
         d = self._distance(self.X, x.reshape(1, -1)).ravel()
-        D_aug = np.empty((n + 1, n + 1), dtype=np.float64)
-        D_aug[:n, :n] = self.D
-        D_aug[:n, n] = d
-        D_aug[n, :n] = d
-        D_aug[n, n] = 0.0
 
         # Effective k (cap at n-1 since leave-one-out among n+1 points
-        # means each point has n neighbours available)
+        # means each point has n neighbours available).
         k_eff = min(self.k, n)
 
-        return self._venn_predict_from_taxonomy((D_aug, k_eff, n))
+        # Semi-neighbour threshold: when a training point i has at least k
+        # training neighbours (count[i] >= k), the test point enters i's k-NN set
+        # (displacing the farthest) iff d[i] <= i's k-th neighbour distance. In
+        # warm-up (count[i] < k) the test point is always in i's k-NN set, so all
+        # such points are semi-neighbours.
+        count = self._count
+        kth = self._kth_dist
+        if count is not None and kth is not None:
+            semi_mask = (count < self.k) | (d <= kth)
+        else:
+            # Defensive: cache should always be populated here; fall back to all.
+            semi_mask = np.ones(n, dtype=bool)
+
+        labels_aug = np.append(self.y, 0)  # placeholder; the test label is set per hypothesis
+        taxonomy_data = (d, k_eff, n, labels_aug, semi_mask)
+        return self._venn_predict_from_taxonomy(taxonomy_data)
 
     def _categories_for_hypothesis(self, taxonomy_data: Any, v: int) -> tuple:
         """Return (taxonomies, labels_aug, test_idx) for hypothesis y_test = v.
 
-        Uses the binary voting taxonomy (count of 1s among k NN) for binary
-        labels {0, 1}, and the same-class-count taxonomy for multiclass labels.
-        This preserves the original per-class taxonomy semantics (ALRW2 §6.2).
+        Uses the per-point k-NN neighbour cache (Section 7.5) to compute the
+        taxonomies: the cached (test-free) taxonomies are reused for every
+        training point that is *not* a semi-neighbour of the test point, and the
+        (few) semi-neighbours are re-derived with the test point (label ``v``)
+        inserted into their k-NN set.
+
+        Binary labels {0, 1} use the voting taxonomy (count of 1s among k NN);
+        multiclass labels use the same-class-count taxonomy. This preserves the
+        original per-class taxonomy semantics (ALRW2 §6.2) and is bit-identical
+        to the pre-§7.5 ``_compute_taxonomies`` on the same bag.
 
         Parameters
         ----------
         taxonomy_data : tuple
-            ``(D_aug, k_eff, test_idx)`` precomputed by :meth:`predict`.
+            ``(d, k_eff, test_idx, labels_aug, semi_mask)`` precomputed by
+            :meth:`predict`, where ``d`` is the test point's distance vector to
+            the training bag and ``semi_mask`` marks the training points whose
+            k-NN set the test point enters.
         v : int
             Hypothesised test label.
 
@@ -1517,107 +1745,55 @@ class NearestNeighboursVennPredictor(VennPredictor):
         labels_aug : ndarray, shape (n+1,)
         test_idx : int
         """
-        D_aug, k_eff, test_idx = taxonomy_data
+        d, k_eff, test_idx, labels_aug, semi_mask = taxonomy_data
+        n = len(self.y)
         labels_aug = np.append(self.y, v)
+
         # Binary {0,1}: voting taxonomy (count of 1s in k NN).
         # Multiclass / non-{0,1} 2-class: same-class-count taxonomy.
-        _is_binary = (
-            self.label_space is not None
-            and len(self.label_space) <= 2
-            and (len(self.label_space) <= 1 or (int(self.label_space[0]) == 0 and int(self.label_space[1]) == 1))
-        )
+        _is_binary = self._is_binary_label_space
+
+        # Cached test-free taxonomies for every training point (the binary
+        # voting sum, or the same-class count, over the point's cached k-NN set).
+        y = self.y
+        knn_labels = self._knn_labels
         if _is_binary:
-            taxonomies = self._compute_taxonomies(D_aug, labels_aug, k_eff)
+            tax_train = np.sum(knn_labels, axis=1)
         else:
-            taxonomies = self._compute_taxonomies_multiclass(D_aug, labels_aug, k_eff)
+            tax_train = np.sum(knn_labels == y[:, None], axis=1)
+
+        # Start from the cached taxonomies; refresh the (few) semi-neighbours
+        # whose k-NN set the test point (label v) enters.
+        taxonomies = np.empty(n + 1, dtype=int)
+        taxonomies[:n] = tax_train
+
+        if np.any(semi_mask):
+            knn_idx = self._knn_idx
+            D = self.D
+            for i in np.flatnonzero(semi_mask):
+                ii = int(i)
+                # Point ii's augmented k-NN set is the k_eff nearest among its
+                # cached training neighbours plus the test point (label v).
+                # Fetch only the cached neighbours' distances (O(k)) and the test
+                # distance, then select the k_eff nearest by (distance, label).
+                nbr = knn_idx[ii]
+                cand_dist = np.append(D[ii, nbr], d[ii])
+                cand_lab = np.append(knn_labels[ii], v)
+                order = np.lexsort((cand_lab, cand_dist))[:k_eff]
+                if _is_binary:
+                    taxonomies[ii] = int(np.sum(cand_lab[order]))
+                else:
+                    taxonomies[ii] = int(np.sum(cand_lab[order] == y[ii]))
+
+        # Test point's own taxonomy: its k-NN set is the k_eff nearest of the n
+        # training points, selected by (distance, label); its label is v.
+        order_test = np.lexsort((y, d))[:k_eff]
+        if _is_binary:
+            taxonomies[n] = int(np.sum(y[order_test]))
+        else:
+            taxonomies[n] = int(np.sum(y[order_test] == v))
+
         return taxonomies, labels_aug, test_idx
-
-    @staticmethod
-    def _compute_taxonomies(D, labels, k):
-        """Compute kNN voting taxonomy for all examples.
-
-        For each example i, taxonomy τᵢ = sum of labels of k nearest
-        neighbours (leave-one-out).
-
-        Parameters
-        ----------
-        D : ndarray, shape (n, n)
-            Pairwise distance matrix.
-        labels : ndarray, shape (n,)
-            Binary labels.
-        k : int
-            Number of neighbours.
-
-        Returns
-        -------
-        taxonomies : ndarray, shape (n,), dtype int
-            Taxonomy value for each example (in {0, 1, ..., k}).
-        """
-        n = len(labels)
-        taxonomies = np.empty(n, dtype=int)
-
-        # Set diagonal to inf for leave-one-out
-        D_work = D.copy()
-        np.fill_diagonal(D_work, np.inf)
-
-        for i in range(n):
-            # Find k nearest neighbours.
-            # lexsort (distance primary, label secondary) breaks distance ties
-            # canonically by label rather than by insertion order (np.
-            # argpartition is unstable on ties), keeping the taxonomy a bag
-            # function of (X, labels).
-            if k >= n - 1:
-                # Use all other points
-                nn_idx = np.arange(n)
-                nn_idx = nn_idx[nn_idx != i]
-            else:
-                nn_idx = np.lexsort((labels, D_work[i]))[:k]
-
-            taxonomies[i] = np.sum(labels[nn_idx])
-
-        return taxonomies
-
-    @staticmethod
-    def _compute_taxonomies_multiclass(D, labels, k):
-        """Compute same-class-count taxonomy for multiclass labels.
-
-        For each example i, taxonomy τᵢ = number of k nearest neighbours
-        that share the same label as example i (leave-one-out).
-
-        Parameters
-        ----------
-        D : ndarray, shape (n, n)
-            Pairwise distance matrix.
-        labels : ndarray, shape (n,)
-            Integer labels.
-        k : int
-            Number of neighbours.
-
-        Returns
-        -------
-        taxonomies : ndarray, shape (n,), dtype int
-            Taxonomy value for each example (in {0, 1, ..., k}).
-        """
-        n = len(labels)
-        taxonomies = np.empty(n, dtype=int)
-
-        D_work = D.copy()
-        np.fill_diagonal(D_work, np.inf)
-
-        for i in range(n):
-            # lexsort (distance primary, label secondary) breaks distance ties
-            # canonically by label rather than by insertion order (np.
-            # argpartition is unstable on ties), keeping the taxonomy a bag
-            # function of (X, labels).
-            if k >= n - 1:
-                nn_idx = np.arange(n)
-                nn_idx = nn_idx[nn_idx != i]
-            else:
-                nn_idx = np.lexsort((labels, D_work[i]))[:k]
-
-            taxonomies[i] = np.sum(labels[nn_idx] == labels[i])
-
-        return taxonomies
 
 
 # ---------------------------------------------------------------------------

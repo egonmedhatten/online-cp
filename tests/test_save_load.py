@@ -11,6 +11,8 @@ Tests cover:
 
 from __future__ import annotations
 
+from inspect import ismethod
+
 import numpy as np
 import pytest
 
@@ -28,6 +30,7 @@ from online_cp import (
     RidgePredictionMachine,
 )
 from online_cp._serialization import (
+    SerializableMixin,
     SerializationError,
     register_callable,
 )
@@ -1042,3 +1045,100 @@ class TestSVDRoundTrip:
         assert loaded.n_components == 1
         assert loaded.mode == "frozen"
         assert loaded.center is False
+
+
+# --------------------------------------------------------------------------- #
+# SerializableMixin (direct contract tests, via a minimal concrete subclass)
+# --------------------------------------------------------------------------- #
+
+
+class _TinyModel(SerializableMixin):
+    """Minimal concrete subclass exposing the mixin's full contract.
+
+    Declares one constructor hyperparameter, one learned-state attribute, and a
+    ``rnd_gen`` so that the RNG-state preservation path is exercised.
+    """
+
+    _SAVE_PARAMS: tuple = ("a",)
+    _SAVE_STATE: tuple = ("w",)
+
+    def __init__(self, a: float = 1.0):
+        self.a = a
+        self.w = np.zeros(3)
+        self.rnd_gen = np.random.default_rng(123)
+
+
+class TestSerializableMixinContract:
+    """Exercise the ``SerializableMixin`` save/load contract directly.
+
+    The mixin is not used in isolation; these tests pin down *its* behaviour
+    (envelope layout, class-mismatch guard, RNG-state round-trip) through a
+    minimal subclass rather than through any one concrete model.
+    """
+
+    def test_is_a_mixing_base(self):
+        # SerializableMixin is a base class: a concrete subclass is also an
+        # instance of it and inherits save/load.
+        assert issubclass(_TinyModel, SerializableMixin)
+        assert hasattr(_TinyModel, "save") and hasattr(_TinyModel, "load")
+        assert ismethod(_TinyModel().save)
+
+    def test_save_then_load_restores_params_and_state(self, tmp_path):
+        m = _TinyModel(a=2.5)
+        m.w[:] = [1.0, 2.0, 3.0]
+        # Advance the RNG so post-load state is non-trivial to reproduce.
+        m.rnd_gen.standard_normal(10)
+        path = tmp_path / "tiny.joblib"
+        m.save(str(path))
+
+        loaded = _TinyModel.load(str(path))
+        assert loaded.a == pytest.approx(2.5)
+        np.testing.assert_array_equal(loaded.w, [1.0, 2.0, 3.0])
+        # RNG stream position must be restored: next draw matches the original.
+        assert loaded.rnd_gen.standard_normal(1) == pytest.approx(m.rnd_gen.standard_normal(1))
+
+    def test_load_into_wrong_class_raises(self, tmp_path):
+        m = _TinyModel(a=1.0)
+        path = tmp_path / "wrong.joblib"
+        m.save(str(path))
+
+        class _OtherModel(SerializableMixin):
+            _SAVE_PARAMS = ("a",)
+            _SAVE_STATE = ("w",)
+
+            def __init__(self, a=0.0):
+                self.a = a
+                self.w = np.zeros(3)
+                self.rnd_gen = np.random.default_rng(0)
+
+        with pytest.raises(SerializationError, match="Class mismatch"):
+            _OtherModel.load(str(path))
+
+    def test_envelope_carries_expected_keys(self, tmp_path):
+        import joblib
+
+        m = _TinyModel(a=0.7)
+        m.w[:] = 9.0
+        path = tmp_path / "env.joblib"
+        m.save(str(path))
+        env = joblib.load(str(path))
+        assert env["format_version"] == 1
+        assert env["class"] == f"{_TinyModel.__module__}.{_TinyModel.__qualname__}"
+        assert env["params"] == {"a": 0.7}
+        # Learned state includes the declared attr plus the RNG position.
+        assert "w" in env["state"]
+        assert "__rng_state__" in env["state"]
+
+    def test_refuses_newer_format_version(self, tmp_path):
+        import joblib
+
+        m = _TinyModel(a=1.0)
+        path = tmp_path / "future.joblib"
+        m.save(str(path))
+        # Rewrite the format_version to a value the current code does not know.
+        env = joblib.load(str(path))
+        env["format_version"] = 999
+        joblib.dump(env, str(path))
+        with pytest.raises(SerializationError, match="format_version"):
+            _TinyModel.load(str(path))
+

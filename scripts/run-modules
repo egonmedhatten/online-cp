@@ -1,16 +1,65 @@
 #!/bin/bash
 #
-# This runs all Python files in src's root
-# from the command line.
+# Run the doctests of every module in the online_cp package.
+#
+# Recurses the whole package tree (root + subpackages), skipping __init__.py
+# and the gitignored *_dev.py research modules. Each module is imported as part
+# of the `online_cp` package (so cross-module imports resolve) and its doctests
+# are run with doctest.testmod. The gate fails if any doctest fails.
+#
+# NOTE: the previous version only globbed src/online_cp/*.py (the root) and ran
+# the files as *scripts* (python module.py), which executed top-level code but
+# never ran doctests and silently skipped every subpackage. This version runs
+# the doctests that actually ship in the docstrings.
 #
 # This is intended to be run from CI.
 
 set -e
+cd "$(dirname "$0")/.."
 
-for module in src/online_cp/*.py
-do
-	[ "$module" == src/online_cp/__init__.py ] && continue
-	echo uv run python $module
-	/usr/bin/time -f "%es  (python $module)\n" \
-	uv run python $module
-done
+uv run python - <<'PY'
+import contextlib
+import importlib
+import io
+import pkgutil
+import doctest
+import sys
+
+import online_cp
+
+state = {"failed": [], "tests": 0}
+
+# Capture the doctest failure report (DocTestRunner prints failures to
+# sys.stdout) into a buffer so we can show it at the end.
+report = io.StringIO()
+with contextlib.redirect_stdout(report):
+    # Walk every module in the package (root + subpackages), excluding the
+    # gitignored research (_dev) modules and the package __init__ files.
+    def walk(pkg):
+        for mod in pkgutil.iter_modules(pkg.__path__, pkg.__name__ + "."):
+            name = mod.name
+            if name.endswith("_dev"):
+                continue
+            m = importlib.import_module(name)
+            # Only test leaf modules (skip subpackages themselves).
+            if hasattr(m, "__path__"):
+                walk(m)
+            else:
+                finder = doctest.DocTestFinder(verbose=False, recurse=True)
+                runner = doctest.DocTestRunner(optionflags=doctest.ELLIPSIS)
+                for test in finder.find(m, name):
+                    result = runner.run(test)
+                    state["tests"] += len(test.examples)
+                    if result.failed:
+                        state["failed"].append(name)
+
+    walk(online_cp)
+
+failed = state["failed"]
+if failed:
+    sys.stderr.write(report.getvalue())
+    print(f"\nFAIL: doctests failed in module(s): {sorted(set(failed))}")
+    sys.exit(1)
+
+print(f"OK: doctests ran clean across the package ({state['tests']} examples checked).")
+PY

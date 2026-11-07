@@ -587,3 +587,213 @@ class TestWrapperWarmStart:
         assert set(pv.keys()) == {0, 1}
         for p in pv.values():
             assert 0 <= p <= 1
+
+
+class TestSection75ClassifierSpeedup:
+    """The §7.5 optimization for the k-NN *classifier*.
+
+    The classifier's per-point score ``alpha = same_d / diff_d`` is
+    *label-hypothesis-relative* (the test point joins a training point's
+    same-label or different-label k-neighbour set depending on the hypothesised
+    label), so the semi-neighbour set is per-hypothesis.  The cached predict
+    recomputes ``alpha`` only for the semi-neighbours plus the test point,
+    instead of recomputing the full ``n x n`` nonconformity matrix from scratch
+    per hypothesised label.
+
+    The core invariant is **bit-identity**: the cached path must produce
+    exactly the same p-values as the dense-matrix reference path, including in
+    the warm-up regime (``n < k + 1``), for tie-rich data (duplicates, rounded
+    grids), and for every hypothesised label in a multiclass bag.
+    """
+
+    @staticmethod
+    def _dense_predict_pvalues(cp, x):
+        """Reference: recompute p-values via the full augmented distance matrix
+        (the pre-§7.5 code path), bypassing the per-point score cache."""
+        tau = cp.rnd_gen.uniform(0, 1)
+        d = cp.distance_func(cp.X, x).ravel()
+        D = cp.update_distance_matrix(cp.D, d)
+        test_index = D.shape[0] - 1
+        p_values = {}
+        for label in cp.label_space:
+            li = cp._extend_label_indices(cp._label_indices, label, test_index)
+            same, diff = cp._find_nearest_distances(D, label_indices=li, update_cache=False)
+            # A zero different-label distance (duplicate example) legitimately
+            # yields +inf; suppress the expected divide warning.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                Alpha = np.nan_to_num(same / diff, nan=np.inf)
+            p_values[label] = cp._compute_p_value(Alpha, tau, "nonconformity")
+        return p_values
+
+    def _make_binary(self, n, seed=0, k=3, agg="mean"):
+        rng = np.random.default_rng(seed)
+        X = rng.normal(size=(n, 2))
+        y = (X[:, 0] > 0).astype(int)
+        return X, y
+
+    def _assert_bit_identical(self, cp, x, tag):
+        """Compare the cached predict against the dense reference for one point."""
+        cp.rnd_gen.bit_generator.state = state = cp.rnd_gen.bit_generator.state
+        got = cp.predict(x, return_p_values=True)[1]
+        cp.rnd_gen.bit_generator.state = state
+        exp = self._dense_predict_pvalues(cp, x)
+        for lb in got:
+            assert np.isclose(got[lb], exp[lb], rtol=0, atol=0, equal_nan=True), (
+                f"{tag} lb={lb}: {got[lb]} != {exp[lb]}"
+            )
+
+    def test_bit_identical_random_data(self):
+        """Cached predict must match the dense reference on random data, for
+        both aggregations and several k values. Test points are held out (not
+        part of the training bag) so the augmented matrix has a fresh row."""
+        for k in (1, 3):
+            for agg in ("mean", "median"):
+                X, y = self._make_binary(210, seed=1, k=k, agg=agg)
+                cp = ConformalNearestNeighboursClassifier(k=k, rnd_state=0, aggregation=agg)
+                cp.learn_initial_training_set(X[:50], y[:50])
+                for i in range(50, 200):
+                    cp.learn_one(X[i], y[i])
+                for i in range(200, 210):
+                    self._assert_bit_identical(cp, X[i], f"k={k} agg={agg} i={i}")
+
+    def test_bit_identical_warmup_regime(self):
+        """When ``n < k + 1`` every training point is a semi-neighbour (its k-set
+        has room for the test point); the cached path must still match."""
+        for n_init in (1, 2, 3):
+            X, y = self._make_binary(n_init + 16, seed=2)
+            cp = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+            cp.learn_initial_training_set(X[:n_init], y[:n_init])
+            for i in range(n_init, n_init + 10):
+                cp.learn_one(X[i], y[i])
+            for i in range(n_init + 10, n_init + 16):
+                self._assert_bit_identical(cp, X[i], f"n_init={n_init} i={i}")
+
+    def test_bit_identical_single_label_point(self):
+        """A label with a single training point is the degenerate case: when the
+        hypothesised label equals that point's label, the test point is the
+        point's *only* same-neighbour and its score must be recomputed."""
+        cp = ConformalNearestNeighboursClassifier(
+            k=1, label_space=[-1, 1], rnd_state=1337, epsilon=0.1
+        )
+        cp.learn_one(np.int64(3), 1)
+        self._assert_bit_identical(cp, -2, "single-point")
+
+    def test_bit_identical_tie_rich(self):
+        """Ties in the k-th distance must resolve identically to the dense path
+        (the reference selects by value, and ties at the k-th slot must not
+        change the aggregated score)."""
+        rng = np.random.default_rng(3)
+        grid = np.round(rng.normal(size=(68, 2)), 1)  # 1-decimal rounding -> ties
+        y = (grid[:, 0] > 0).astype(int)
+        for k, agg in ((1, "mean"), (3, "median")):
+            cp = ConformalNearestNeighboursClassifier(k=k, rnd_state=0, aggregation=agg)
+            cp.learn_initial_training_set(grid[:30], y[:30])
+            for i in range(30, 60):
+                cp.learn_one(grid[i], y[i])
+            for i in range(60, 68):
+                self._assert_bit_identical(cp, grid[i], f"k={k} agg={agg} i={i}")
+
+    def test_bit_identical_duplicates(self):
+        """Duplicate rows give zero same-label distances; the score is a
+        legitimate +inf which must be reproduced exactly."""
+        rng = np.random.default_rng(4)
+        base = rng.normal(size=(12, 2))
+        X = np.repeat(base, 3, axis=0)
+        y = (X[:, 0] > 0).astype(int)
+        cp = ConformalNearestNeighboursClassifier(k=2, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+        for i in range(20, len(X)):
+            cp.learn_one(X[i], y[i])
+        for i in range(3, 11):
+            self._assert_bit_identical(cp, X[i], f"dup i={i}")
+
+    def test_bit_identical_multiclass(self):
+        """With three labels, each hypothesised label puts the test point into a
+        different subset of training points' same/diff sets; all labels must
+        match."""
+        rng = np.random.default_rng(5)
+        X = rng.normal(size=(86, 2))
+        y = (X[:, 0] > 0).astype(int) * 2 + (X[:, 1] > 0).astype(int)  # labels 0, 1, 2
+        cp = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+        cp.learn_initial_training_set(X[:40], y[:40])
+        for i in range(40, 80):
+            cp.learn_one(X[i], y[i])
+        for i in range(80, 86):
+            self._assert_bit_identical(cp, X[i], f"multiclass i={i}")
+
+    def test_cache_alpha_matches_dense(self):
+        """The stored per-point ``_alpha`` must equal a from-scratch
+        ``_find_nearest_distances`` on the test-free matrix."""
+        X, y = self._make_binary(120, seed=6, k=3)
+        cp = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+        cp.learn_initial_training_set(X[:40], y[:40])
+        for i in range(40, 120):
+            cp.learn_one(X[i], y[i])
+        same, diff = cp._find_nearest_distances(
+            D=cp.D, label_indices=cp._label_indices, update_cache=False
+        )
+        expected = np.nan_to_num(same / diff, nan=np.inf)
+        assert np.allclose(cp._alpha, expected, rtol=0, atol=0, equal_nan=True)
+
+    def test_pruning_invalidates_cache(self):
+        """After a pruning eviction the cache must be rebuilt from scratch
+        (the bag's *contents* change, not just its size)."""
+        rng = np.random.default_rng(7)
+        X = rng.normal(size=(40, 2))
+        y = (X[:, 0] > 0).astype(int)
+        cp = ConformalNearestNeighboursClassifier(k=3, rnd_state=0, pruning="reservoir", budget=15)
+        cp.learn_initial_training_set(X[:20], y[:20])
+        for i in range(20, 40):
+            cp.predict(X[i], epsilon=0.1)
+            cp.learn_one(X[i], y[i])
+        # Cache is consistent with the current bag.
+        assert cp._alpha is not None
+        assert cp._alpha.shape[0] == cp.X.shape[0] == 15
+        same, diff = cp._find_nearest_distances(
+            D=cp.D, label_indices=cp._label_indices, update_cache=False
+        )
+        expected = np.nan_to_num(same / diff, nan=np.inf)
+        assert np.allclose(cp._alpha, expected, rtol=1e-12, atol=1e-12, equal_nan=True)
+
+    def test_predict_batch_matches_sequential(self):
+        """``predict_batch`` (which shares the cached path) must be
+        bit-identical to the sequential ``predict`` loop."""
+        X, y = self._make_binary(40, seed=8, k=3)
+        cp = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+        for i in range(20, 40):
+            cp.learn_one(X[i], y[i])
+        Xb = X[:8]
+        state = cp.rnd_gen.bit_generator.state
+        batch = cp.predict_batch(Xb, epsilon=0.1, return_p_values=True)
+        cp.rnd_gen.bit_generator.state = state
+        for i, x in enumerate(Xb):
+            ref = cp.predict(x, epsilon=0.1, return_p_values=True)[1]
+            for lb in ref:
+                assert np.isclose(batch[i][1][lb], ref[lb], rtol=0, atol=0, equal_nan=True), (
+                    f"batch i={i} lb={lb}: {batch[i][1][lb]} != {ref[lb]}"
+                )
+
+    def test_order_invariance(self):
+        """The predictor must be permutation-invariant: building the same bag in
+        two different orders must yield bit-identical p-values."""
+        X, y = self._make_binary(60, seed=9, k=3)
+        cp1 = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+        cp1.learn_initial_training_set(X[:30], y[:30])
+        for i in range(30, 60):
+            cp1.learn_one(X[i], y[i])
+        idx = np.arange(59, -1, -1)  # reverse order
+        cp2 = ConformalNearestNeighboursClassifier(k=3, rnd_state=0)
+        cp2.learn_initial_training_set(X[idx[:30]], y[idx[:30]])
+        for i in range(30, 60):
+            cp2.learn_one(X[idx[i]], y[idx[i]])
+        state1 = cp1.rnd_gen.bit_generator.state
+        pv1 = cp1.predict(X[0], return_p_values=True)[1]
+        cp1.rnd_gen.bit_generator.state = state1
+        state2 = cp2.rnd_gen.bit_generator.state
+        pv2 = cp2.predict(X[0], return_p_values=True)[1]
+        cp2.rnd_gen.bit_generator.state = state2
+        for lb in pv1:
+            assert np.isclose(pv1[lb], pv2[lb], rtol=0, atol=0, equal_nan=True), (
+                f"order invariance lb={lb}: {pv1[lb]} != {pv2[lb]}"
+            )

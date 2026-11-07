@@ -6,6 +6,7 @@ from scipy.integrate import quad
 from scipy.special import eval_legendre, logsumexp
 
 from online_cp.martingale import (
+    STANDARD_GRID,
     CompositeLegendreJumper,
     IndependentTransitionProductLegendreJumper,
     OptimisticFTRLBarrierLegendreMartingale,
@@ -13,6 +14,7 @@ from online_cp.martingale import (
     SimpleLegendreJumper,
     VariationalLegendreJumper,
     compute_normalization_Z,
+    product_betting_value,
     shifted_legendre_poly,
 )
 
@@ -52,6 +54,64 @@ class TestNormalizationZ:
             assert np.isclose(Z_computed, Z_expected, atol=1e-12), (
                 f"eps=({eps1},{eps2},{eps3}): got {Z_computed}, expected {Z_expected}"
             )
+
+
+class TestProductBettingValue:
+    """Exercise the public ``product_betting_value`` utility.
+
+    ``product_betting_value(orders, eps, p, Z)`` evaluates
+    ``prod_k (1 + eps_k P_k(2p-1)) / Z(eps)``. The tests pin down:
+    * agreement with the closed-form single-order betting function,
+    * that normalising by a precomputed Z reproduces the Z=None path,
+    * that the result integrates to 1 over p in [0,1] (valid betting density).
+    """
+
+    def test_single_order_matches_closed_form(self):
+        """For one order k, f(p) = (1 + eps P_k(2p-1)) and Z=1."""
+        for k in [1, 2, 3]:
+            for eps in [-0.5, 0.0, 0.25, 0.5]:
+                for p in [0.0, 0.25, 0.5, 0.75, 1.0]:
+                    expected = 1.0 + eps * float(eval_legendre(k, 2.0 * p - 1.0))
+                    assert product_betting_value([k], [eps], p) == pytest.approx(expected, abs=1e-12)
+
+    def test_zero_epsilon_is_unit_density(self):
+        """All eps zero -> f(p) = 1 for every p (uniform betting)."""
+        orders = [1, 2, 3]
+        for p in [0.0, 0.3, 0.5, 0.7, 1.0]:
+            assert product_betting_value(orders, [0.0, 0.0, 0.0], p) == pytest.approx(1.0, abs=1e-12)
+
+    def test_precomputed_Z_matches_autocompute(self):
+        """Passing Z=compute_normalization_Z(...) must equal the Z=None path."""
+        orders = [1, 2, 3]
+        eps = [0.5, -0.25, 0.2]
+        Z = compute_normalization_Z(orders, eps)
+        for p in [0.1, 0.4, 0.5, 0.9]:
+            auto = product_betting_value(orders, eps, p)
+            manual = product_betting_value(orders, eps, p, Z=Z)
+            assert auto == pytest.approx(manual, rel=1e-12)
+
+    def test_normalized_density_integrates_to_one(self):
+        """A normalized betting function integrates to 1 over p in [0,1]."""
+        orders = [1, 2, 3]
+        eps = [0.5, -0.3, 0.2]
+        total, _ = quad(lambda p: product_betting_value(orders, eps, p), 0, 1, limit=200)
+        assert total == pytest.approx(1.0, abs=1e-3)
+
+
+class TestStandardGrid:
+    """The default Legendre epsilon grid is the documented E = {-1/2,-1/4,0,1/4,1/2}."""
+
+    def test_grid_is_documented_five_points(self):
+        assert tuple(STANDARD_GRID) == (-0.5, -0.25, 0.0, 0.25, 0.5)
+
+    def test_grid_is_symmetric_about_zero(self):
+        vals = np.asarray(STANDARD_GRID, dtype=float)
+        ascending = np.sort(vals)
+        assert np.allclose(ascending, -np.sort(vals)[::-1])
+        assert np.isclose(vals.sum(), 0.0, atol=1e-12)
+
+    def test_grid_values_all_in_closed_unit_interval(self):
+        assert all(-1.0 <= g <= 1.0 for g in STANDARD_GRID)
 
 
 class TestShiftedLegendrePoly:

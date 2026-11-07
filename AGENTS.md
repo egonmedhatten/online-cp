@@ -17,8 +17,13 @@ When assisting the user with mathematical reasoning, formal definitions, or draf
 
 **Before writing any code**, complete these steps in order:
 
-1. Read `.roadmap/README.md` to confirm the current priority and task scope.
-2. Read `.roadmap/REQUIREMENTS.md` for the relevant interface contract.
+1. If `.roadmap/README.md` exists, read it to confirm the current priority and
+   task scope. (Note: `.roadmap/` is gitignored and only present on the
+   maintainer's local machine. On a fresh checkout it will not exist — do not
+   treat its absence as an error; proceed without it.)
+2. If `.roadmap/REQUIREMENTS.md` exists, read it for the relevant interface
+   contract; otherwise defer to the conventions already established in the
+   existing source and test modules.
 3. Run `pytest tests/ -x` to establish a green baseline. Do not touch any source code until this passes.
 4. Read the source module relevant to the task.
 
@@ -29,7 +34,9 @@ When instructed to run tests, you must actually execute the command in the termi
 ---
 
 ## 1. The Mandatory API Contract
-Before writing or modifying any model code, you **must** read `.roadmap/REQUIREMENTS.md`.
+Before writing or modifying any model code, you **must** review the interface
+contract. If `.roadmap/REQUIREMENTS.md` is present, read it; if not (it is
+gitignored), derive the contract from the existing source and test modules.
 
 **You are strictly forbidden from changing method signatures** unless explicitly requested. Every model must adhere to the interface contracts defined in the requirements, specifically:
 - **Regressors**: `__init__`, `learn_initial_training_set`, `learn_one`, `predict`.
@@ -48,7 +55,8 @@ Before writing or modifying any model code, you **must** read `.roadmap/REQUIREM
 When adding a new conformal predictor or martingale:
 
 1. Create the class in the appropriate module (e.g., `regressors.py`, `martingale/legendre.py`)
-2. Follow the interface contract in `.roadmap/REQUIREMENTS.md`
+2. Follow the interface contract (in `.roadmap/REQUIREMENTS.md` if present,
+   otherwise as established by the existing models)
 3. Implement all required methods with correct return types
 4. Add to `__init__.py` exports and documentation
 
@@ -58,12 +66,14 @@ When fixing bugs:
 1. **First**, check if tests fail (`pytest tests/ -x`)
 2. If yes: Identify the failing test, reproduce locally, then fix
 3. If no: The bug may be latent — add a test case first, then fix
-4. Always consult `.roadmap/audit.md` for known issues in the affected module
+4. If `.roadmap/audit.md` exists, consult it for known issues in the affected
+   module (it is gitignored; treat its absence as no known issues)
 
 ### 2.3 Refactoring
 When refactoring (e.g., moving `_dev` classes to production):
 
-1. Read `.roadmap/agent_instructions.md` for architectural guidance
+1. If `.roadmap/agent_instructions.md` exists, read it for architectural
+   guidance
 2. Ensure backward compatibility for public APIs
 3. Update `__init__.py` exports and import paths
 4. Run full test suite before and after
@@ -73,7 +83,7 @@ When updating documentation:
 
 1. Edit docstrings with `>>>` examples for all public methods
 2. Add new classes to `docs/api/`
-3. Update `.roadmap/README.md` if the change affects priorities
+3. Update `.roadmap/README.md` if present and the change affects priorities
 
 ---
 
@@ -150,7 +160,7 @@ If you use `@njit`:
 
 A task is complete only when every item below is satisfied. Each item maps to a concrete, verifiable action.
 
-1. **API Audit**: Cross-reference `.roadmap/REQUIREMENTS.md` and confirm every method signature matches exactly.
+1. **API Audit**: Cross-reference the interface contract (`.roadmap/REQUIREMENTS.md` if present, else the existing source) and confirm every method signature matches exactly.
 2. **Functional Pass**: Run `pytest tests/ -x` and confirm zero failures.
 3. **Adversarial Pass**: Run `pytest tests/test_properties_adversarial.py -k <ClassName>` and confirm it passes.
 4. **Symmetry Verified**: Confirm the model is order-invariant — permuting the training data must not change the prediction.

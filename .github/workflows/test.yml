@@ -8,13 +8,33 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The package declares requires-python = ">=3.9"; cover the minimum,
+        # the documented .python-version, and the newest stable.
+        python-version: ["3.9", "3.11", "3.12"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python-version }}"
       - name: Install dependencies
         run: uv sync --extra ci
+      - name: "Guard - dev (secret research) files must remain untracked"
+        run: |
+          # `*_dev.py` files are gitignored by design. If any get committed,
+          # fail immediately so the leak is caught at PR time, not on PyPI.
+          if git ls-files 'src/online_cp/**/*_dev.py' 'tests/**/*_dev.py' | grep -q .; then
+            echo "ERROR: gitignored _dev (development) files are tracked:"
+            git ls-files 'src/online_cp/**/*_dev.py' 'tests/**/*_dev.py'
+            exit 1
+          fi
+          echo "OK: no _dev files tracked"
       - name: Parse libraries and run doctests (./scripts/run-modules)
         run: uv run ./scripts/run-modules
       - name: Lint (ruff)
@@ -30,6 +50,12 @@ jobs:
     # Heavy statistical-validity lane: nightly schedule or manual dispatch only.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # Heavy statistical-validity lane: nightly schedule or manual dispatch only.
+    # Measured wall time is ~15 min on a standard runner (the expensive
+    # kernel-ridge / Mondrian-forest / Mondrian-CPS tests are held at their
+    # original stream count; see tests/test_statistical.py). 45 min gives a
+    # comfortable margin over a cold numba-JIT run while bounding a hang.
+    timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

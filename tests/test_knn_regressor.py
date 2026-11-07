@@ -194,6 +194,52 @@ class TestConformalNearestNeighboursRegressor:
         coverage = covered / n_test
         assert coverage >= (1 - epsilon) - 0.1, f"Coverage {coverage:.3f} too low"
 
+    def test_asymmetric_distance_func_kernel_style(self, linear_dataset_2d):
+        """A distance function that is *not* symmetric in its argument roles
+        (kernel-induced style: it requires ``y`` to be a single point) must work
+        through ``learn_one`` and ``predict``.
+
+        This guards the §7.5 refactor: the on-demand single-row distance
+        computation must call ``distance_func(X, x_i)`` (matrix, single point),
+        the same order the rest of the class uses.  A transposed
+        ``distance_func(x_i, X)`` call would break such a function.
+        """
+        X, y = linear_dataset_2d
+
+        def gaussian_kernel(Xq, y=None, sigma=1.0):
+            # Kernel-induced distance for a Gaussian kernel K(a,b)=exp(-||a-b||^2/2s^2).
+            # Mirrors kernel_induced_distance: y must be a SINGLE point when given,
+            # and Kyy is obtained via kernel(y).item() -- which raises if y is a
+            # matrix.  This asymmetry is what the §7.5 refactor must respect.
+            from scipy.spatial.distance import cdist
+
+            Xq = np.atleast_2d(Xq)
+            if y is None:
+                return np.exp(-cdist(Xq, Xq) ** 2 / (2 * sigma**2))
+            y = np.atleast_2d(y)
+            k_cross = np.exp(-cdist(Xq, y) ** 2 / (2 * sigma**2)).ravel()
+            assert y.shape[0] == 1, "this kernel-style distance requires a single point as y"
+            Kyy = float(np.exp(0.0))  # K(y, y) == 1.0 for a valid kernel
+            diag_X = np.ones(Xq.shape[0])  # K(Xi, Xi) == 1.0 for a valid kernel
+            D_sq = diag_X - 2 * k_cross + Kyy
+            return np.sqrt(np.maximum(D_sq, 0.0)).reshape(-1, 1)
+
+        epsilon = 0.1
+        cp = ConformalNearestNeighboursRegressor(k=3, distance_func=gaussian_kernel, rnd_state=0, epsilon=epsilon)
+        cp.learn_initial_training_set(X[:30], y[:30])
+
+        covered = 0
+        n_test = 50
+        for obj, lab in zip(X[30 : 30 + n_test], y[30 : 30 + n_test]):
+            Gamma = cp.predict(obj)
+            covered += int(lab in Gamma)
+            cp.learn_one(obj, lab)
+
+        # Finite, valid intervals throughout (the asymmetric distance must not
+        # corrupt the caches).
+        assert np.isfinite(Gamma.lower) and np.isfinite(Gamma.upper)
+        assert covered >= (1 - epsilon) - 0.1, f"Coverage {covered / n_test:.3f} too low"
+
     def test_invalid_aggregation(self):
         """Should raise ValueError for invalid aggregation."""
         with pytest.raises(ValueError, match="aggregation"):
@@ -433,3 +479,106 @@ class TestWarmUpReverseNeighbourDetection:
                 f"n={n_init}, trial={trial}, bounds={bounds}, eps={eps}: "
                 f"upper {g.upper} != {hi}"
             )
+
+
+class TestSection75OptimalStep:
+    """The §7.5 optimization: ``learn_one`` must not materialise the full
+    ``n x n`` distance matrix in the non-pruned regime, and its per-step cost
+    must be sub-quadratic in ``n``.
+
+    The internal cache is ``_D_cache``; the public ``D`` property materialises
+    it on demand.  A pure streaming ``learn_one`` loop (no pruning, no
+    ``return_update``) that never reads ``self.D`` must keep ``_D_cache``
+    ``None`` throughout, which is the observable signature of the ``O(n d + n)``
+    step (the dense-matrix ``O(n^2)`` scan has been removed).
+    """
+
+    def test_matrix_not_maintained_in_pure_stream(self, nonlinear_dataset):
+        """A non-pruned streaming loop must never build the full matrix."""
+        X, y = nonlinear_dataset
+        cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+        # Cold start does not maintain the matrix in the non-pruned regime.
+        assert cp._D_cache is None
+        for i in range(20, 80):
+            cp.predict(X[i], epsilon=0.1)  # no return_update
+            cp.learn_one(X[i], y[i])
+        # Still no full matrix after a long stream.
+        assert cp._D_cache is None
+
+    def test_pruning_maintains_matrix(self):
+        """With stream-pruning active the full matrix *is* maintained (the
+        eviction path needs it)."""
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(40, 2))
+        y = rng.normal(size=40)
+        cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0, pruning="reservoir", budget=10)
+        cp.learn_initial_training_set(X[:20], y[:20])
+        assert cp._D_cache is not None
+        for i in range(20, 40):
+            cp.predict(X[i], epsilon=0.1)
+            cp.learn_one(X[i], y[i])
+        assert cp._D_cache is not None
+
+    def test_predict_return_update_still_provides_matrix(self, nonlinear_dataset):
+        """``return_update=True`` must still hand back a full augmented matrix
+        even in the non-pruned regime (the contract is unchanged)."""
+        X, y = nonlinear_dataset
+        cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
+        cp.learn_initial_training_set(X[:20], y[:20])
+        _, precomputed = cp.predict(X[20], epsilon=0.1, return_update=True)
+        assert "D" in precomputed
+        assert precomputed["D"].shape == (21, 21)
+        # Feeding it back to learn_one must be bit-identical to the no-precompute
+        # path.
+        cp2 = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
+        cp2.learn_initial_training_set(X[:20], y[:20])
+        cp.learn_one(X[20], y[20], precomputed=precomputed)
+        cp2.learn_one(X[20], y[20])
+        assert np.allclose(cp._a_const, cp2._a_const, rtol=1e-12, atol=1e-12, equal_nan=True)
+        assert np.allclose(cp._kth_distances, cp2._kth_distances, rtol=1e-12, atol=1e-12, equal_nan=True)
+
+    def test_public_D_property_materialises_on_demand(self, nonlinear_dataset):
+        """Reading the public ``D`` property materialises the matrix once; the
+        value must equal what a from-scratch fit would produce."""
+        X, y = nonlinear_dataset
+        cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
+        cp.learn_initial_training_set(X[:30], y[:30])
+        for i in range(30, 50):
+            cp.learn_one(X[i], y[i])
+        assert cp._D_cache is None  # not built during streaming
+        D = cp.D  # now materialised
+        assert D is not None and D.shape == (50, 50)
+        assert cp._D_cache is not None
+        # BLAS distance computation is non-deterministic at the 1e-12 level
+        # under thread load, so use a relaxed tolerance.
+        expected = cp.distance_func(cp.X)
+        assert np.allclose(D, expected, atol=1e-9)
+
+    def test_step_cost_subquadratic(self, nonlinear_dataset):
+        """The per-step ``learn_one`` cost must not grow quadratically.  We
+        compare the doubling ratio of per-step time: an ``O(n^2)`` step gives a
+        ratio ~4 when ``n`` doubles; an ``O(n)`` step gives a ratio ~2.  We allow
+        generous headroom but assert the ratio is comfortably below the
+        quadratic threshold (and that cost at 2x is below the cost at 4x, i.e.
+        no superlinear blowup)."""
+        import time
+
+        X, y = nonlinear_dataset
+
+        def per_step(n):
+            cp = ConformalNearestNeighboursRegressor(k=3, rnd_state=0)
+            cp.learn_initial_training_set(X[:20], y[:20])
+            t0 = time.perf_counter()
+            for i in range(20, n):
+                cp.learn_one(X[i], y[i])
+            return (time.perf_counter() - t0) / (n - 20)
+
+        c1, c2 = per_step(80), per_step(160)
+        # An O(n) step gives ratio ~2 on doubling; an O(n^2) step gives ~4.
+        # Allow headroom for timing noise under thread contention, but stay
+        # comfortably below the quadratic bound.
+        assert c2 / c1 < 3.5, (
+            f"per-step cost ratio {c2 / c1:.2f} when doubling n is close to the "
+            f"quadratic bound of 4 -- the O(n^2) scan is back."
+        )

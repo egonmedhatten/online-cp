@@ -341,8 +341,26 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
 
         self.y = np.empty(0)
         self.X = None
-        self.D = None
+        self._D_cache = None
         self._label_indices = {}
+
+        # --- Test-free per-point score cache (Section 7.5 speedup) ---
+        # same_d[i] / diff_d[i] : aggregated k-nearest same-label / different-label
+        #   distances of point i *excluding the test point* (used to form
+        #   alpha[i] = same_d[i] / diff_d[i]).
+        # same_kth[i] / diff_kth[i] : the k-th (or last) such distance, used to
+        #   detect which training points are semi-neighbours of the test point.
+        # same_count[i] / diff_count[i] : number of available same/diff neighbours
+        #   (to handle the warm-up regime n < k+1 where every point is a
+        #   semi-neighbour).
+        # _alpha[i] : same_d[i] / diff_d[i] (the per-point score, test-free).
+        self._same_d = None
+        self._diff_d = None
+        self._same_kth = None
+        self._diff_kth = None
+        self._same_count = None
+        self._diff_count = None
+        self._alpha = None
 
         self.verbose = verbose
         self.rnd_state = rnd_state
@@ -382,6 +400,46 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             dists = cdist(X, y, metric=self.distance)
         return dists
 
+    @property
+    def D(self):
+        """
+        n x n pairwise distance matrix, cached lazily (Section 7.5 speedup).
+
+        Built on first access (typically during ``predict``); kept valid across
+        streaming ``learn_one`` calls because the matrix is only used read-only
+        there to refresh the semi-neighbour scores.
+        """
+        if self._D_cache is None:
+            if self.X is None:
+                self._D_cache = np.empty((0, 0))
+            else:
+                self._D_cache = self.distance_func(self.X)
+        return self._D_cache
+
+    @D.setter
+    def D(self, value):
+        """Set the distance-matrix cache (used by :meth:`_set_state` on load)."""
+        self._D_cache = value
+
+    def _ensure_D(self):
+        """Materialise ``self.D`` if not already cached."""
+        _ = self.D
+
+    def _ensure_cache(self):
+        """Build the per-point score cache if it has not been populated yet.
+
+        The cache is derived state (not persisted) and is (re)built lazily
+        after a :meth:`load` (where only ``D`` and the label index are
+        restored) or before the first prediction on a fresh model.
+        """
+        if self.X is not None and self.X.shape[0] > 0:
+            if self._alpha is None or self._alpha.shape[0] != self.X.shape[0]:
+                self._find_nearest_distances(
+                    D=self._D_cache if self._D_cache is not None else self.D,
+                    label_indices=self._label_indices,
+                    update_cache=True,
+                )
+
     def learn_initial_training_set(self, X, y):
         """Batch-learn an initial training set.
 
@@ -399,7 +457,7 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         if X.shape[0] > 0:
             self.X = X
             self.y = y
-            self.D = self.distance_func(X)
+            self._D_cache = self.distance_func(X)
             self._label_indices = self._build_label_indices(y)
             if self._label_space_fixed:
                 unknown = set(np.unique(y)) - set(self.label_space)
@@ -423,8 +481,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                         keep = np.arange(n - self.budget, n)
                     self.X = self.X[keep]
                     self.y = self.y[keep]
-                    self.D = _evict_masked_distance(self.D, keep)
+                    self._D_cache = _evict_masked_distance(self._D_cache, keep)
                     self._label_indices = self._build_label_indices(self.y)
+
+        # Section 7.5: build the per-point score cache for the initial bag. The
+        # initial bag is set from scratch (and may be pruned), so invalidate any
+        # prior cache first; _refresh_cache then rebuilds it from the current D.
+        self._alpha = None
+        self._refresh_cache()
 
     @staticmethod
     def update_distance_matrix(D, d):
@@ -450,22 +514,47 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             extended[label] = np.array([new_index], dtype=int)
         return extended
 
-    def _find_nearest_distances(self, D, y=None, label_indices=None):
+    def _find_nearest_distances(self, D=None, y=None, label_indices=None, update_cache=False):
         """Vectorized nearest same/different class distances for any k.
 
         Aggregates the k nearest distances using self.aggregation ('mean' or 'median').
         This extends the 1-NN nonconformity measure of ALRW2 §2.3 to k-NN.
+
+        Parameters
+        ----------
+        D : ndarray of shape (n, n), optional
+            Distance matrix. If None, the cached ``self.D`` is used.
+        y : array-like, optional
+            Labels. Only used if ``label_indices`` is also None.
+        label_indices : dict, optional
+            Mapping of label -> index array. If None, built from ``y`` (or
+            ``self.y`` if ``y`` is None).
+        update_cache : bool, default False
+            Store the per-point score cache (same/diff distances, k-th
+            distances, neighbour counts, and the alpha values) as a side
+            effect. This should only be ``True`` when ``D`` is the *test-free*
+            n x n matrix and ``label_indices`` is the training label index;
+            passing an augmented (n+1)-row matrix would silently corrupt the
+            cache with an extra row.
         """
+        if D is None:
+            D = self.D
+        if label_indices is None:
+            if y is None:
+                y = self.y
+            if y is None or len(y) == 0:
+                raise ValueError("Either y or label_indices must be provided")
+            label_indices = self._build_label_indices(y)
+
         n = D.shape[0]
         k = self.k
         agg_func = np.mean if self.aggregation == "mean" else np.median
         same_label_distances = np.full(n, np.inf)
         different_label_distances = np.full(n, np.inf)
-
-        if label_indices is None:
-            if y is None:
-                raise ValueError("Either y or label_indices must be provided")
-            label_indices = self._build_label_indices(y)
+        same_kth = np.full(n, np.inf)
+        diff_kth = np.full(n, np.inf)
+        same_count = np.zeros(n, dtype=int)
+        diff_count = np.zeros(n, dtype=int)
 
         all_idx = np.arange(n)
         for idx in label_indices.values():
@@ -478,21 +567,139 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 D_sub = D[np.ix_(idx, idx)].copy()
                 np.fill_diagonal(D_sub, np.inf)
                 m = len(idx) - 1  # available neighbors (excluding self)
+                same_count[idx] = m
                 if m >= k:
-                    same_label_distances[idx] = agg_func(np.partition(D_sub, k - 1, axis=1)[:, :k], axis=1)
+                    k_smallest = np.partition(D_sub, k - 1, axis=1)[:, :k]
+                    same_label_distances[idx] = agg_func(k_smallest, axis=1)
+                    same_kth[idx] = np.sort(k_smallest, axis=1)[:, k - 1]
                 else:
                     # Fewer than k same-class neighbors: use all available
-                    same_label_distances[idx] = agg_func(np.sort(D_sub, axis=1)[:, :m], axis=1)
+                    sorted_all = np.sort(D_sub, axis=1)
+                    same_label_distances[idx] = agg_func(sorted_all[:, :m], axis=1)
+                    same_kth[idx] = sorted_all[:, m - 1]
 
             # Different-class: for points OF this label, k nearest among all other labels
             if len(idx) > 0 and len(not_idx) > 0:
                 D_sub = D[np.ix_(idx, not_idx)]
+                diff_count[idx] = len(not_idx)
                 if len(not_idx) >= k:
-                    different_label_distances[idx] = agg_func(np.partition(D_sub, k - 1, axis=1)[:, :k], axis=1)
+                    k_smallest = np.partition(D_sub, k - 1, axis=1)[:, :k]
+                    different_label_distances[idx] = agg_func(k_smallest, axis=1)
+                    diff_kth[idx] = np.sort(k_smallest, axis=1)[:, k - 1]
                 else:
+                    sorted_all = np.sort(D_sub, axis=1)
                     different_label_distances[idx] = agg_func(D_sub, axis=1)
+                    diff_kth[idx] = sorted_all[:, len(not_idx) - 1]
+
+        if update_cache:
+            self._same_d = same_label_distances
+            self._diff_d = different_label_distances
+            self._same_kth = same_kth
+            self._diff_kth = diff_kth
+            self._same_count = same_count
+            self._diff_count = diff_count
+            # A zero different-label distance (a duplicate example / a label with
+            # no distinct neighbours) legitimately yields +inf; nan_to_num maps
+            # the resulting NaN to inf. Suppress the expected divide warning.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                self._alpha = np.nan_to_num(np.divide(
+                    same_label_distances, different_label_distances,
+                    out=np.full(n, np.inf), where=different_label_distances != 0,
+                ), nan=np.inf)
 
         return same_label_distances, different_label_distances
+
+    def _augmented_alpha(self, d: NDArray[np.floating[Any]], l: Any) -> NDArray[np.floating[Any]]:
+        """Per-point alpha vector for hypothesised label ``l`` (Section 7.5).
+
+        Combines the test-free per-point cache with the single distance row ``d``
+        from the test point, recomputing only the *semi-neighbours* whose
+        same/different k-neighbour set the test point enters. The result is
+        bit-identical to the dense-matrix path of :meth:`_find_nearest_distances`
+        applied to the augmented (n+1)-row matrix, but costs
+        ``O(n d + n + S k)`` (S = number of semi-neighbours) instead of
+        ``O(n^2)`` per hypothesised label.
+
+        Parameters
+        ----------
+        d : ndarray of shape (n,)
+            Distance from the test point to each stored example (row ``n`` of the
+            augmented distance matrix, excluding the test point itself).
+        l : hashable
+            Hypothesised label of the test point.
+
+        Returns
+        -------
+        alpha : ndarray of shape (n + 1,)
+            Per-point score for every stored example plus the test point (last
+            element), under the hypothesis that the test point has label ``l``.
+        """
+        d = np.asarray(d).reshape(-1)
+        n = d.shape[0]
+        k = self.k
+        agg_func = np.mean if self.aggregation == "mean" else np.median
+        D = self.D  # test-free n x n matrix (lazy)
+        alpha = self._alpha.copy()
+
+        for L, idx in self._label_indices.items():
+            if len(idx) == 0:
+                continue
+            d_i = d[idx]
+            if L == l:
+                # Test point joins the SAME-label set of every point in ``idx``.
+                # Semi-neighbour when the test point is closer than the cached
+                # k-th same distance, or when there were fewer than k neighbours
+                # (warm-up / single-point: it always fits). A tie (d_i == kth)
+                # must be recomputed so the selected k set matches the reference.
+                semi = (self._same_count[idx] < k) | (d_i < self._same_kth[idx])
+                semi = semi | (d_i == self._same_kth[idx])
+                new_same = self._same_d[idx].copy()
+                for j in np.flatnonzero(semi):
+                    ii = idx[j]
+                    row = D[ii, idx]            # within-label distances
+                    row = np.delete(row, j)     # drop self
+                    v = np.sort(np.concatenate([row, [d_i[j]]]))
+                    new_same[j] = agg_func(v[: min(k, len(v))])
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    alpha[idx] = np.divide(
+                        new_same, self._diff_d[idx],
+                        out=np.full(len(idx), np.inf), where=self._diff_d[idx] != 0,
+                    )
+            else:
+                # Test point joins the DIFFERENT-label set of every point in ``idx``.
+                not_idx = np.setdiff1d(np.arange(n), idx)
+                if len(not_idx) > 0:
+                    semi = (self._diff_count[idx] < k) | (d_i < self._diff_kth[idx])
+                    semi = semi | (d_i == self._diff_kth[idx])
+                    new_diff = self._diff_d[idx].copy()
+                    for j in np.flatnonzero(semi):
+                        ii = idx[j]
+                        row = D[ii, not_idx]
+                        v = np.sort(np.concatenate([row, [d_i[j]]]))
+                        new_diff[j] = agg_func(v[: min(k, len(v))])
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        alpha[idx] = np.divide(
+                            self._same_d[idx], new_diff,
+                            out=np.full(len(idx), np.inf), where=new_diff != 0,
+                        )
+
+        # The test point's own score (hypothesised label l).
+        same_idx = self._label_indices.get(l, np.array([], dtype=int))
+        not_idx = np.setdiff1d(np.arange(n), same_idx)
+        same_dists = d[same_idx] if len(same_idx) > 0 else np.array([], dtype=float)
+        diff_dists = d[not_idx] if len(not_idx) > 0 else np.array([], dtype=float)
+        if len(same_dists) > 0:
+            test_same = agg_func(np.sort(same_dists)[: min(k, len(same_dists))])
+        else:
+            test_same = np.inf
+        if len(diff_dists) > 0:
+            test_diff = agg_func(np.sort(diff_dists)[: min(k, len(diff_dists))])
+        else:
+            test_diff = np.inf
+        test_alpha = test_same / test_diff if test_diff != 0 else np.inf
+
+        alpha = np.concatenate([alpha, [test_alpha]])
+        return np.nan_to_num(alpha, nan=np.inf)
 
     def learn_one(
         self, x: NDArray[np.floating[Any]], y: Any, precomputed: NDArray[np.floating[Any]] | None = None
@@ -549,12 +756,12 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         # Learn object
         if self.X is None:
             self.X = x.reshape(1, -1)
-            self.D = self.distance_func(self.X)
+            self._D_cache = self.distance_func(self.X)
         else:
             if precomputed is None:
                 d = self.distance_func(self.X, x)
-                precomputed = self.update_distance_matrix(self.D, d)
-            self.D = precomputed
+                precomputed = self.update_distance_matrix(self._D_cache, d)
+            self._D_cache = precomputed
             self.X = np.append(self.X, x.reshape(1, -1), axis=0)
 
         # If an existing position was evicted, drop it (row/col i of D, row i of
@@ -562,10 +769,133 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         # appended example (last position) is kept; the bag is back at `budget`.
         if eviction >= 0:
             i = eviction
-            self.D = _evict_distance_matrix(self.D, i)
+            self._D_cache = _evict_distance_matrix(self._D_cache, i)
             self.X = np.delete(self.X, i, axis=0)
             self.y = np.delete(self.y, i, axis=0)
             self._label_indices = self._build_label_indices(self.y)
+            # A pruning eviction changes *which* examples are in the bag (not just
+            # how many), so the per-point score cache is stale regardless of size;
+            # invalidate it so _refresh_cache rebuilds from scratch.
+            self._alpha = None
+
+        # Section 7.5: refresh the per-point score cache for the new example
+        # (semi-neighbour refresh; rebuilds from scratch if the cache is empty
+        # or invalidated by pruning).
+        self._refresh_cache()
+
+    def _refresh_cache(self):
+        """Populate/refresh the per-point score cache after a state change.
+
+        Builds the cache from scratch when it is empty (or its size no longer
+        matches, e.g. after a pruning eviction), otherwise refreshes only the
+        *semi-neighbours* of the most-recently-added example in O(S k) rather
+        than O(n^2).
+        """
+        if self.X is None or self.X.shape[0] == 0:
+            self._alpha = None
+            return
+        if self._alpha is None or self._alpha.shape[0] != self.X.shape[0]:
+            self._find_nearest_distances(
+                D=self._D_cache, label_indices=self._label_indices, update_cache=True
+            )
+            return
+
+        n = self.X.shape[0]
+        k = self.k
+        agg_func = np.mean if self.aggregation == "mean" else np.median
+        D = self._D_cache
+        d = D[-1, :-1]
+        new_y = self.y[-1]
+
+        alpha = np.empty(n, dtype=float)
+        same_d = np.empty(n, dtype=float)
+        diff_d = np.empty(n, dtype=float)
+        same_kth = np.empty(n, dtype=float)
+        diff_kth = np.empty(n, dtype=float)
+        same_count = np.empty(n, dtype=int)
+        diff_count = np.empty(n, dtype=int)
+        alpha[:-1] = self._alpha
+        same_d[:-1] = self._same_d
+        diff_d[:-1] = self._diff_d
+        same_kth[:-1] = self._same_kth
+        diff_kth[:-1] = self._diff_kth
+        same_count[:-1] = self._same_count
+        diff_count[:-1] = self._diff_count
+
+        for L, idx in self._label_indices.items():
+            if len(idx) == 0:
+                continue
+            idx = idx[idx < n - 1]
+            if len(idx) == 0:
+                continue
+            d_i = d[idx]
+            # The new example is one extra neighbour for every existing point:
+            # same-label for points sharing its label, different-label otherwise.
+            if L == new_y:
+                same_count[idx] += 1
+            else:
+                diff_count[idx] += 1
+            if L == new_y:
+                if len(idx) > 1:
+                    semi = (self._same_count[idx] < k) | (d_i < self._same_kth[idx])
+                    semi = semi | (d_i == self._same_kth[idx])
+                else:
+                    semi = np.ones(len(idx), dtype=bool)
+                new_same = same_d[idx].copy()
+                new_kth = same_kth[idx].copy()
+                for j in np.flatnonzero(semi):
+                    ii = idx[j]
+                    row = np.delete(D[ii, idx], j)
+                    v = np.sort(np.concatenate([row, [d_i[j]]]))
+                    m = len(v)
+                    new_same[j] = agg_func(v[: min(k, m)])
+                    new_kth[j] = v[min(k, m) - 1]
+                same_d[idx] = new_same
+                same_kth[idx] = new_kth
+            else:
+                not_idx = np.setdiff1d(np.arange(n - 1), idx)
+                if len(not_idx) > 0:
+                    semi = (self._diff_count[idx] < k) | (d_i < self._diff_kth[idx])
+                    semi = semi | (d_i == self._diff_kth[idx])
+                    new_diff = diff_d[idx].copy()
+                    new_kth = diff_kth[idx].copy()
+                    for j in np.flatnonzero(semi):
+                        ii = idx[j]
+                        row = D[ii, not_idx]
+                        v = np.sort(np.concatenate([row, [d_i[j]]]))
+                        m = len(v)
+                        new_diff[j] = agg_func(v[: min(k, m)])
+                        new_kth[j] = v[min(k, m) - 1]
+                    diff_d[idx] = new_diff
+                    diff_kth[idx] = new_kth
+
+        # The new example's own score.
+        same_idx = self._label_indices.get(new_y, np.array([], dtype=int))
+        not_idx = np.setdiff1d(np.arange(n - 1), same_idx)
+        same_dists = d[same_idx] if len(same_idx) > 0 else np.array([], dtype=float)
+        diff_dists = d[not_idx] if len(not_idx) > 0 else np.array([], dtype=float)
+        if len(same_dists) > 0:
+            v = np.sort(same_dists)
+            new_same, new_kth = agg_func(v[: min(k, len(v))]), v[min(k, len(v)) - 1]
+        else:
+            new_same, new_kth = np.inf, np.inf
+        if len(diff_dists) > 0:
+            v = np.sort(diff_dists)
+            new_diff, new_kth2 = agg_func(v[: min(k, len(v))]), v[min(k, len(v)) - 1]
+        else:
+            new_diff, new_kth2 = np.inf, np.inf
+        same_d[-1], diff_d[-1] = new_same, new_diff
+        same_kth[-1], diff_kth[-1] = new_kth, new_kth2
+        same_count[-1] = len(same_dists)
+        diff_count[-1] = len(diff_dists)
+
+        self._same_d, self._diff_d = same_d, diff_d
+        self._same_kth, self._diff_kth = same_kth, diff_kth
+        self._same_count, self._diff_count = same_count, diff_count
+        with np.errstate(divide="ignore", invalid="ignore"):
+            self._alpha = np.nan_to_num(np.divide(
+                same_d, diff_d, out=np.full(n, np.inf), where=diff_d != 0,
+            ), nan=np.inf)
 
     def compute_p_value(
         self, x: NDArray[np.floating[Any]], y: Any, return_update: bool = False
@@ -594,13 +924,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         tau = self.rnd_gen.uniform(0, 1)
 
         if self.y.shape[0] >= 1:
+            self._ensure_cache()
             d = self.distance_func(self.X, x)
-            D = self.update_distance_matrix(self.D, d)
-            label_indices = self._extend_label_indices(self._label_indices, y, D.shape[0] - 1)
-            same_label_distances, different_label_distances = self._find_nearest_distances(
-                D, label_indices=label_indices
-            )
-            Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+            D = None
+            if return_update:
+                D = self.update_distance_matrix(self.D, d)
+            # Section 7.5 speedup: use the cached per-point scores (semi-neighbour
+            # refresh) instead of recomputing the full n x n matrix for one label.
+            Alpha = self._augmented_alpha(d, y)
             p_value = self._compute_p_value(Alpha, tau, "nonconformity")
         else:
             D = None
@@ -659,44 +990,31 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
             return (Gamma, {}) if return_p_values else Gamma
 
         if self.y.shape[0] >= 1:
+            self._ensure_cache()
             tic = time.time()
             d = self.distance_func(self.X, x)
-            D = self.update_distance_matrix(self.D, d)
+            # Section 7.5 speedup: the per-point alpha vector for each hypothesised
+            # label is built from the test-free cache plus the single distance row
+            # ``d`` (O(n d + n + S k) per label), instead of recomputing the full
+            # n x n nonconformity matrix from scratch (O(n^2) per label). The
+            # augmented matrix is only materialised when the caller needs it.
+            D = None
+            if return_update:
+                D = self.update_distance_matrix(self.D, d)
             time_update_D = time.time() - tic
-            base_label_indices = self._label_indices
-            test_index = D.shape[0] - 1
 
             tic = time.time()
             if self.n_jobs is not None:
 
                 def process_label(label):
-                    label_indices = self._extend_label_indices(base_label_indices, label, test_index)
-                    same_label_distances, different_label_distances = self._find_nearest_distances(
-                        D, label_indices=label_indices
-                    )
-
-                    # Intentional division: a zero different-label distance (a
-                    # duplicate test point / label with no distinct neighbours)
-                    # legitimately yields +inf, which nan_to_num maps to inf.
-                    # Suppress the expected divide-by-zero warning.
-                    with np.errstate(divide="ignore", invalid="ignore"):
-                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    Alpha = self._augmented_alpha(d, label)
                     return label, self._compute_p_value(Alpha, tau, "nonconformity")
 
                 results = Parallel(n_jobs=self.n_jobs)(delayed(process_label)(label) for label in self.label_space)
                 p_values = dict(results)
             else:
                 for label in self.label_space:
-                    label_indices = self._extend_label_indices(base_label_indices, label, test_index)
-
-                    same_label_distances, different_label_distances = self._find_nearest_distances(
-                        D, label_indices=label_indices
-                    )
-
-                    # Intentional division (see parallel branch above): a zero
-                    # different-label distance legitimately yields +inf.
-                    with np.errstate(divide="ignore", invalid="ignore"):
-                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    Alpha = self._augmented_alpha(d, label)
                     p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
             time_compute_p_values = time.time() - tic
 
@@ -770,6 +1088,10 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
         # would compute via self.distance_func(self.X, X[i]).
         d_batch = self.distance_func(X, self.X) if self.X is not None else None
 
+        # Section 7.5: ensure the per-point score cache is built (e.g. after a
+        # load) before the loop below uses it.
+        self._ensure_cache()
+
         results = []
         for i in range(m):
             # Draw tau per test point, in the same RNG order as the sequential
@@ -789,17 +1111,14 @@ class ConformalNearestNeighboursClassifier(ConformalClassifier):
                 continue
 
             if self.y.shape[0] >= 1:
-                # Build the augmented D for this test point from row i of d_batch.
+                # Section 7.5 speedup: use the cached per-point scores (semi-neighbour
+                # refresh) for each hypothesised label, exactly as predict() does. The
+                # distance row d_batch[i] is bit-identical to the per-point cdist that
+                # predict(X[i]) would compute, so each result stays bit-identical to
+                # the sequential loop while avoiding the per-point matrix build.
                 d = d_batch[i]
-                D = self.update_distance_matrix(self.D, d)
-                test_index = D.shape[0] - 1
                 for label in self.label_space:
-                    label_indices = self._extend_label_indices(self._label_indices, label, test_index)
-                    same_label_distances, different_label_distances = self._find_nearest_distances(
-                        D, label_indices=label_indices
-                    )
-                    with np.errstate(divide="ignore", invalid="ignore"):
-                        Alpha = np.nan_to_num(same_label_distances / different_label_distances, nan=np.inf)
+                    Alpha = self._augmented_alpha(d, label)
                     p_values[label] = self._compute_p_value(Alpha, tau, "nonconformity")
                 Gamma = self._compute_Gamma(p_values, epsilon)
             else:

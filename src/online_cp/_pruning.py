@@ -91,7 +91,6 @@ class PruningStrategy:
     ...         if n_seen <= self.budget:
     ...             return -1
     ...         return (n_seen // self.period) % self.budget
-    # Pass the intended budget and any RNG; the model overrides both.
     >>> strat = EveryKth(1000, np.random.default_rng(0), period=3)
     """
 

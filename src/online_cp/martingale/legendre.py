@@ -334,7 +334,7 @@ class SimpleLegendreJumper(ConformalTestMartingale):
     >>> slj = SimpleLegendreJumper(order=1, J=0.01)
     >>> for _ in range(10):
     ...     slj.update(0.01)
-    >>> slj.M > 1.0
+    >>> bool(slj.M > 1.0)
     True
     """
 
@@ -482,7 +482,7 @@ class ProductLegendreJumper(ConformalTestMartingale):
     >>> plj = ProductLegendreJumper(orders=[1, 2], J=0.01)
     >>> for _ in range(10):
     ...     plj.update(0.01)
-    >>> plj.M > 1.0
+    >>> bool(plj.M > 1.0)
     True
     """
 
@@ -684,7 +684,7 @@ class IndependentTransitionProductLegendreJumper(ConformalTestMartingale):
     >>> itplj = IndependentTransitionProductLegendreJumper(orders=[1, 2], J=0.01)
     >>> for _ in range(10):
     ...     itplj.update(0.01)
-    >>> itplj.M > 1.0
+    >>> bool(itplj.M > 1.0)
     True
     """
 
@@ -915,7 +915,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
     >>> vlj = VariationalLegendreJumper(orders=[1, 2], J=0.01)
     >>> for _ in range(10):
     ...     vlj.update(0.01)
-    >>> vlj.M > 1.0
+    >>> bool(vlj.M > 1.0)
     True
     """
 
@@ -1203,7 +1203,7 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
     >>> oftrl = OptimisticFTRLBarrierLegendreMartingale(orders=[1, 2], eta=0.25)
     >>> for _ in range(10):
     ...     oftrl.update(0.01)
-    >>> oftrl.M > 1.0
+    >>> bool(oftrl.M > 1.0)
     True
     """
 
@@ -1336,14 +1336,14 @@ class CompositeLegendreJumper(ConformalTestMartingale):
     >>> clj = CompositeLegendreJumper()
     >>> for _ in range(5):
     ...     clj.update(0.01)
-    >>> clj.M > 1.0
+    >>> bool(clj.M > 1.0)
     True
 
     >>> from online_cp.martingale import VariationalLegendreJumper
     >>> clj = CompositeLegendreJumper(base_class=VariationalLegendreJumper, orders=[1, 2])
     >>> for _ in range(5):
     ...     clj.update(0.01)
-    >>> clj.M > 1.0
+    >>> bool(clj.M > 1.0)
     True
     """
 

@@ -66,11 +66,29 @@ from .conftest import (
 
 BINOM_ALPHA = 0.01  # significance level for every binomial gate below
 
+# ``n_runs`` choices below are *targeted*, not uniform. The binomial gate only
+# has enough power to catch violations whose true error rate meaningfully
+# exceeds ``eps`` with more streams, so most tests run at ~2x the original
+# count — with the seed, the stream length ``N``, and the gate at
+# ``BINOM_ALPHA`` all fixed, so the overall binomial gate stays honest (no
+# multiple-testing surface).
+#
+# Two tests are deliberately kept at the original count because each step is
+# expensive:
+#   * ``test_kernel_ridge_regressor_coverage_validity`` — a full kernel-matrix
+#     solve per step; ~11 min at 2x (the single most expensive test in the
+#     lane). Kept at 40.
+#   * the two Mondrian-*forest* tests — an exact Numba sweepline solve per
+#     step. Kept at 40.
+# The Mondrian CPS test is also kept at its original 40 (tree solve + CPD per
+# step). The remaining cheap predictors (ridge, Lasso, k-NN, SVM, Mondrian
+# *tree*, the non-Mondrian CPS models) are doubled.
+
 
 @pytest.mark.slow
 def test_ridge_regressor_coverage_validity():
     eps = 0.1
-    n_runs, N, d = 40, 300, 3
+    n_runs, N, d = 80, 300, 3
     rng = np.random.default_rng(0)
     total_errors = 0
     total_preds = 0
@@ -90,7 +108,7 @@ def test_ridge_regressor_coverage_validity():
 @pytest.mark.slow
 def test_mondrian_tree_regressor_coverage_validity():
     eps = 0.1
-    n_runs, N, d = 40, 300, 3
+    n_runs, N, d = 80, 300, 3
     rng = np.random.default_rng(0)
     total_errors = 0
     total_preds = 0
@@ -111,7 +129,7 @@ def test_mondrian_tree_regressor_coverage_validity():
 @pytest.mark.slow
 def test_knn_classifier_coverage_validity():
     eps = 0.1
-    n_runs, N, d = 25, 200, 4
+    n_runs, N, d = 50, 200, 4
     rng = np.random.default_rng(1)
     total_errors = 0
     total_preds = 0
@@ -142,7 +160,7 @@ def test_knn_classifier_coverage_validity():
 @pytest.mark.slow
 def test_venn_abers_calibration_in_the_large():
     rng = np.random.default_rng(2)
-    N_train, N_test, d = 200, 150, 3
+    N_train, N_test, d = 300, 300, 3
     beta = rng.normal(size=d)
 
     def sample(n):
@@ -231,8 +249,11 @@ def test_ville_detects_distribution_shift():
 #
 # This section includes statistical validity tests for all production models
 # using the same rigorous binomial hypothesis testing framework. Each test
-# runs multiple independent streams with increased sample sizes (N=400-500,
-# n_runs=40-60) to ensure good statistical power.
+# runs multiple independent streams with increased sample sizes (N=300-1000,
+# n_runs=50-80) to ensure good statistical power. The seed and the per-run
+# stream length are kept fixed so that the overall binomial gate is honest:
+# increasing ``n_runs`` raises the test's power against subtle biases without
+# introducing a multiple-testing surface.
 # --------------------------------------------------------------------------- #
 
 
@@ -245,7 +266,7 @@ def test_ville_detects_distribution_shift():
 def test_knn_regressor_coverage_validity():
     """Test ConformalNearestNeighboursRegressor coverage validity."""
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(0)
     total_errors = 0
     total_preds = 0
@@ -265,6 +286,11 @@ def test_knn_regressor_coverage_validity():
 def test_kernel_ridge_regressor_coverage_validity():
     """Test KernelConformalRidgeRegressor coverage validity."""
     eps = 0.1
+    # Kept at the original n_runs=40 (not 2x). The kernel-ridge conformal
+    # predictor performs a full kernel-matrix solve at every step, making this
+    # the single most expensive test in the lane (~11 min at 2x on a standard
+    # runner); 40 runs x 400 points already pools ~16k trials, so the added
+    # statistical power from doubling is negligible for the runtime cost.
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(0)
     total_errors = 0
@@ -285,7 +311,7 @@ def test_kernel_ridge_regressor_coverage_validity():
 def test_lasso_regressor_coverage_validity():
     """Test ConformalLassoRegressor coverage validity."""
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(0)
     total_errors = 0
     total_preds = 0
@@ -305,6 +331,10 @@ def test_lasso_regressor_coverage_validity():
 def test_mondrian_forest_regressor_coverage_validity():
     """Test ConformalMondrianForestRegressor coverage validity."""
     eps = 0.1
+    # NOTE: kept at the original n_runs=40 (not 2x). Each predict runs the exact
+    # Numba sweepline solver, so this test is by far the most expensive in the
+    # lane; doubling it pushed the lane past the CI budget for negligible added
+    # statistical power (40 runs x 400 points already pools ~16k trials).
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(0)
     total_errors = 0
@@ -339,7 +369,7 @@ def test_svm_classifier_coverage_validity():
     relative to the pooled binomial gate.
     """
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(1)
     total_errors = 0
     total_preds = 0
@@ -367,7 +397,7 @@ def test_svm_classifier_coverage_validity():
 def test_mondrian_tree_classifier_coverage_validity():
     """Test ConformalMondrianTreeClassifier coverage validity."""
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(1)
     total_errors = 0
     total_preds = 0
@@ -398,6 +428,8 @@ def test_mondrian_tree_classifier_coverage_validity():
 def test_mondrian_forest_classifier_coverage_validity():
     """Test ConformalMondrianForestClassifier coverage validity."""
     eps = 0.1
+    # See the regressor variant above: exact sweepline solve per predict, so
+    # keep the original n_runs=40 rather than 2x.
     n_runs, N, d = 40, 400, 4
     rng = np.random.default_rng(1)
     total_errors = 0
@@ -439,7 +471,7 @@ def test_ridge_cps_cdf_validity():
     noise`` for the test's own ``x``) — a marginal ``N(0, 1)`` draw would
     not match the conditional CPD and would fail uniformity by design.
     """
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
@@ -486,7 +518,7 @@ def test_kernel_ridge_cps_coverage_validity():
     marginal ``N(0, 1)`` draw would not match the conditional CPD.
     """
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
@@ -524,7 +556,7 @@ def test_knn_cps_coverage_validity():
     marginal ``N(0, 1)`` draw would not match the conditional CPD.
     """
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
@@ -556,7 +588,7 @@ def test_knn_cps_coverage_validity():
 def test_dempster_hill_cps_coverage_validity():
     """Test DempsterHillConformalPredictiveSystem prediction set coverage."""
     eps = 0.1
-    n_runs, N, d = 40, 400, 4
+    n_runs, N, d = 80, 400, 4
     rng = np.random.default_rng(2)
     total_errors = 0
     total_preds = 0
@@ -595,6 +627,8 @@ def test_mondrian_cps_coverage_validity():
     the category labels, and the pooled error rate must stay ≤ ε.
     """
     eps = 0.1
+    # The Mondrian-CPD path is expensive (per-step tree solve + CPD); keep the
+    # original n_runs=40 rather than 2x so the lane stays within the CI budget.
     n_runs, N = 40, 1000
     rng = np.random.default_rng(2)
     total_errors = 0
@@ -630,7 +664,7 @@ def test_mondrian_cps_coverage_validity():
 def test_knn_venn_calibration_in_the_large():
     """Test NearestNeighboursVennPredictor calibration."""
     rng = np.random.default_rng(2)
-    N_train, N_test, d = 200, 150, 4
+    N_train, N_test, d = 300, 300, 4
 
     def sample(n):
         X = rng.normal(size=(n, d))
@@ -660,7 +694,7 @@ def test_knn_venn_calibration_in_the_large():
 def test_mondrian_venn_calibration_in_the_large():
     """Test MondrianVennPredictor calibration."""
     rng = np.random.default_rng(2)
-    N_train, N_test, d = 200, 150, 4
+    N_train, N_test, d = 300, 300, 4
 
     def sample(n):
         X = rng.normal(size=(n, d))

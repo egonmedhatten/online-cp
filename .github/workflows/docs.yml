@@ -1,11 +1,16 @@
 name: docs
 
+# Docs deployment is opt-in (manual dispatch only), not triggered on every push
+# to main. The previous auto-deploy used `mkdocs gh-deploy --force`, which
+# overwrote the gh-pages history on every merge; manual dispatch plus a
+# non-forced deploy keeps the docs history and avoids racing deploys.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   deploy:
@@ -31,4 +36,4 @@ jobs:
       - name: Deploy documentation
         run: |
           source .venv/bin/activate
-          uv run mkdocs gh-deploy --force
+          uv run mkdocs gh-deploy

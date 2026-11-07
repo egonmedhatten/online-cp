@@ -27,13 +27,16 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# Pinned so the CI Python matrix (3.9/3.11/3.12) is reproducible: numba's
+# supported-Python range shifts between releases, and the Mondrian kernels rely
+# on its @njit behavior being stable.
 fast = [
-	"numba",
+	"numba>=0.60,<0.66",
 ]
 # Note: the 'graphviz' pip package also requires the system 'dot' binary
 # (e.g. 'apt install graphviz' or 'brew install graphviz').
 viz = [
-	"graphviz",
+	"graphviz>=0.20,<0.22",
 ]
 dev = [
 	"pytest",

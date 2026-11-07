@@ -2810,3 +2810,63 @@ class TestEmptyLeafValidity:
         assert len(vk1) == len(vk_f), (
             f"valid_knots count mismatch: ext_sorted={len(vk1)} flat={len(vk_f)}"
         )
+
+    def test_tree_knot_solver_flat_matches_tree_knot_solver(self):
+        """The public ``tree_knot_solver_flat`` wrapper must agree with
+        ``tree_knot_solver`` on the same problem.
+
+        ``tree_knot_solver_flat`` takes the raw per-point flat arrays (with
+        ``leaf_idx == -1`` marking the test leaf) and sorts the outside scores
+        *inside* the kernel, whereas ``tree_knot_solver`` is handed a
+        pre-sorted ``ext_sorted`` array. Both must return the identical
+        ``(lo, hi, valid_knots)`` interval, and the wrapper must return
+        Python ``float``/``list[float]`` types (not Numba arrays).
+        """
+        from online_cp.mondrian._tree_knot_solver import tree_knot_solver, tree_knot_solver_flat
+
+        rng = np.random.default_rng(7)
+        for trial in range(20):
+            n = rng.integers(5, 60)
+            A = int(rng.integers(1, n))  # number of inside-leaf points
+            n_out = n - A
+            y_star = rng.normal(0, 1, A)
+            ext = rng.uniform(0, 1, n_out)
+            B = float(y_star.sum())
+            eps = float(rng.uniform(0.01, 0.99))
+            tau = float(rng.uniform(0.0, 1.0))
+
+            # Reference: pre-sorted outside scores.
+            ext_sorted = np.sort(ext)
+            lo_r, hi_r, vk_r = tree_knot_solver(A, B, ext_sorted, y_star, n, eps, tau)
+
+            # Flat: per-point arrays; leaf_idx == -1 marks the inside points.
+            leaf_idx = np.zeros(n, dtype=np.int64)
+            leaf_idx[:A] = -1
+            y_all = np.empty(n, dtype=np.float64)
+            y_all[:A] = y_star
+            y_all[A:] = 0.0
+            base_ncm = np.empty(n, dtype=np.float64)
+            base_ncm[:A] = 0.0
+            base_ncm[A:] = ext
+
+            lo_f, hi_f, vk_f = tree_knot_solver_flat(leaf_idx, y_all, base_ncm, A, B, n, eps, tau)
+
+            def close(a, b):
+                if np.isnan(a) and np.isnan(b):
+                    return True
+                if a == np.inf and b == np.inf:
+                    return True
+                if a == -np.inf and b == -np.inf:
+                    return True
+                return abs(a - b) < 1e-9
+
+            assert close(lo_r, lo_f), f"lo mismatch trial={trial}: {lo_r} vs {lo_f}"
+            assert close(hi_r, hi_f), f"hi mismatch trial={trial}: {hi_r} vs {hi_f}"
+            assert sorted(vk_r) == sorted(vk_f), (
+                f"valid_knots mismatch trial={trial}: {vk_r} vs {vk_f}"
+            )
+            # The public wrapper must return plain Python types.
+            assert isinstance(lo_f, float) and isinstance(hi_f, float)
+            assert isinstance(vk_f, list)
+            assert all(isinstance(v, float) for v in vk_f)
+

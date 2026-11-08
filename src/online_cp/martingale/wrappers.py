@@ -144,7 +144,7 @@ class CUSUMWrapper:
     >>> cusum = CUSUMWrapper(sj)
     >>> for _ in range(10):
     ...     cusum.update(0.5)
-    >>> bool(cusum.gamma >= 1.0)  # gamma is always >= 1 (since S_n >= min S_i is not guaranteed)
+    >>> bool(cusum.gamma >= 1.0)  # gamma_n = S_n / min_{i <= n} S_i is always >= 1
     True
     """
 

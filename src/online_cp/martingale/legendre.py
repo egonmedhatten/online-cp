@@ -36,6 +36,115 @@ STANDARD_GRID = (-0.5, -0.25, 0.0, 0.25, 0.5)
 GAUNT_CACHE_MAXSIZE = 32
 
 
+def _validate_epsilon_grid(orders, epsilon_grid) -> None:
+    """Verify that ``1 + eps * P_k(p) > 0`` for all ``p in [0, 1]``, all
+    ``k in orders`` and all ``eps in epsilon_grid``.
+
+    The betting functions ``f_eps(p) = 1 + eps * P_k(2p - 1)`` must be strictly
+    positive on ``[0, 1]`` to be valid densities (a zero or negative value
+    anywhere makes ``log(f_eps(p))`` undefined, silently breaking the
+    martingale property).
+
+    For a single order ``k``, the shifted Legendre polynomial ``P_k`` attains
+    a maximum ``M_k = max_p P_k(p)`` (always ``+1``) and a minimum
+    ``m_k = min_p P_k(p)``.  The condition ``1 + eps * x > 0`` for all
+    ``x in [m_k, M_k]`` is the open interval
+
+        ``-1 / M_k < eps < -1 / m_k``
+
+    (with the corresponding endpoint ``+inf`` when that extreme is zero).
+    The admissible range for a *set* of orders is the intersection over all
+    ``k in orders``, so the tightest (binding) bounds are
+
+        ``lower = -1 / max_k M_k``   (always ``-1``, since ``M_k = 1``)
+        ``upper = -1 / min_k m_k``    (``+1`` if any odd order is present,
+                                       ``~ +2.4`` if only even orders are used)
+
+    The check below computes these extrema exactly (endpoints plus the
+    interior critical points, i.e. the roots of ``P_k'``), so the bound adapts
+    to the orders actually used.  In particular, grids with ``eps`` in
+    ``(1, ~2.4)`` are correctly accepted when only even orders are present, and
+    rejected as soon as an odd order (or order 1) is included.
+
+    Parameters
+    ----------
+    orders : list or tuple of int
+        Polynomial orders included in the martingale.
+    epsilon_grid : sequence of float
+        State space over which the betting parameters range.
+
+    Raises
+    ------
+    ValueError
+        If any grid value lies outside the admissible open interval
+        determined by the orders (i.e. some ``f_eps`` reaches zero for a
+        suitable ``p``).
+
+    Notes
+    -----
+    A coarser bound ``|eps| < 1`` is always sufficient (and necessary when an
+    odd order is present) but rejects valid even-only grids with ``eps > 1``;
+    this routine uses the order-dependent sharp bound instead.
+    """
+    orders = [int(k) for k in orders]
+    if not orders:
+        return
+    # Compute the exact extrema of each shifted Legendre polynomial on [0, 1]:
+    # the global max/min occur either at the endpoints (0 or 1) or at interior
+    # critical points, which are the roots of P_k'(u).  Evaluating at these
+    # candidate points gives the sharp extrema to double-precision accuracy,
+    # with no dependence on a sampling grid (important for high even orders,
+    # whose interior minimum is not near an endpoint).
+    max_over_orders = -np.inf   # max_k M_k  (most positive peak)
+    min_over_orders = np.inf    # min_k m_k  (most negative trough)
+    for k in orders:
+        pk = Legendre([0] * k + [1], domain=[0, 1]).convert(kind=Polynomial)
+        candidates = [0.0, 1.0]
+        if k >= 1:
+            roots = pk.deriv().roots()
+            # Keep the real roots lying in [0, 1].
+            roots = np.asarray(roots)
+            real = np.abs(roots.imag) < 1e-9
+            roots = roots[real].real
+            roots = roots[(roots >= -1e-12) & (roots <= 1.0 + 1e-12)]
+            candidates += list(np.clip(roots, 0.0, 1.0))
+        vals = np.asarray([float(pk(float(p)).real) for p in candidates])
+        max_over_orders = max(max_over_orders, float(vals.max()))
+        min_over_orders = min(min_over_orders, float(vals.min()))
+    # Admissible open interval for eps:
+    #   lower = -1 / max_over_orders   (max_over_orders > 0, so lower is finite)
+    #   upper = -1 / min_over_orders if min_over_orders < 0 else +inf
+    if max_over_orders <= 0.0:
+        # All orders are non-positive on [0,1] (only k=0 is +1, so this cannot
+        # happen for a non-empty orders list, but guard anyway).
+        lower = np.inf
+    else:
+        lower = -1.0 / max_over_orders
+    if min_over_orders < 0.0:
+        upper = -1.0 / min_over_orders
+    else:
+        upper = np.inf
+
+    bad = None
+    for e in epsilon_grid:
+        e = float(e)
+        if not (lower < e < upper):
+            bad = e
+            break
+    if bad is not None:
+        upper_str = f"{upper:.4f}" if np.isfinite(upper) else "+inf"
+        raise ValueError(
+            f"epsilon_grid value {bad} exceeds the admissible range "
+            f"({lower:.4f}, {upper_str}) for orders {orders}: the betting "
+            f"function f_eps(p) = 1 + eps * P_k(2p-1) must be strictly "
+            f"positive for all p in [0, 1]. The range depends on the orders: "
+            f"it is bounded above by -1 / (min_p P_k) for the smallest such "
+            f"minimum, which is -1 (i.e. upper bound +1) as soon as an odd "
+            f"order is present, and ~ +2.4 when only even orders are used. "
+            f"Use the default grid {STANDARD_GRID} for a safe choice."
+        )
+
+
 def shifted_legendre_poly(k):
     """Return the k-th shifted Legendre polynomial P_k(2u-1) as a Polynomial in u.
 
@@ -354,6 +463,7 @@ class SimpleLegendreJumper(ConformalTestMartingale):
         self.J = J
         self.epsilon_grid = tuple(epsilon_grid)
         self.N = len(self.epsilon_grid)
+        _validate_epsilon_grid([order], self.epsilon_grid)
 
         # Log-space state: log(C_eps) for each expert
         self._log_C = np.full(self.N, -np.log(self.N))  # uniform: 1/|E|
@@ -506,6 +616,7 @@ class ProductLegendreJumper(ConformalTestMartingale):
         self.K = len(self.orders)
         self.J = J
         self.epsilon_grid = tuple(epsilon_grid)
+        _validate_epsilon_grid(self.orders, self.epsilon_grid)
 
         # Build full Cartesian product state space
         self.states = list(itertools.product(self.epsilon_grid, repeat=self.K))
@@ -709,6 +820,7 @@ class IndependentTransitionProductLegendreJumper(ConformalTestMartingale):
         self.J = J
         self.epsilon_grid = tuple(epsilon_grid)
         self.g = len(self.epsilon_grid)
+        _validate_epsilon_grid(self.orders, self.epsilon_grid)
 
         # Full Cartesian product state space (identical to the PLJ)
         self.states = list(itertools.product(self.epsilon_grid, repeat=self.K))
@@ -940,6 +1052,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         self.J = J
         self.epsilon_grid = tuple(epsilon_grid)
         self.g = len(self.epsilon_grid)
+        _validate_epsilon_grid(self.orders, self.epsilon_grid)
         self._eps_array = np.array(self.epsilon_grid)
 
         # Log-space sub-jumper state: log(C_{k, eps})

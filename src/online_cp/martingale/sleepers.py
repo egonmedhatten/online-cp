@@ -1,4 +1,24 @@
-"""Sleeper/Stayer and Sleeper/Drifter martingale implementations."""
+"""Sleeper/Stayer and Sleeper/Drifter martingale implementations (ALRW2 §9.4, 9.5).
+
+Both martingales maintain a grid of piecewise-constant "expert" betting
+functions together with a *sleeping capital* reserve. The idea is to keep a
+large family of threshold experts dormant until capital trickles (or is
+batch-dumped) from the reserve into them, so the mixture adapts over time
+instead of committing all capital to experts up front. The betting function of
+an expert indexed by ``(a, b)`` is ``f(p) = b/a`` if ``p <= a`` else
+``(1 - b)/(1 - a)`` — targeting a shift of the conformal p-values toward mass
+``b`` below threshold ``a``. The martingale value is the total capital across
+the sleeping reserve and all active experts (computed in log-space for
+stability).
+
+- :class:`SleeperStayer` (Algorithm 9.4) — every step, a fixed fraction ``R``
+  of the sleeping capital is redistributed equally into *all* experts; the
+  experts stay on the fixed grid (they "stay").
+- :class:`SleeperDrifter` (Algorithm 9.5) — new experts wake up in batches every
+  ``M`` steps, and each expert's threshold *drifts* over time, interpolating
+  between its initial guess ``a`` and target ``b``; this adds sensitivity to
+  gradual shifts.
+"""
 
 from __future__ import annotations
 

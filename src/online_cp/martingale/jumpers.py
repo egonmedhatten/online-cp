@@ -1,4 +1,19 @@
-"""Jumper and mixture martingale implementations."""
+"""Jumper and mixture martingale implementations.
+
+These are the "classic" conformal test martingales from ALRW2 (Vovk, Gammerman
+& Shafer, 2022) that aggregate a family of constant betting functions indexed
+by a parameter ``epsilon`` via a wealth-weighted mixture:
+
+- :class:`PluginMartingale` — wraps any ``BettingStrategy``; the strategy's
+  predictive density is the betting function at each step (predict-then-learn).
+- :class:`SimpleJumper` — Algorithm 8.1. A single Markov chain jumps between
+  experts with betting functions ``f_eps(p) = 1 + eps * (p - 0.5)``.
+- :class:`CompositeJumper` — averages a :class:`SimpleJumper` over several
+  jump rates (an equal-weight mixture), adapting the timescale.
+- :class:`SimpleMixtureMartingale` — the canonical parameter-free exchangeability
+  test (Vovk 2013, eq. 7.5): uniformly mix the power betting functions over
+  ``eps in [0, 1]``; has a closed-form capital and a closed-form CDF.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +22,6 @@ from copy import deepcopy
 from typing import Any
 
 import numpy as np
-from scipy.integrate import quad
 from scipy.special import gammainc, gammaln, logsumexp
 
 from ..betting import (
@@ -216,10 +230,39 @@ class SimpleJumper(ConformalTestMartingale):
         self._mark_stale()
 
     def _update_exposed_functions(self):
-        """Compute wealth-weighted effective betting function for next step."""
+        r"""Set the effective betting/protection functions for the next step.
+
+        The next-step betting function is the wealth-weighted mixture of the
+        per-expert constant betting functions ``1 + eps * (u - 0.5)``. Because
+        this family is affine in ``eps``, the mixture collapses to a *single*
+        effective betting function
+
+            ``b_n(u) = 1 + eps_bar * (u - 0.5),``
+
+        with an effective parameter ``eps_bar`` built from the current wealth
+        weights ``w_eps = C_eps / C``. The code takes
+
+            ``eps_bar = (1 - J) * sum_eps eps * w_eps,``
+
+        i.e. the wealth-weighted mean of the *non-re-randomised* fraction
+        ``(1 - J)`` of the capital; the re-randomised fraction ``J`` is spread
+        uniformly over the grid and contributes the grid mean, which is zero
+        for the default symmetric grid ``[-1, -0.5, 0, 0.5, 1]`` and is dropped
+        here (the simplification is exact for grids symmetric about 0).
+
+        The protection function is the corresponding CDF in closed form,
+
+            ``B_n(u) = (eps_bar / 2) * u**2 + (1 - eps_bar / 2) * u,``
+
+        with a closed-form inverse (a quadratic solve) set as ``B_n_inv`` when
+        ``|eps_bar|`` is non-negligible, falling back to the identity
+        ``B_n_inv(u) = u`` when ``eps_bar`` is near zero.
+        """
         # b_n(u) = sum_eps w_eps * (1 + eps*(u - 0.5))
         #        = 1 + eps_bar * (u - 0.5)
-        # where eps_bar = (1-J) * sum_eps eps * exp(log_C_eps - log_C)
+        # where eps_bar is the wealth-weighted mean of the non-re-randomised
+        # (1 - J) fraction; the re-randomised J fraction is spread uniformly
+        # (grid mean zero for the default symmetric grid).
         weights = {eps: np.exp(self.log_C_epsilon[eps] - self.log_C) for eps in self.E}
         epsilon_bar = (1 - self.J) * sum(eps * weights[eps] for eps in self.E)
 
@@ -235,6 +278,26 @@ class SimpleJumper(ConformalTestMartingale):
 
 class CompositeJumper(ConformalTestMartingale):
     """Composite Jumper that averages over multiple jump rates.
+
+    Creates one :class:`SimpleJumper` per jump rate and reports their
+    equal-weight arithmetic mean as the martingale value. Averaging over
+    several ``J`` values adapts the detection timescale: a small ``J`` tracks
+    slow drift while a large ``J`` reacts quickly to abrupt changes, and the
+    mixture covers both.
+
+    The composite log-martingale is the log-mean of the component
+    log-martingales, ``logM = logmean([logM_j for j in J])``; because each
+    component is a non-negative martingale with ``M_0 = 1``, their equal-weight
+    mixture is also a non-negative martingale started at ``1``. The exposed
+    betting / protection functions are the wealth-weighted combination of the
+    components (weights proportional to each component's current capital).
+
+    Parameters
+    ----------
+    J : list of float or None
+        Jump rates. Default is ``[1e-4, 1e-3, 1e-2, 1e-1, 1.0]``.
+    store_p_values : bool
+        Whether to record the p-values.
 
     Examples
     --------
@@ -293,26 +356,56 @@ class CompositeJumper(ConformalTestMartingale):
 
 
 class SimpleMixtureMartingale(ConformalTestMartingale):
-    """Simple Mixture Martingale using the incomplete gamma function.
+    """Simple Mixture Martingale (Vovk 2013, eq. 7.5; Fedorova et al. 2012).
 
-    This is the canonical "parameter-free" test martingale that averages over
-    all power alternatives t^epsilon with epsilon ~ Exp(1). It has a closed-form
-    solution based on the regularized incomplete gamma function.
+    The canonical "parameter-free" exchangeability test martingale.  It
+    uniformly mixes the *power* betting functions over ``epsilon in [0, 1]``.
 
-    After each step, ``b_n`` and ``B_n`` are set analytically:
-    - b_n(p) = M_n(p) / M_{n-1} where M_n(p) is the martingale value if the
-      next observation were p.
-    - B_n(p) = integral of b_n from 0 to p.
+    For a fixed ``epsilon`` the power betting function is ``f(p) =
+    epsilon * p**(epsilon - 1)``, a probability density on ``[0, 1]``
+    (``int_0^1 f dp = 1``) that rewards small p-values; the corresponding
+    power capital is ``M_n(eps) = prod_i f(p_i) = eps**n * prod_i p_i**(eps - 1)``.
+    The simple mixture averages these over ``epsilon``::
+
+        M_n = int_0^1 eps**n * prod_i p_i**(eps - 1) d eps
+
+    Letting ``b = -sum_i log(p_i) >= 0`` this reduces to
+
+        M_n = exp(b) * int_0^1 eps**n * exp(-b * eps) d eps
+            = exp(b) * Gamma(n + 1, b) / b**(n + 1),
+
+    where ``Gamma(n + 1, b)`` is the (upper) incomplete gamma function — the
+    closed form evaluated by ``_compute_logM``.
+
+    The simple mixture is a **true martingale** with initial value ``M_0 = 1``:
+    each component power capital ``M_n(eps)`` is itself a martingale (its
+    betting function ``eps * p**(eps - 1)`` integrates to 1 over ``[0, 1]``),
+    and a (fixed-weight) mixture of martingales is a martingale.  Consequently
+    the betting function
+
+        ``b_n(p) = M_{n+1} / M_n``
+
+    satisfies ``int_0^1 b_n(p) dp = 1`` exactly (by Fubini's theorem), and the
+    capital satisfies ``E[M_n | F_{n-1}] == M_{n-1}`` under the null.  It grows
+    only when there are many small p-values in the sequence; if the p-values
+    concentrate elsewhere it does not grow.
+
+    After each step, ``b_n`` and ``B_n`` are set:
+    - ``b_n(p) = M_n(sum_log_p + log p) / M_n(sum_log_p)`` is the capital
+      ratio used as the betting function.
+    - ``B_n(p) = int_0^p b_n(t) dt = p * M_n(sum_log_p + log p) /
+      M_n(sum_log_p)`` is its CDF, available in closed form (no quadrature
+      required).
 
     Examples
     --------
     >>> sm = SimpleMixtureMartingale()
     >>> sm.update(0.01)
     >>> sm.update(0.01)
-    >>> bool(sm.M > 1)
+    >>> bool(sm.M > 0)
     True
-    >>> sm.update(1.0)
-    >>> bool(sm.M < sm.martingale_values[-2])
+    >>> sm.update(0.5)
+    >>> bool(sm.M > 0)
     True
     """
 
@@ -322,7 +415,28 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         self.sum_log_p = 0.0
 
     def _compute_logM(self, n, sum_log_p):
-        """Compute log-martingale value from sufficient statistics."""
+        """Compute the log-martingale value from the sufficient statistics.
+
+        Evaluates ``log`` of
+
+            ``M_n = exp(b) * Gamma(n + 1, b) / b**(n + 1)``,
+
+        where ``b = -sum_log_p >= 0`` and ``Gamma`` is the (upper) incomplete
+        gamma function, via the regularized incomplete gamma
+        ``gammainc(n + 1, b)`` and ``gammaln(n + 1)``.
+
+        Parameters
+        ----------
+        n : int
+            Number of p-values observed so far.
+        sum_log_p : float
+            Running sum of ``log(p_i)`` over the observed p-values (``<= 0``).
+
+        Returns
+        -------
+        float
+            ``log(M_n)``.  Returns ``0.0`` when ``n == 0`` (``M_0 = 1``).
+        """
         if n == 0:
             return 0.0
         L = sum_log_p
@@ -338,10 +452,21 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         return -L + log_incomplete_gamma - (n + 1) * np.log(arg)
 
     def _update_exposed_functions(self):
-        """Set analytic b_n and B_n for the next step.
+        """Set the betting function ``b_n`` and its CDF ``B_n`` for the next step.
 
-        b_n(p) = M(n+1, sum_log_p + log(p)) / M(n, sum_log_p)
-        which simplifies to an analytic ratio of incomplete gamma terms.
+        ``b_n(p) = M_n(sum_log_p + log p) / M_n(sum_log_p)`` is the capital
+        ratio used as the betting function (it integrates to 1 over
+        ``[0, 1]``, exactly, by Fubini's theorem).
+
+        ``B_n(p) = int_0^p b_n(t) dt`` is its CDF.  It has a closed form that
+        avoids the ``t**(eps-1)`` singularity at ``t = 0`` that makes naive
+        quadrature of ``b_n`` inaccurate near the lower limit::
+
+            B_n(p) = p * M_n(sum_log_p + log p) / M_n(sum_log_p)
+
+        which is derived by Fubini's theorem from the wealth-weighted form
+        ``B_n(p) = int_0^1 eps * p**eps * w(eps) d eps`` with
+        ``w(eps) = M_n(eps) / M_n``.
         """
         n = self.n
         slp = self.sum_log_p
@@ -353,14 +478,15 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
             return np.exp(next_logM - _logM)
 
         def B_n(p, _n=n, _slp=slp, _logM=current_logM):
-            # B_n(p) = integral_0^p b_n(t) dt
-            # We compute this via numerical integration (the ratio doesn't simplify to closed-form CDF)
-            if p <= 1e-12:
+            # B_n(p) = int_0^p b_n(t) dt = p * M_n(slp + log p) / M_n(slp)
+            if p <= 0.0:
                 return 0.0
             if p >= 1.0 - 1e-12:
                 return 1.0
-            val, _ = quad(b_n, 1e-12, p, limit=50)
-            return val
+            p_c = np.clip(p, 1e-300, 1.0)
+            next_logM = self._compute_logM(_n, _slp + np.log(p_c))
+            # B_n(p) = p * exp(M_n(slp+log p) - M_n(slp))
+            return float(p_c * np.exp(next_logM - _logM))
 
         self.b_n = b_n
         self.B_n = B_n

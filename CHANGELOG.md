@@ -21,8 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`VariationalLegendreJumper` rewritten to the rigorous two-phase mean-field law** (Section 5.1). Each degree undergoes an independent Markov transition, the consensus `$\bar\epsilon$` is solved to a fixed point via Gauss-Seidel from the mean-field variational factors (Jensen-coupled normalizer), and the bet is the `Z`-normalised product evaluated at that consensus — a pointwise-valid plug-in density. For `|K| <= 2` the Gaunt coupling vanishes and the algorithm reduces exactly to the product of independent SLJs; for `|K| >= 3` the coupling engages and the VLJ diverges from the old heuristic, as the derivation requires. Per-step cost: `O(|K| * g * 2^{|K|})`.
 - **`IndependentTransitionProductLegendreJumper` (ITPLJ)** — the exact generative baseline for the VLJ. It keeps the full joint grid `g^{|K|}` and applies an independent per-degree transition (a product of marginals) instead of the PLJ's global Markov transition, then bets with the exact joint betting function `prod_k (1 + eps_k P_k(p)) / Z(eps)`. Every state's bet integrates to 1 under the null, so the ITPLJ is a strictly pointwise-valid martingale; its only limitation is the `O(g^{|K|})` state space (the jumping tax), which is why the VLJ approximates it with a mean-field factorization. The ITPLJ and the PLJ are distinct algorithms for any `J < 1` and `|K| >= 2` (they coincide only at `J = 1`).
+- **Full martingale audit** — `tests/test_martingale_audit.py` pins the exact trajectory of every conformal test martingale against independent, verbatim reference implementations of the published algorithms (ALRW2 Algorithms 8.1, 9.4, 9.5; the Legendre Jumper preprint's Algorithms 2 and 3) on a fixed deterministic 7-bit-reversal sequence, plus analytic checks of the ``Z`` normalizer, the ``J = 1`` constants, and the ``epsilon_grid`` admissibility bounds.  All Legendre-family classes (SLJ, PLJ, ITPLJ, VLJ, OFTRL) are confirmed faithful to their published references at `1e-12` precision, and the preprint's "0.2 floor" claim is shown to be false for the normalized PLJ composite (the 12,800-step counterexample yields a composite mean capital of ~0.1973).
+- **`_validate_epsilon_grid`** — a new input-validation guard shared by `SimpleLegendreJumper`, `ProductLegendreJumper`, `IndependentTransitionProductLegendreJumper` and `VariationalLegendreJumper` now rejects any `epsilon_grid` value with `|eps| >= 1` at construction time, with an actionable error message.  This closes the previously-silent failure mode where a non-default grid could make `1 + eps * P_k(p)` reach zero or go negative, producing NaN log-bets and silently breaking the martingale property.
 
 ### Improved
+  - **`_validate_epsilon_grid` now uses the sharp, order-dependent admissible range**
+    instead of the coarse ``|eps| < 1`` bound. The betting function
+    ``1 + eps * P_k(p)`` must stay strictly positive on ``[0, 1]`` for every
+    ``k in orders``; the admissible interval is the intersection over the
+    orders of ``(-1 / max_p P_k, -1 / min_p P_k)``. Since shifted Legendre
+    polynomials always satisfy ``max_p P_k = +1`` (lower bound ``-1`` for any
+    order set) but reach ``-1`` *only* at odd orders (even orders only reach an
+    interior minimum of magnitude ``< 1``), the upper bound is ``+1`` whenever an
+    odd order is present and relaxes to ``> 1`` (e.g. ``+2.0`` for order 2,
+    ``~2.33`` for ``[4, 6, 8]``) when only even orders are used. The extrema are
+    computed exactly (endpoints plus the roots of ``P_k'``), not by sampling,
+    so the bound is precise for high orders too. This un-rejects valid even-only
+    grids with ``eps > 1`` that the old check wrongly rejected, while preserving
+    the original rejection of any value that makes ``f_eps`` non-positive.
   - **Conformal Lasso: `predict` cost is now O(n + m) instead of O(n * m)**
     (speed target T2). The previous `_find_intervals_in_piece` materialised an
     `(n, m)` residual matrix per homotopy piece (m = number of crossings in the
@@ -114,6 +130,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     classifier alignment, save/load round-trip).
 
 ### Fixed
+  - **`SimpleMixtureMartingale` CDF now in closed form; audit verdict corrected.**
+    The 2026-11-07 audit originally reported `SimpleMixtureMartingale` as "not a
+    valid martingale" (empirical `E[M_1] ~ 0.857`).  That verdict was a false
+    positive: the audit's numerical quadrature mishandled the
+    `p**(eps - 1)` singularity at `p = 0`, underestimating
+    `int_0^1 b_n dp`.  The simple mixture (Vovk 2013, eq. 7.5; Fedorova et al.
+    2012) mixes the power betting functions `f_eps(p) = eps * p**(eps - 1)` over
+    `eps in [0, 1]`; each component is a valid martingale (its betting function
+    integrates to 1) and the mixture is fixed-weight, so the simple mixture is a
+    **true martingale** — `int_0^1 b_n dp = 1` exactly (by Fubini) and
+    `E[M_n | F_{n-1}] == M_{n-1}`.  The existing capital closed form
+    (`M_n = exp(b) * Gamma(n + 1, b) / b**(n + 1)`, `b = -sum log p`) was
+    verified against the definition to machine precision and was never in error.
+    The one real defect was the exposed CDF `B_n`, which was computed by naive
+    quadrature of `b_n` (same singularity issue) and was slightly inaccurate.
+    `B_n` is now given in closed form, `B_n(p) = p * M_n(sum_log_p + log p) /
+    M_n(sum_log_p)` (singularity-free, exact to ~1e-14).  Updated the class
+    docstring, `tests/test_martingale_audit.py` (now
+    `TestSimpleMixtureMartingale`), and the audit harness accordingly.
   - **`ConformalNearestNeighboursRegressor.predict` mis-detected reverse
     neighbours during the warm-up phase (bag size n < k).** The reverse-
     neighbour test `d(x_i, x_n) <= kth_nearest_dist(x_i)` is only valid when the

@@ -473,7 +473,7 @@ class SimpleLegendreJumper(ConformalTestMartingale):
         """Evaluate shifted Legendre polynomial P_k(2u-1)."""
         return eval_legendre(self.order, 2.0 * u - 1.0)
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         r"""Advance the simple Legendre jumper by one p-value.
 
         Performs the jump (mixing over the $\epsilon$ grid) then bets with the
@@ -485,9 +485,6 @@ class SimpleLegendreJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         # --- Step 1: Jump ---
         # C_eps <- (1-J) * C_eps + (J / |E|) * C
         # In log-space: log((1-J)*C_eps + (J/N)*C)
@@ -513,10 +510,6 @@ class SimpleLegendreJumper(ConformalTestMartingale):
         # C = sum(C_eps)
         self._log_total = logsumexp(self._log_C)
         self.logM = self._log_total
-        self.log_martingale_values.append(self.logM)
-
-        # --- Mark b_n/B_n stale (lazy recomputation on access) ---
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Set b_n and B_n as the wealth-weighted effective betting function."""
@@ -651,7 +644,7 @@ class ProductLegendreJumper(ConformalTestMartingale):
         # Vectorized: (N, K) * (K,) -> (N, K), then sum over K axis
         return np.log1p(self._states_array * Pk_vals).sum(axis=1) - self._log_Z
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         r"""Advance the product Legendre jumper by one p-value.
 
         Bets with a *product* of shifted-Legendre densities over several orders,
@@ -663,9 +656,6 @@ class ProductLegendreJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         # --- Step 1: Jump ---
         # C_eps <- (1-J) * C_eps + (J / |E|) * C
         if self.J == 1.0:
@@ -686,10 +676,6 @@ class ProductLegendreJumper(ConformalTestMartingale):
         # --- Step 3: Accumulate ---
         self._log_total = logsumexp(self._log_C)
         self.logM = self._log_total
-        self.log_martingale_values.append(self.logM)
-
-        # --- Mark b_n/B_n stale (lazy recomputation on access) ---
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Set b_n and B_n as the wealth-weighted mixture of expert betting functions."""
@@ -899,7 +885,7 @@ class IndependentTransitionProductLegendreJumper(ConformalTestMartingale):
         # Fold in the global constant so C <- C_total * prod_k[...]
         return log_C_next + self._log_total
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         r"""Advance the ITPLJ by one p-value.
 
         Applies the independent per-degree transition prior over the full joint
@@ -911,9 +897,6 @@ class IndependentTransitionProductLegendreJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         # --- Step 1: Independent transition ---
         log_marg = self._marginal_beliefs()  # shape (K, g)
         self._log_C = self._independent_transition(log_marg)
@@ -928,9 +911,6 @@ class IndependentTransitionProductLegendreJumper(ConformalTestMartingale):
         # --- Step 3: Accumulate ---
         self._log_total = logsumexp(self._log_C)
         self.logM = self._log_total
-        self.log_martingale_values.append(self.logM)
-
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Set b_n and B_n as the wealth-weighted mixture of joint states."""
@@ -1138,7 +1118,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
                 break
         return eps_bar
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         r"""Advance the variational Legendre jumper by one p-value.
 
         Implements the two-phase mean-field law from the paper's Section 5.1:
@@ -1162,7 +1142,7 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         5. **Commit the next step's consensus**: the exposed betting density
            ``b_n`` (and hence the protection function ``B_n`` used for
            downstream e-values) must match the bet that the next
-           ``update()`` will place, which is the consensus derived from the
+           ``_step()`` will place, which is the consensus derived from the
            prior that follows from the just-stored posterior. We re-derive
            that consensus here and cache it in ``self._eps_bar`` so that the
            exposed density is consistent with the future bet instead of
@@ -1176,9 +1156,6 @@ class VariationalLegendreJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         Pk_vals = np.array([eval_legendre(k, 2.0 * p - 1.0) for k in self.orders])
 
         # --- Phase A: independent transition (prior) ---
@@ -1239,10 +1216,6 @@ class VariationalLegendreJumper(ConformalTestMartingale):
 
         # --- Update martingale ---
         self.logM = self._log_S
-        self.log_martingale_values.append(self.logM)
-
-        # --- Mark b_n/B_n stale (lazy recomputation on access) ---
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         r"""Set b_n and B_n using the committed consensus parameters.
@@ -1352,7 +1325,7 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
         """Compute exact Z(eps) and exact grad Z(eps) from Gaunt coefficients."""
         return _evaluate_Z_and_grad_from_gaunt(eps, self._gaunt_terms, self.K)
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         r"""Advance martingale by one p-value using exact Optimistic-FTRL updates.
 
         Parameters
@@ -1360,9 +1333,6 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         Pk_vals = np.array([eval_legendre(k, 2.0 * p - 1.0) for k in self.orders], dtype=float)
         Z, grad_Z = self._compute_Z_and_gradient(self._eps)
         if (not np.isfinite(Z)) or (Z <= self._z_floor):
@@ -1380,7 +1350,6 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
 
         # Bet with current eps_t.
         self.logM += float(np.sum(np.log(denom)) - np.log(Z))
-        self.log_martingale_values.append(self.logM)
 
         # Exact gradient of loss l_t(eps).
         grad = -(Pk_vals / denom) + (grad_Z / Z)
@@ -1394,8 +1363,6 @@ class OptimisticFTRLBarrierLegendreMartingale(ConformalTestMartingale):
         mask = np.abs(a) > 1e-15
         eps_next[mask] = (1.0 - np.sqrt(1.0 + a[mask] ** 2)) / a[mask]
         self._eps = eps_next
-
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Set b_n and B_n at the current Optimistic-FTRL parameter eps."""
@@ -1479,7 +1446,7 @@ class CompositeLegendreJumper(ConformalTestMartingale):
         self._n_jumpers = len(self._jumpers)
         self._log_n = np.log(self._n_jumpers)
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         """Advance every component Legendre jumper and pool them.
 
         Updates each sub-jumper on ``p`` and sets the composite log-martingale to
@@ -1490,15 +1457,8 @@ class CompositeLegendreJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         for m in self._jumpers:
             m.update(p)
 
         log_Ms = np.array([m.logM for m in self._jumpers])
         self.logM = logsumexp(log_Ms) - self._log_n
-
-        self.log_martingale_values.append(self.logM)
-
-        self._mark_stale()

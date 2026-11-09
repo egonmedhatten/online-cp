@@ -99,12 +99,12 @@ class PluginMartingale(ConformalTestMartingale):
         self.b_n = b_n
         self.B_n = B_n
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         """Bet on one p-value with the current strategy, then learn from it.
 
         Evaluates the betting density at ``p``, multiplies it into the
-        martingale (guarding against invalid densities), records the value, and
-        updates the underlying betting strategy.
+        martingale (guarding against invalid densities), and updates the
+        underlying betting strategy.
 
         Parameters
         ----------
@@ -126,16 +126,9 @@ class PluginMartingale(ConformalTestMartingale):
 
         # 3. Accumulate wealth
         self.logM += np.log(b)
-        self.log_martingale_values.append(self.logM)
-
-        if self.store_p_values:
-            self.p_values.append(p)
 
         # 4. Learn
         self.strategy.update(p)
-
-        # 5. Mark b_n/B_n stale (lazy recomputation on access)
-        self._mark_stale()
 
 
 class SimpleJumper(ConformalTestMartingale):
@@ -180,7 +173,7 @@ class SimpleJumper(ConformalTestMartingale):
         self.b_epsilon = lambda u, epsilon: 1 + epsilon * (u - 1 / 2)
         self.B_n_inv = lambda x: x
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         r"""Advance the Simple Jumper mixture by one p-value.
 
         Mixes a sleeping family of constant betting functions indexed by
@@ -192,9 +185,6 @@ class SimpleJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         if self.J == 1:
             log_1_minus_J = -np.inf
         else:
@@ -224,10 +214,6 @@ class SimpleJumper(ConformalTestMartingale):
         self.log_C = logsumexp(list(self.log_C_epsilon.values()))
 
         self.logM = self.log_C
-        self.log_martingale_values.append(self.logM)
-
-        # Mark b_n/B_n stale (lazy recomputation on access)
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         r"""Set the effective betting/protection functions for the next step.
@@ -317,7 +303,7 @@ class CompositeJumper(ConformalTestMartingale):
 
         self.Jumpers = {j: SimpleJumper(J=j, store_p_values=False) for j in self.J}
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         """Advance every sub-jumper and recompute the pooled martingale.
 
         Updates each component jumper on ``p`` and sets the composite
@@ -328,19 +314,11 @@ class CompositeJumper(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         for m in self.Jumpers.values():
             m.update(p)
 
         log_M_values = [m.logM for m in self.Jumpers.values()]
         self.logM = logsumexp(log_M_values) - np.log(len(self.Jumpers))
-
-        self.log_martingale_values.append(self.logM)
-
-        # Mark b_n/B_n stale (lazy recomputation on access)
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Compute wealth-weighted betting function from sub-jumpers."""
@@ -411,7 +389,7 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.n = 0
+        self._n = 0
         self.sum_log_p = 0.0
 
     def _compute_logM(self, n, sum_log_p):
@@ -468,7 +446,7 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         ``B_n(p) = int_0^1 eps * p**eps * w(eps) d eps`` with
         ``w(eps) = M_n(eps) / M_n``.
         """
-        n = self.n
+        n = self._n
         slp = self.sum_log_p
         current_logM = self.logM
 
@@ -491,7 +469,7 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         self.b_n = b_n
         self.B_n = B_n
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         """Advance the simple mixture martingale by one p-value.
 
         Accumulates $\\sum \\log p$ and recomputes the closed-form mixture
@@ -502,14 +480,8 @@ class SimpleMixtureMartingale(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        self.n += 1
+        self._n += 1
         p_clipped = np.clip(p, 1e-12, 1.0)
         self.sum_log_p += np.log(p_clipped)
 
-        self.logM = self._compute_logM(self.n, self.sum_log_p)
-
-        if self.store_p_values:
-            self.p_values.append(p)
-        self.log_martingale_values.append(self.logM)
-
-        self._mark_stale()
+        self.logM = self._compute_logM(self._n, self.sum_log_p)

@@ -6,6 +6,7 @@ from online_cp.martingale import (
     BetaMLE,
     BetaMoments,
     CompositeJumper,
+    ConformalTestMartingale,
     CUSUMWrapper,
     ExpertAggregationStrategy,
     FixedStrategy,
@@ -58,6 +59,57 @@ class TestMartingaleBaseProperties:
         for p in uniform_p_values[:50]:
             m.update(p)
         assert np.isclose(m.M, np.exp(m.logM))
+
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
+        ],
+    )
+    def test_p_n_none_before_update(self, MartingaleClass, kwargs):
+        """p_n should be None before any update has been performed."""
+        m = MartingaleClass(**kwargs)
+        assert m.p_n is None
+
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
+        ],
+    )
+    def test_p_n_after_update(self, MartingaleClass, kwargs):
+        """p_n should return the last p-value fed to update()."""
+        m = MartingaleClass(**kwargs)
+        m.update(0.42)
+        assert m.p_n == 0.42
+        m.update(0.77)
+        assert m.p_n == 0.77
+
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
+        ],
+    )
+    def test_n_counter(self, MartingaleClass, kwargs):
+        """n should count the number of p-values processed."""
+        m = MartingaleClass(**kwargs)
+        assert m.n == 0
+        for _ in range(5):
+            m.update(0.5)
+        assert m.n == 5
 
 
 # ─── VilleWrapper ─────────────────────────────────────────────────────────────
@@ -648,3 +700,101 @@ class TestShiryaevRobertsRecursive:
         logM_n = log_history[n]
         naive_R = sum(np.exp(logM_n - log_history[i]) for i in range(n))
         assert np.isclose(sr.R, naive_R, rtol=1e-10), f"Recursive R={sr.R} != naive R={naive_R}"
+
+
+# ─── Minimal custom martingale (template method contract) ────────────────────
+
+
+class _FixedBetMartingale(ConformalTestMartingale):
+    """A minimal custom martingale using a fixed betting function b(p) = 2(1-p).
+
+    This is a valid density on [0, 1] since int_0^1 2(1-p) dp = 1.
+    It concentrates mass near p=0, so the martingale grows under
+    alternatives where p-values shift toward 0.
+    """
+
+    def __init__(self, store_p_values=True):
+        super().__init__(store_p_values)
+        self._update_exposed_functions()
+
+    def _step(self, p: float) -> None:
+        self.logM += np.log(2.0 * (1.0 - p))
+
+    def _update_exposed_functions(self):
+        self.b_n = lambda x: 2.0 * (1.0 - x)
+        self.B_n = lambda x: 2.0 * x - x * x
+
+
+class TestMinimalCustomMartingale:
+    """Verify the template method contract works for a minimal custom subclass."""
+
+    def test_starts_at_one(self):
+        m = _FixedBetMartingale()
+        assert m.logM == 0.0
+        assert np.isclose(m.M, 1.0)
+        assert m.n == 0
+        assert m.p_n is None
+
+    def test_log_martingale_values_grow(self):
+        m = _FixedBetMartingale()
+        for p in [0.25, 0.5, 0.75]:
+            m.update(p)
+        assert len(m.log_martingale_values) == 4  # initial + 3 updates
+        assert m.n == 3
+
+    def test_M_matches_product_of_bets(self):
+        """M should equal the product of the betting function values."""
+        m = _FixedBetMartingale()
+        pvals = [0.25, 0.5, 0.75, 0.1]
+        expected_logM = sum(np.log(2.0 * (1.0 - p)) for p in pvals)
+        for p in pvals:
+            m.update(p)
+        assert np.isclose(m.logM, expected_logM, rtol=1e-12)
+
+    def test_p_values_stored(self):
+        m = _FixedBetMartingale(store_p_values=True)
+        pvals = [0.1, 0.3, 0.7]
+        for p in pvals:
+            m.update(p)
+        assert m.p_values == pvals
+        assert m.p_n == 0.7
+
+    def test_grows_under_alternative(self):
+        """Under small p-values (shift toward 0), the martingale should grow."""
+        m = _FixedBetMartingale()
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.5, 2, size=200):
+            m.update(p)
+        assert m.M > 1.0
+
+    def test_bounded_under_null(self):
+        """Under uniform p-values, average logM should stay near 0."""
+        rng = np.random.default_rng(123)
+        final_logMs = []
+        for _ in range(20):
+            m = _FixedBetMartingale()
+            for p in rng.uniform(size=200):
+                m.update(p)
+            final_logMs.append(m.logM)
+        assert np.mean(final_logMs) < 5.0
+
+    def test_works_inside_ville_wrapper(self):
+        """A minimal custom martingale should work inside VilleWrapper."""
+        m = _FixedBetMartingale()
+        ville = VilleWrapper(m, threshold=20)
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.3, 2, size=200):
+            ville.update(p)
+        assert ville.rejected
+
+    def test_b_n_and_B_n_exposed(self):
+        """b_n and B_n should be correctly exposed via _update_exposed_functions."""
+        m = _FixedBetMartingale()
+        # b_n(x) = 2(1-x), so b_n(0.5) = 1.0
+        # B_n(x) = 2x - x^2, so B_n(0.5) = 1.0 - 0.25 = 0.75
+        assert np.isclose(m.b_n(0.5), 1.0)
+        assert np.isclose(m.B_n(0.5), 0.75)
+        # After update, they should still work (lazily recomputed)
+        m.update(0.3)
+        assert np.isclose(m.b_n(0.5), 1.0)
+        assert np.isclose(m.B_n(0.5), 0.75)

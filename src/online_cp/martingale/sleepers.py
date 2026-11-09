@@ -86,7 +86,7 @@ class SleeperStayer(ConformalTestMartingale):
         self._log_R_div_n = math.log(R / self._n_experts)
         self._n = 0
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         """Advance the Sleeper/Stayer martingale by one p-value.
 
         Each active threshold expert bets on ``p`` (left vs right of its
@@ -98,9 +98,6 @@ class SleeperStayer(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         self._n += 1
 
         # Step 1: Bet — add log(bet) to each active expert's log-capital
@@ -111,16 +108,12 @@ class SleeperStayer(ConformalTestMartingale):
         # Compute in log-space via logsumexp
         log_active_sum = logsumexp(self._log_S_active)
         self.logM = np.logaddexp(self._log_S_sleep, log_active_sum)
-        self.log_martingale_values.append(self.logM)
 
         # Step 3: Redistribute — move fraction R of sleeping capital to active experts
         # log(transfer) = log(R / n_experts) + log_S_sleep
         log_transfer = self._log_R_div_n + self._log_S_sleep
         self._log_S_active = np.logaddexp(self._log_S_active, log_transfer)
         self._log_S_sleep += self._log_1_minus_R
-
-        # Mark b_n/B_n stale (lazy recomputation on access)
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Set b_n/B_n as wealth-weighted combination of active experts."""
@@ -205,7 +198,7 @@ class SleeperDrifter(ConformalTestMartingale):
         ratio = min(ratio, 1.0)  # Clamp
         return ratio * a + (1 - ratio) * b
 
-    def update(self, p: float) -> None:
+    def _step(self, p: float) -> None:
         """Advance the Sleeper/Drifter martingale by one p-value.
 
         Like :class:`SleeperStayer`, but each expert's threshold *drifts* over
@@ -217,9 +210,6 @@ class SleeperDrifter(ConformalTestMartingale):
         p : float
             New p-value in $[0, 1]$.
         """
-        if self.store_p_values:
-            self.p_values.append(p)
-
         self._n += 1
 
         # Step 1: Bet — update all active experts in log-space
@@ -251,7 +241,6 @@ class SleeperDrifter(ConformalTestMartingale):
             self.logM = np.logaddexp(self._log_S_sleep, log_active_sum)
         else:
             self.logM = self._log_S_sleep
-        self.log_martingale_values.append(self.logM)
 
         # Step 3: Wake new batch (if n is divisible by M) — prepares for next step
         if self._n % self._batch_interval == 0:
@@ -270,9 +259,6 @@ class SleeperDrifter(ConformalTestMartingale):
                     self._experts[key] = np.logaddexp(self._experts[key], log_transfer)
                 else:
                     self._experts[key] = log_transfer
-
-        # Mark b_n/B_n stale (lazy recomputation on access)
-        self._mark_stale()
 
     def _update_exposed_functions(self):
         """Set b_n/B_n as wealth-weighted function for next step."""

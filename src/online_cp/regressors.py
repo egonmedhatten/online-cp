@@ -63,7 +63,6 @@ except ImportError:
 
 from online_cp.mondrian._forest_solver import forest_sweepline_solver
 from online_cp.mondrian._inspection import _MondrianRegressorInspection
-from online_cp.mondrian._tree_knot_solver import tree_knot_solver_flat
 from online_cp.mondrian.tree import (
     MondrianTree,
     _build_tree_summary_reg,
@@ -4008,11 +4007,13 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     # ------------------------------------------------------------------
 
     def _summarize_tree_flat(self, tree, leaf_star, n_train):
-        """Flat per-point representation for the single-tree knot solver.
+        """Per-tree summarization for the single-tree prediction path.
 
         Mirrors the forest's per-tree summarization (one collect-leaves pass
-        plus a per-leaf mean), producing three flat arrays that the Numba
-        knot solver consumes in a single call.  Only the entries where
+        plus a per-leaf mean).  Produces the flat ``base_ncm`` array of
+        constant (y-independent) outside NCMs that the shared
+        ``forest_sweepline_solver`` consumes as part of the per-tree summary
+        ``(base_ncm, leaf_star_idx, leaf_star_mu)``.  Only the entries where
         leaf_idx[i] == -1 (points inside the test leaf) are read from y;
         base_ncm is read for every training point outside the test leaf.
 
@@ -4048,7 +4049,13 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
     ) -> ContinuousPredictionSet | MultiLevelPredictionSet | tuple:
         """Predict a conformal interval for test object x.
 
-        Uses an exact O(n) algebraic knot-point solver.  No grid search.
+        The single tree is treated as a 1-tree forest and routed through the
+        shared, highly-optimised ``forest_sweepline_solver`` (the same exact
+        O(n log n) sweepline kernel the forest regressor uses).  The solver
+        returns the exact (possibly multi-interval) set {y : p(y) > epsilon};
+        for a single tree the p-value is unimodal, so the valid set is
+        contiguous and the interval is its convex hull (min lo, max hi).  No
+        grid search is used.
 
         Parameters
         ----------
@@ -4081,7 +4088,6 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
 
         leaf_star_train_idx = leaf_star.indices[leaf_star.indices < n]
         A = len(leaf_star_train_idx)
-        B = self.y[leaf_star_train_idx].sum() if A > 0 else 0.0
 
         # ---- Hierarchical (ancestor) prior --------------------------------
         # ---- Draw ONE tau for the entire predict call to ensure deterministic behavior.
@@ -4114,24 +4120,31 @@ class ConformalMondrianTreeRegressor(_MondrianRegressorInspection, ConformalRegr
                 return result, {"tree": tree, "leaf_star": leaf_star, "online_tree": self._pending_tree}
             return result
 
-        # ---- Flat per-point representation (single tree traversal) ------
-        # Mirrors the forest's per-tree summarization: one collect-leaves +
-        # per-leaf mean, then a single Numba knot-solver call.
-        leaf_idx, y_all, base_ncm, A_flat = self._summarize_tree_flat(tree, leaf_star, n)
+        # ---- Exact O(n log n) sweepline solver (single tree, M = 1) -------
+        # The single tree is treated as a 1-tree forest and routed through the
+        # shared, highly-optimised ``forest_sweepline_solver`` (the same kernel
+        # the forest regressor uses). The per-tree summary is
+        # ``(base_ncm, leaf_star_idx, leaf_star_mu)``; the solver returns the
+        # exact (possibly multi-interval) set {y : p(y) > epsilon}. For a
+        # single tree the p-value is unimodal, so the valid set is contiguous
+        # and its convex hull (min lo, max hi) is exactly the prediction set.
+        _, _y_all, base_ncm, _A_flat = self._summarize_tree_flat(tree, leaf_star, n)
+        leaf_star_mu = float(self.y[leaf_star_train_idx].mean()) if A > 0 else 0.0
+        summaries = [(base_ncm, leaf_star_train_idx, leaf_star_mu)]
 
-        # ---- Exact O(k log k) knot solver (Numba-accelerated, flat) -------
-        # The flat solver is bit-identical to the ext_sorted-based
-        # tree_knot_solver (verified by
-        # tests/test_mondrian_tree.py::test_flat_knot_solver_matches_ext_sorted).
         eps_arr = np.atleast_1d(np.asarray(epsilon, dtype=float))
         predictions = {}
 
         for eps_val in eps_arr:
-            lo, hi, valid_knots = tree_knot_solver_flat(
-                leaf_idx, y_all, base_ncm,
-                A_flat, B, n, float(eps_val), tau,
+            intervals, _roots = forest_sweepline_solver(
+                summaries, self.y, float(eps_val), tau, n, 1, return_exact=True
             )
-            predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
+            if not intervals:
+                predictions[float(eps_val)] = self._construct_Gamma((np.nan, np.nan), float(eps_val))
+            else:
+                lo = min(i[0] for i in intervals)
+                hi = max(i[1] for i in intervals)
+                predictions[float(eps_val)] = self._construct_Gamma((lo, hi), float(eps_val))
 
         if hasattr(epsilon, "__iter__"):
             result = MultiLevelPredictionSet(predictions)

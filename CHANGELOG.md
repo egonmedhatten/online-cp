@@ -64,6 +64,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "T4a" in the v0.4.0 speed baseline are already numpy-vectorised in the
     current codebase; the only non-vectorised rank computation was the O(n * m)
     matrix above, now swept. No separate T4a JIT work is required.
+  - **Unified the Mondrian tree regressor's prediction path onto the shared
+    forest sweepline solver.** `ConformalMondrianTreeRegressor.predict` now
+    treats the single tree as a 1-tree forest and routes through
+    `forest_sweepline_solver` (the same exact O(n log n) kernel the forest
+    regressor uses), instead of a dedicated flat knot solver. The dedicated
+    module `online_cp.mondrian._tree_knot_solver` (and its Numba
+    `tree_knot_solver` / `tree_knot_solver_flat` kernels) is removed. The two
+    code paths are mathematically identical but differ in the last floating
+    point bits (`sum()` vs `mean() * A`, and `fastmath`), so interval bounds
+    may shift by ~1e-13 relative to the previous implementation — a change
+    far below any tolerance used in the test suite. `predict` still returns
+    the convex hull of the solver's exact (possibly multi-interval) set, which
+    for a single tree is contiguous. The documented pure-Python reference
+    (`_build_knot_events` / `_pvalue_from_sweep`) is retained on the class
+    (it is used by `compute_p_value` and by the test suite). Tests in
+    `tests/test_mondrian_tree.py` that exercised the removed knot-solver
+    kernels directly were removed or rewritten to verify the shared solver via
+    the 1-tree summary (well-formedness + interior-validity at a fixed tau).
 
 ### Added
   - **Stream pruning** (`pruning=`, `budget=B`) on

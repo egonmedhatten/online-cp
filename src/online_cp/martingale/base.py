@@ -140,7 +140,7 @@ class ConformalTestMartingale:
     @property
     def M(self):
         """Current martingale value $M_n = \\exp(\\log M_n)$."""
-        return np.exp(self.logM)
+        return float(np.exp(self.logM))
 
     @property
     def martingale_values(self):

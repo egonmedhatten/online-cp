@@ -18,13 +18,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.7"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
-      - name: Install dependencies
-        run: uv sync --extra ci
+      - name: Install dependencies (retry on transient CDN failure)
+        run: |
+          for i in 1 2 3; do
+            if uv sync --extra ci; then
+              echo "uv sync succeeded on attempt $i"
+              break
+            fi
+            if [ "$i" -ge 3 ]; then
+              echo "ERROR: uv sync failed after 3 attempts" >&2
+              exit 1
+            fi
+            echo "uv sync failed (attempt $i), retrying in $((i * 15))s..."
+            sleep $((i * 15))
+          done
       - name: "Guard - dev (secret research) files must remain untracked"
         run: |
           # `*_dev.py` files are gitignored by design. If any get committed,
@@ -60,8 +74,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
-      - name: Install dependencies
-        run: uv sync --extra ci
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.7"
+      - name: Install dependencies (retry on transient CDN failure)
+        run: |
+          for i in 1 2 3; do
+            if uv sync --extra ci; then
+              echo "uv sync succeeded on attempt $i"
+              break
+            fi
+            if [ "$i" -ge 3 ]; then
+              echo "ERROR: uv sync failed after 3 attempts" >&2
+              exit 1
+            fi
+            echo "uv sync failed (attempt $i), retrying in $((i * 15))s..."
+            sleep $((i * 15))
+          done
       - name: Run slow statistical-validity tests
         run: uv run pytest -m slow

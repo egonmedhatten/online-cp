@@ -32,6 +32,9 @@ class ConformalTestMartingale:
 
     - ``update(p)``: template method that incorporates a new p-value and
       advances the martingale (do not override; implement ``_step`` instead)
+    - ``M``: the current martingale value (property, $\exp(\texttt{logM})$)
+    - ``logM``: the log martingale value (attribute)
+    - ``log_martingale_values``: list of $\log M_0, \log M_1, \ldots, \log M_n$
     - ``b_n(p)``: the current betting function (density) for the next step
     - ``B_n(p)``: the current protection function (CDF) for the next step
     - ``p_n``: the last p-value observed (``None`` before the first update)
@@ -47,12 +50,16 @@ class ConformalTestMartingale:
         Log martingale value.
     M : float
         Current martingale value (property).
+    log_martingale_values : list of float
+        All log martingale values $\log M_0, \log M_1, \ldots$ (always recorded).
+    p_values : list of float
+        All p-values observed (recorded only when ``store_p_values=True``).
     b_n : callable
         Betting function for the next step.
     B_n : callable
         Protection function (CDF) for the next step.
     p_n : float or None
-        Last p-value observed.
+        Last p-value observed (always available).
     n : int
         Number of p-values processed.
     """
@@ -62,6 +69,7 @@ class ConformalTestMartingale:
         self.p_values: list[float] = []
         self.store_p_values = store_p_values
         self.log_martingale_values: list[float] = [0.0]
+        self._last_p: float | None = None
         self._b_n_cache = lambda x: 1.0
         self._B_n_cache = lambda x: x
         self._B_n_inv_cache = None
@@ -146,12 +154,12 @@ class ConformalTestMartingale:
     def p_n(self):
         """Last p-value observed, or ``None`` if no updates have occurred.
 
-        This is a convenience accessor for ``self.p_values[-1]``. It is
-        available regardless of the ``store_p_values`` flag because the
-        base template method records the p-value before delegating to
-        ``_step``.
+        This is available regardless of the ``store_p_values`` flag because
+        the base template method always records the most recent p-value.
+        When ``store_p_values=True``, this is equivalent to
+        ``self.p_values[-1]``.
         """
-        return self.p_values[-1] if self.p_values else None
+        return self._last_p
 
     @property
     def n(self):
@@ -172,11 +180,14 @@ class ConformalTestMartingale:
 
         Protocol
         --------
-        1. Store ``p`` in ``self.p_values`` (if ``store_p_values`` is True).
-        2. Call ``self._step(p)`` — the subclass updates its internal state
+        1. Record ``p`` as the most recent p-value (always; enables the
+           :attr:`p_n` property).
+        2. Append ``p`` to ``self.p_values`` (only if ``store_p_values``
+           is True).
+        3. Call ``self._step(p)`` — the subclass updates its internal state
            and sets ``self.logM``.
-        3. Append ``self.logM`` to ``self.log_martingale_values``.
-        4. Invalidate the cached betting/protection functions.
+        4. Append ``self.logM`` to ``self.log_martingale_values``.
+        5. Invalidate the cached betting/protection functions.
 
         Parameters
         ----------
@@ -207,6 +218,7 @@ class ConformalTestMartingale:
         >>> m.n
         1
         """
+        self._last_p = p
         if self.store_p_values:
             self.p_values.append(p)
         self._step(p)

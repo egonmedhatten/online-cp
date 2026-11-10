@@ -6,10 +6,12 @@ from online_cp.martingale import (
     BetaMLE,
     BetaMoments,
     CompositeJumper,
+    ConformalTestMartingale,
     CUSUMWrapper,
     ExpertAggregationStrategy,
     FixedStrategy,
     GaussianKDE,
+    MixtureMartingale,
     ParticleFilterStrategy,
     PiecewiseConstantBetting,
     PluginMartingale,
@@ -58,6 +60,57 @@ class TestMartingaleBaseProperties:
         for p in uniform_p_values[:50]:
             m.update(p)
         assert np.isclose(m.M, np.exp(m.logM))
+
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
+        ],
+    )
+    def test_p_n_none_before_update(self, MartingaleClass, kwargs):
+        """p_n should be None before any update has been performed."""
+        m = MartingaleClass(**kwargs)
+        assert m.p_n is None
+
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
+        ],
+    )
+    def test_p_n_after_update(self, MartingaleClass, kwargs):
+        """p_n should return the last p-value fed to update()."""
+        m = MartingaleClass(**kwargs)
+        m.update(0.42)
+        assert m.p_n == 0.42
+        m.update(0.77)
+        assert m.p_n == 0.77
+
+    @pytest.mark.parametrize(
+        "MartingaleClass,kwargs",
+        [
+            (SimpleJumper, {}),
+            (CompositeJumper, {}),
+            (SimpleMixtureMartingale, {}),
+            (SleeperStayer, {"R": 0.01, "G": 5}),
+            (SleeperDrifter, {"R": 0.01, "G": 5, "M": 10}),
+        ],
+    )
+    def test_n_counter(self, MartingaleClass, kwargs):
+        """n should count the number of p-values processed."""
+        m = MartingaleClass(**kwargs)
+        assert m.n == 0
+        for _ in range(5):
+            m.update(0.5)
+        assert m.n == 5
 
 
 # ─── VilleWrapper ─────────────────────────────────────────────────────────────
@@ -648,3 +701,269 @@ class TestShiryaevRobertsRecursive:
         logM_n = log_history[n]
         naive_R = sum(np.exp(logM_n - log_history[i]) for i in range(n))
         assert np.isclose(sr.R, naive_R, rtol=1e-10), f"Recursive R={sr.R} != naive R={naive_R}"
+
+
+# ─── Minimal custom martingale (template method contract) ────────────────────
+
+
+class _FixedBetMartingale(ConformalTestMartingale):
+    """A minimal custom martingale using a fixed betting function b(p) = 2(1-p).
+
+    This is a valid density on [0, 1] since int_0^1 2(1-p) dp = 1.
+    It concentrates mass near p=0, so the martingale grows under
+    alternatives where p-values shift toward 0.
+    """
+
+    def __init__(self, store_p_values=True):
+        super().__init__(store_p_values)
+        self._update_exposed_functions()
+
+    def _step(self, p: float) -> None:
+        self.logM += np.log(2.0 * (1.0 - p))
+
+    def _update_exposed_functions(self):
+        self.b_n = lambda x: 2.0 * (1.0 - x)
+        self.B_n = lambda x: 2.0 * x - x * x
+
+
+class TestMinimalCustomMartingale:
+    """Verify the template method contract works for a minimal custom subclass."""
+
+    def test_starts_at_one(self):
+        m = _FixedBetMartingale()
+        assert m.logM == 0.0
+        assert np.isclose(m.M, 1.0)
+        assert m.n == 0
+        assert m.p_n is None
+
+    def test_log_martingale_values_grow(self):
+        m = _FixedBetMartingale()
+        for p in [0.25, 0.5, 0.75]:
+            m.update(p)
+        assert len(m.log_martingale_values) == 4  # initial + 3 updates
+        assert m.n == 3
+
+    def test_M_matches_product_of_bets(self):
+        """M should equal the product of the betting function values."""
+        m = _FixedBetMartingale()
+        pvals = [0.25, 0.5, 0.75, 0.1]
+        expected_logM = sum(np.log(2.0 * (1.0 - p)) for p in pvals)
+        for p in pvals:
+            m.update(p)
+        assert np.isclose(m.logM, expected_logM, rtol=1e-12)
+
+    def test_p_values_stored(self):
+        m = _FixedBetMartingale(store_p_values=True)
+        pvals = [0.1, 0.3, 0.7]
+        for p in pvals:
+            m.update(p)
+        assert m.p_values == pvals
+        assert m.p_n == 0.7
+
+    def test_grows_under_alternative(self):
+        """Under small p-values (shift toward 0), the martingale should grow."""
+        m = _FixedBetMartingale()
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.5, 2, size=200):
+            m.update(p)
+        assert m.M > 1.0
+
+    def test_bounded_under_null(self):
+        """Under uniform p-values, average logM should stay near 0."""
+        rng = np.random.default_rng(123)
+        final_logMs = []
+        for _ in range(20):
+            m = _FixedBetMartingale()
+            for p in rng.uniform(size=200):
+                m.update(p)
+            final_logMs.append(m.logM)
+        assert np.mean(final_logMs) < 5.0
+
+    def test_works_inside_ville_wrapper(self):
+        """A minimal custom martingale should work inside VilleWrapper."""
+        m = _FixedBetMartingale()
+        ville = VilleWrapper(m, threshold=20)
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.3, 2, size=200):
+            ville.update(p)
+        assert ville.rejected
+
+    def test_b_n_and_B_n_exposed(self):
+        """b_n and B_n should be correctly exposed via _update_exposed_functions."""
+        m = _FixedBetMartingale()
+        # b_n(x) = 2(1-x), so b_n(0.5) = 1.0
+        # B_n(x) = 2x - x^2, so B_n(0.5) = 1.0 - 0.25 = 0.75
+        assert np.isclose(m.b_n(0.5), 1.0)
+        assert np.isclose(m.B_n(0.5), 0.75)
+        # After update, they should still work (lazily recomputed)
+        m.update(0.3)
+        assert np.isclose(m.b_n(0.5), 1.0)
+        assert np.isclose(m.B_n(0.5), 0.75)
+
+
+# ─── MixtureMartingale ─────────────────────────────────────────────────────────
+
+
+class TestMixtureMartingale:
+    """Tests for the convex combination of CTMs."""
+
+    def test_starts_at_one(self):
+        """Mixture should start at 1 regardless of components."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2])
+        assert np.isclose(mix.M, 1.0)
+        assert mix.logM == 0.0
+        assert mix.n == 0
+        assert mix.p_n is None
+
+    def test_default_weights_uniform(self):
+        """Default weights should be 1/K each."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        m3 = SimpleJumper(J=0.5)
+        mix = MixtureMartingale([m1, m2, m3])
+        assert np.allclose(mix.weights, [1/3, 1/3, 1/3])
+
+    def test_custom_weights(self):
+        """Custom weights should be stored correctly."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2], weights=[0.3, 0.7])
+        assert np.allclose(mix.weights, [0.3, 0.7])
+
+    def test_M_equals_weighted_sum(self, uniform_p_values):
+        """M should equal the weighted sum of component M_i."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        weights = [0.3, 0.7]
+        mix = MixtureMartingale([m1, m2], weights=weights)
+        for p in uniform_p_values[:30]:
+            mix.update(p)
+        expected_M = weights[0] * m1.M + weights[1] * m2.M
+        assert np.isclose(mix.M, expected_M, rtol=1e-10)
+
+    def test_component_trajectories_accessible(self, uniform_p_values):
+        """Each component's full trajectory should be accessible after updates."""
+        m1 = SimpleJumper(J=0.01, store_p_values=True)
+        m2 = SimpleJumper(J=0.1, store_p_values=True)
+        mix = MixtureMartingale([m1, m2], store_p_values=False)
+        pvals = uniform_p_values[:20]
+        for p in pvals:
+            mix.update(p)
+        # Component trajectories are fully preserved
+        assert len(m1.log_martingale_values) == 21  # initial + 20
+        assert len(m2.log_martingale_values) == 21
+        assert m1.p_values == list(pvals)
+        assert m2.p_values == list(pvals)
+        # The mixture itself tracked p-values per its own flag
+        assert mix.p_values == []  # store_p_values=False
+        assert len(mix.log_martingale_values) == 21
+
+    def test_grows_under_alternative(self, skewed_p_values):
+        """Under H1, the mixture should grow (when components grow)."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2])
+        for p in skewed_p_values:
+            mix.update(p)
+        assert mix.logM > 0
+
+    def test_bounded_under_null(self):
+        """Under H0, the mixture should stay bounded on average."""
+        rng = np.random.default_rng(123)
+        final_logMs = []
+        for _ in range(20):
+            m1 = SimpleJumper(J=0.01)
+            m2 = SimpleJumper(J=0.1)
+            mix = MixtureMartingale([m1, m2])
+            for p in rng.uniform(size=200):
+                mix.update(p)
+            final_logMs.append(mix.logM)
+        assert np.mean(final_logMs) < 5.0
+
+    def test_single_component_identity(self, uniform_p_values):
+        """A single-component mixture with weight 1.0 should equal that component."""
+        m1 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1], weights=[1.0])
+        for p in uniform_p_values[:20]:
+            mix.update(p)
+        assert np.isclose(mix.M, m1.M, rtol=1e-12)
+
+    def test_B_n_boundaries(self, uniform_p_values):
+        """B_n(0) should be 0, B_n(1) should be 1."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2])
+        for p in uniform_p_values[:20]:
+            mix.update(p)
+        assert np.isclose(mix.B_n(0.0), 0.0, atol=1e-10)
+        assert np.isclose(mix.B_n(1.0), 1.0, atol=1e-10)
+
+    def test_B_n_monotone(self, uniform_p_values):
+        """B_n should be monotone increasing on [0, 1]."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2])
+        for p in uniform_p_values[:20]:
+            mix.update(p)
+        xs = np.linspace(0, 1, 30)
+        Bs = [mix.B_n(x) for x in xs]
+        for i in range(len(Bs) - 1):
+            assert Bs[i] <= Bs[i + 1] + 1e-10
+
+    def test_p_n_and_n(self, uniform_p_values):
+        """p_n and n should work on the mixture."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2])
+        assert mix.p_n is None
+        assert mix.n == 0
+        mix.update(0.42)
+        assert mix.p_n == 0.42
+        assert mix.n == 1
+
+    def test_invalid_weights_sum(self):
+        """Weights not summing to 1 should raise ValueError."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        with pytest.raises(ValueError, match="must sum to 1"):
+            MixtureMartingale([m1, m2], weights=[0.5, 0.3])
+
+    def test_negative_weights(self):
+        """Negative weights should raise ValueError."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        with pytest.raises(ValueError, match="non-negative"):
+            MixtureMartingale([m1, m2], weights=[-0.1, 1.1])
+
+    def test_empty_list(self):
+        """Empty list should raise ValueError."""
+        with pytest.raises(ValueError, match="At least one"):
+            MixtureMartingale([])
+
+    def test_non_ctm_raises(self):
+        """Non-CTM objects should raise TypeError."""
+        with pytest.raises(TypeError, match="ConformalTestMartingale"):
+            MixtureMartingale([object()])
+
+    def test_works_inside_ville_wrapper(self):
+        """MixtureMartingale should work inside VilleWrapper."""
+        m1 = SimpleJumper(J=0.01)
+        m2 = SimpleJumper(J=0.1)
+        mix = MixtureMartingale([m1, m2])
+        ville = VilleWrapper(mix, threshold=20)
+        rng = np.random.default_rng(42)
+        for p in rng.beta(0.3, 2, size=200):
+            ville.update(p)
+        assert ville.rejected
+
+    def test_zero_weight_component_ignored(self, uniform_p_values):
+        """A component with weight 0 should not affect the mixture."""
+        m1 = SimpleJumper(J=0.1)
+        m2 = SimpleJumper(J=0.5)
+        mix = MixtureMartingale([m1, m2], weights=[1.0, 0.0])
+        for p in uniform_p_values[:20]:
+            mix.update(p)
+        # Should equal m1 exactly
+        assert np.isclose(mix.M, m1.M, rtol=1e-10)

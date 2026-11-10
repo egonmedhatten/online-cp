@@ -26,6 +26,10 @@
 
 ::: online_cp.martingale.CompositeLegendreJumper
 
+## Composite Constructions
+
+::: online_cp.martingale.MixtureMartingale
+
 ## Change-Point Detection Wrappers
 
 ::: online_cp.martingale.VilleWrapper

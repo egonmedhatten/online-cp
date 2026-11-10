@@ -1,4 +1,4 @@
-"""Change-point detection wrappers for conformal test martingales.
+"""Change-point detection wrappers and composite constructions for conformal test martingales.
 
 A conformal test martingale gives evidence against exchangeability, but turning
 that evidence into a change-point *alarm* requires a stopping rule. These
@@ -16,12 +16,20 @@ wrappers each accumulate the martingale's increments differently:
   different power / false-alarm trade-off, often preferred for minimising
   detection delay.
 
+Composite constructions:
+
+- :class:`MixtureMartingale` — convex combination of several CTMs, which is
+  itself a valid CTM by construction (linearity of conditional expectation).
+
 See [ALRW2 §8.3] (Vovk, Gammerman & Shafer, 2022).
 """
 
 from __future__ import annotations
 
 import numpy as np
+from scipy.special import logsumexp
+
+from online_cp.martingale.base import ConformalTestMartingale
 
 
 class VilleWrapper:
@@ -294,3 +302,123 @@ class ShiryaevRobertsWrapper:
             True if R_n exceeds the threshold.
         """
         return self.R > threshold
+
+
+class MixtureMartingale(ConformalTestMartingale):
+    r"""Convex combination of conformal test martingales.
+
+    Given CTMs $M^{(1)}, M^{(2)}, \ldots, M^{(K)}$ and weights
+    $w_1, \ldots, w_K \geq 0$ with $\sum_i w_i = 1$, the mixture
+
+    $$
+    M_n = \sum_{i=1}^{K} w_i \, M^{(i)}_n
+    $$
+
+    is itself a valid conformal test martingale: it is non-negative, started at
+    $M_0 = 1$, and its conditional expectation under the null equals $M_{n-1}$
+    by linearity of conditional expectation. No additional conditions are
+    required beyond each component being a valid CTM.
+
+    The component martingales remain accessible via the ``martingales``
+    attribute for trajectory analysis:
+
+    >>> from online_cp.martingale import SimpleJumper, MixtureMartingale
+    >>> m1 = SimpleJumper(J=0.01)
+    >>> m2 = SimpleJumper(J=0.1)
+    >>> mix = MixtureMartingale([m1, m2])
+    >>> for _ in range(10):
+    ...     mix.update(0.01)
+    >>> bool(mix.M >= m1.M * 0.5)  # mixture is weighted mean
+    True
+    >>> len(m1.log_martingale_values)  # component trajectories preserved
+    11
+
+    Parameters
+    ----------
+    martingales : list of ConformalTestMartingale
+        The component martingales. Must be non-empty.
+    weights : list of float or None
+        Convex weights (non-negative, summing to 1). If ``None``, uniform
+        weights $1/K$ are used.
+    store_p_values : bool
+        Whether to record the p-values on the mixture itself.
+
+    Attributes
+    ----------
+    martingales : list
+        The component CTMs, in order. Each component's full state (``logM``,
+        ``log_martingale_values``, ``p_values``, etc.) is accessible.
+    weights : ndarray
+        The convex weight vector (shape ``(K,)``).
+    """
+
+    def __init__(
+        self,
+        martingales: list[ConformalTestMartingale],
+        weights: list[float] | None = None,
+        store_p_values: bool = True,
+    ) -> None:
+        super().__init__(store_p_values)
+        if not martingales:
+            raise ValueError("At least one component martingale is required.")
+        if any(not isinstance(m, ConformalTestMartingale) for m in martingales):
+            raise TypeError("All components must be ConformalTestMartingale instances.")
+
+        self.martingales = list(martingales)
+        K = len(self.martingales)
+
+        if weights is None:
+            self.weights = np.full(K, 1.0 / K)
+        else:
+            self.weights = np.asarray(weights, dtype=float)
+            if self.weights.shape != (K,):
+                raise ValueError(
+                    f"weights has length {len(self.weights)} but there are {K} components."
+                )
+            if np.any(self.weights < -1e-12):
+                raise ValueError("All weights must be non-negative.")
+            total = self.weights.sum()
+            if not np.isclose(total, 1.0, rtol=1e-9):
+                raise ValueError(
+                    f"Weights must sum to 1, got {total:.6f}. "
+                    f"Consider normalizing: weights / weights.sum()"
+                )
+            # Clamp tiny negative values from numerical noise
+            self.weights = np.clip(self.weights, 0.0, None)
+
+        # Precompute log-weights for numerically stable mixture in log-space.
+        # Components with zero weight contribute -inf (they are excluded).
+        self._log_weights = np.where(self.weights > 0, np.log(np.clip(self.weights, 1e-300, None)), -np.inf)
+
+    def _step(self, p: float) -> None:
+        """Advance all component martingales and compute the weighted mixture.
+
+        Parameters
+        ----------
+        p : float
+            New p-value in $[0, 1]$.
+        """
+        for m in self.martingales:
+            m.update(p)
+
+        log_Ms = np.array([m.logM for m in self.martingales])
+        self.logM = logsumexp(self._log_weights + log_Ms) - np.log(self.weights.sum())
+
+    def _update_exposed_functions(self):
+        """Set b_n and B_n as the weighted sum of component functions."""
+        weights = self.weights.copy()
+        b_ns = [m.b_n for m in self.martingales]
+        B_ns = [m.B_n for m in self.martingales]
+
+        def _b_n(u, _w=weights, _bs=b_ns):
+            return float(sum(w * b(u) for w, b in zip(_w, _bs)))
+
+        def _B_n(u, _w=weights, _Bs=B_ns):
+            if u <= 0.0:
+                return 0.0
+            if u >= 1.0:
+                return 1.0
+            return float(sum(w * B(u) for w, B in zip(_w, _Bs)))
+
+        self.b_n = _b_n
+        self.B_n = _B_n

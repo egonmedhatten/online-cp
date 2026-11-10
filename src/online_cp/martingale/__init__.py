@@ -14,7 +14,8 @@ jumpers
 sleepers
     ``SleeperStayer``, ``SleeperDrifter``.
 wrappers
-    ``VilleWrapper``, ``CUSUMWrapper``, ``ShiryaevRobertsWrapper``.
+    ``VilleWrapper``, ``CUSUMWrapper``, ``ShiryaevRobertsWrapper``,
+    ``MixtureMartingale``.
 legendre
     ``SimpleLegendreJumper``, ``ProductLegendreJumper``,
     ``VariationalLegendreJumper``, ``OptimisticFTRLBarrierLegendreMartingale``,
@@ -101,6 +102,9 @@ from online_cp.martingale.wrappers import (
     CUSUMWrapper as CUSUMWrapper,
 )
 from online_cp.martingale.wrappers import (
+    MixtureMartingale as MixtureMartingale,
+)
+from online_cp.martingale.wrappers import (
     ShiryaevRobertsWrapper as ShiryaevRobertsWrapper,
 )
 from online_cp.martingale.wrappers import (
@@ -122,6 +126,7 @@ __all__ = [
     "VilleWrapper",
     "CUSUMWrapper",
     "ShiryaevRobertsWrapper",
+    "MixtureMartingale",
     # Legendre jumpers
     "SimpleLegendreJumper",
     "ProductLegendreJumper",
